@@ -32,6 +32,12 @@ http://100.x.y.z:58627/#token=YOUR_TOKEN
 - 回合完成、待回答、等待审批和失败通知
 - 状态栏颜色跟随网页明暗主题
 
+## 通知效果
+
+后台运行时，App 会显示连接状态，并在 Kimi Code 回合完成或需要回答、审批时发送包含会话信息的系统通知。
+
+<img src="docs/notification-preview.jpg" alt="KimiWeb 后台任务通知效果" width="360">
+
 ## 安装
 
 从 [Releases](../../releases) 下载最新的 `KimiWeb-*.apk`。所有版本使用同一发布证书签名，可直接覆盖升级。
