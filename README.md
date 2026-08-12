@@ -2,6 +2,8 @@
 
 一个非官方 Android 客户端，通过 Tailscale 在手机上使用电脑中的 [Kimi Code](https://github.com/MoonshotAI/kimi-code) Web。
 
+<img src="docs/demo.jpg" alt="KimiWeb 使用效果" width="720">
+
 ## 使用前提
 
 1. 在电脑和 Android 手机上安装 Tailscale，并登录同一个 Tailnet。
@@ -27,7 +29,6 @@ http://100.x.y.z:58627/#token=YOUR_TOKEN
 - 在手机上使用完整的 Kimi Code Web
 - 切换到后台后继续接收任务通知
 - 支持回合完成、待回答、等待审批和失败通知
-- 适配网页的亮色和暗色模式
 
 ## 通知效果
 
