@@ -1,0 +1,8 @@
+/.gradle/
+/build/
+/app/build/
+/local.properties
+/keystore.properties
+/release/*.jks
+/kimi-original-favicon.ico
+/kimi-original-favicon.png
