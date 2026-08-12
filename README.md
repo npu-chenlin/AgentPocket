@@ -2,7 +2,10 @@
 
 一个非官方 Android 客户端，通过 Tailscale 在手机上使用电脑中的 [Kimi Code](https://github.com/MoonshotAI/kimi-code) Web。
 
-<img src="docs/demo.jpg" alt="KimiWeb 使用效果" width="720">
+<p align="center">
+  <img src="docs/demo.jpg" alt="KimiWeb 使用效果" width="48%">
+  <img src="docs/notification-preview.jpg" alt="KimiWeb 后台任务通知效果" width="48%">
+</p>
 
 ## 使用前提
 
@@ -29,12 +32,6 @@ http://100.x.y.z:58627/#token=YOUR_TOKEN
 - 在手机上使用完整的 Kimi Code Web
 - 切换到后台后继续接收任务通知
 - 支持回合完成、待回答、等待审批和失败通知
-
-## 通知效果
-
-Kimi Code 回合完成或需要回答、审批时，通知会显示对应的会话和内容。
-
-<img src="docs/notification-preview.jpg" alt="KimiWeb 后台任务通知效果" width="360">
 
 ## 使用
 
