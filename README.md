@@ -3,8 +3,8 @@
 一个非官方 Android 客户端，通过 Tailscale 在手机上使用电脑中的 [Kimi Code](https://github.com/MoonshotAI/kimi-code) Web。
 
 <p align="center">
-  <img src="docs/demo.jpg" alt="KimiWeb 使用效果" width="48%">
-  <img src="docs/notification-preview.jpg" alt="KimiWeb 后台任务通知效果" width="48%">
+  <img src="docs/demo.jpg" alt="KimiWeb 使用效果" width="64%">
+  <img src="docs/notification-preview.jpg" alt="KimiWeb 后台任务通知效果" width="32%">
 </p>
 
 ## 使用前提
