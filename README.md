@@ -10,8 +10,22 @@
 ## 使用前提
 
 1. 在电脑和 Android 手机上安装 [Tailscale](https://tailscale.com/download)，并登录同一个 Tailnet。
-2. 在电脑上启动 Kimi Code Web，并允许网络访问。
-3. 将电脑的 Tailscale IP、端口和 token 填入 App。
+2. 在电脑上安装 Kimi Code：
+
+   macOS / Linux：
+
+   ```shell
+   curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
+   ```
+
+   Windows PowerShell：
+
+   ```powershell
+   irm https://code.kimi.com/kimi-code/install.ps1 | iex
+   ```
+
+3. 启动 Kimi Code Web，并允许网络访问。
+4. 将电脑的 Tailscale IP、端口和 token 填入 App。
 
 例如：
 
