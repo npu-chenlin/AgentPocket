@@ -1,6 +1,6 @@
 # KimiWeb
 
-一个非官方 Android 客户端，通过 Tailscale 在手机上使用电脑中的 Kimi Code Web。
+一个非官方 Android 客户端，通过 Tailscale 在手机上使用电脑中的 [Kimi Code](https://github.com/MoonshotAI/kimi-code) Web。
 
 ## 使用前提
 
