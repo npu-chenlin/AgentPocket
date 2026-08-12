@@ -1,6 +1,27 @@
 # KimiWeb
 
-一个面向 Kimi Code Web 的轻量 Android 客户端。
+一个面向 Kimi Code Web 的非官方轻量 Android 客户端，适合通过 Tailscale 从手机安全访问电脑上的 Kimi Code。
+
+## 使用前提
+
+1. 在电脑上安装并启动 Kimi Code Web。
+2. 在电脑和 Android 手机上安装 Tailscale，并登录同一个 Tailnet。
+3. 启动 Kimi Code Web 时允许网络访问并启用 token 鉴权。
+4. 将电脑的 Tailscale IP、Kimi Code Web 端口和 token 填入 App。
+
+例如：
+
+```shell
+kimi web --host 0.0.0.0 --port 58627
+```
+
+Kimi Code Web 通常会给出包含 token 的访问地址。可将完整地址直接粘贴进 App，例如：
+
+```text
+http://100.x.y.z:58627/#token=YOUR_TOKEN
+```
+
+其中 `100.x.y.z` 应替换为运行 Kimi Code Web 的电脑在 Tailscale 中的 IP。请勿将 Kimi Code Web 直接暴露到不受信任的公网。
 
 ## 功能
 
@@ -13,7 +34,7 @@
 
 ## 安装
 
-从 [Releases](../../releases) 下载最新的 `KimiWeb-*.apk`。所有版本必须使用同一发布证书签名，才能直接覆盖升级。
+从 [Releases](../../releases) 下载最新的 `KimiWeb-*.apk`。所有版本使用同一发布证书签名，可直接覆盖升级。
 
 ## 构建
 
