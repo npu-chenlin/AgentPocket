@@ -36,16 +36,6 @@ http://100.x.y.z:58627/#token=YOUR_TOKEN
 
 从 [Releases](../../releases) 下载最新的 `KimiWeb-*.apk`。所有版本使用同一发布证书签名，可直接覆盖升级。
 
-## 构建
-
-需要 JDK 17 和 Android SDK：
-
-```shell
-./gradlew assembleDebug
-```
-
-发布签名配置保存在本机 `keystore.properties`，私钥和密码不会提交到仓库。
-
 ## 使用
 
 首次启动时可以分别输入主机、端口与 token，也可以直接粘贴 Kimi Web 给出的完整地址。之后可从“Kimi 后台监听”常驻通知中的“连接设置”修改。
