@@ -9,7 +9,7 @@
 
 ## 使用前提
 
-1. 在电脑和 Android 手机上安装 Tailscale，并登录同一个 Tailnet。
+1. 在电脑和 Android 手机上安装 [Tailscale](https://tailscale.com/download)，并登录同一个 Tailnet。
 2. 在电脑上启动 Kimi Code Web，并允许网络访问。
 3. 将电脑的 Tailscale IP、端口和 token 填入 App。
 
