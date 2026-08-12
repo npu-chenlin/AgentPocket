@@ -40,10 +40,12 @@ import okhttp3.WebSocketListener;
 public class KeepAliveService extends Service {
     private static final String SERVICE_CHANNEL = "kimi_background";
     private static final String TASK_CHANNEL = "kimi_tasks";
+    private static final String UPDATE_CHANNEL = "kimi_updates";
     private static final String STATE_PREFS = "kimi_native_listener";
     private static final String TAG = "KimiNativeSocket";
     private static final int SERVICE_ID = 1001;
     private static final long POLL_MS = 3000;
+    private static final long UPDATE_CHECK_MS = 6 * 60 * 60 * 1000L;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable pollRunnable = this::pollSessions;
@@ -66,6 +68,7 @@ public class KeepAliveService extends Service {
         client = new OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS)
                 .pingInterval(20, TimeUnit.SECONDS).build();
         pollSessions();
+        checkForUpdate();
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) { return START_STICKY; }
@@ -84,6 +87,83 @@ public class KeepAliveService extends Service {
                 "Kimi 任务通知", NotificationManager.IMPORTANCE_HIGH);
         task.setDescription("任务完成、等待回答或审批时通知");
         manager.createNotificationChannel(task);
+        NotificationChannel updates = new NotificationChannel(UPDATE_CHANNEL,
+                "KimiWeb 应用更新", NotificationManager.IMPORTANCE_DEFAULT);
+        updates.setDescription("发现新的 KimiWeb 版本时通知");
+        manager.createNotificationChannel(updates);
+    }
+
+    private void checkForUpdate() {
+        SharedPreferences state = getSharedPreferences(STATE_PREFS, MODE_PRIVATE);
+        long now = System.currentTimeMillis();
+        if (now - state.getLong("last_update_check", 0) < UPDATE_CHECK_MS) return;
+        state.edit().putLong("last_update_check", now).apply();
+        Request request = new Request.Builder()
+                .url("https://api.github.com/repos/npu-chenlin/KimiCodeWebApp/releases/latest")
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "KimiWeb-Android/" + currentVersion()).build();
+        client.newCall(request).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException error) {
+                Log.w(TAG, "Update check failed: " + error.getMessage());
+            }
+            @Override public void onResponse(Call call, Response response) {
+                try (Response ignored = response) {
+                    if (!response.isSuccessful()) return;
+                    JSONObject release = new JSONObject(response.body().string());
+                    String version = release.optString("tag_name", "").replaceFirst("^[vV]", "");
+                    if (compareVersions(version, currentVersion()) <= 0) return;
+                    JSONArray assets = release.optJSONArray("assets");
+                    if (assets == null) return;
+                    for (int i = 0; i < assets.length(); i++) {
+                        JSONObject asset = assets.getJSONObject(i);
+                        String name = asset.optString("name", "");
+                        if (name.toLowerCase().endsWith(".apk")) {
+                            postUpdateNotification(version, name,
+                                    asset.getString("browser_download_url"));
+                            break;
+                        }
+                    }
+                } catch (Exception error) { Log.w(TAG, "Update response parse failed", error); }
+            }
+        });
+    }
+
+    private String currentVersion() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
+        catch (Exception ignored) { return "0.0.0"; }
+    }
+
+    private int compareVersions(String left, String right) {
+        String[] a = left.split("\\."), b = right.split("\\.");
+        for (int i = 0; i < Math.max(a.length, b.length); i++) {
+            int av = i < a.length ? parseVersionPart(a[i]) : 0;
+            int bv = i < b.length ? parseVersionPart(b[i]) : 0;
+            if (av != bv) return Integer.compare(av, bv);
+        }
+        return 0;
+    }
+
+    private int parseVersionPart(String value) {
+        try { return Integer.parseInt(value.replaceAll("[^0-9].*$", "")); }
+        catch (Exception ignored) { return 0; }
+    }
+
+    private void postUpdateNotification(String version, String name, String url) {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) return;
+        Intent open = new Intent(this, MainActivity.class)
+                .putExtra(MainActivity.EXTRA_UPDATE_URL, url)
+                .putExtra(MainActivity.EXTRA_UPDATE_NAME, name)
+                .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent pending = PendingIntent.getActivity(this, 9, open,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(this, UPDATE_CHANNEL) : new Notification.Builder(this);
+        getSystemService(NotificationManager.class).notify("app-update", 0,
+                builder.setSmallIcon(android.R.drawable.stat_sys_download_done)
+                        .setContentTitle("KimiWeb 有新版本 " + version)
+                        .setContentText("点击下载并安装更新")
+                        .setAutoCancel(true).setContentIntent(pending).build());
     }
 
     private Notification serviceNotification(String text) {

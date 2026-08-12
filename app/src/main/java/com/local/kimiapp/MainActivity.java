@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.DownloadManager;
 import android.content.Intent;
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -37,6 +38,8 @@ import java.util.regex.Pattern;
 public class MainActivity extends Activity {
     public static volatile boolean isVisible = false;
     public static final String EXTRA_SHOW_CONFIG = "show_connection_config";
+    public static final String EXTRA_UPDATE_URL = "update_download_url";
+    public static final String EXTRA_UPDATE_NAME = "update_download_name";
     private static final String PREFS = "kimi_connection";
     private static final int FILE_CHOOSER = 42;
     private static final String NOTIFICATION_CHANNEL = "kimi_tasks";
@@ -55,6 +58,7 @@ public class MainActivity extends Activity {
             loadConfiguredUrl();
             if (getIntent().getBooleanExtra(EXTRA_SHOW_CONFIG, false)) showConfig(false);
         } else showConfig(true);
+        handleUpdateIntent(getIntent());
     }
 
     private void startKeepAliveService() {
@@ -115,6 +119,25 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         if (intent.getBooleanExtra(EXTRA_SHOW_CONFIG, false)) showConfig(false);
+        handleUpdateIntent(intent);
+    }
+
+    private void handleUpdateIntent(Intent intent) {
+        String url = intent.getStringExtra(EXTRA_UPDATE_URL);
+        if (url == null || url.isEmpty()) return;
+        String name = intent.getStringExtra(EXTRA_UPDATE_NAME);
+        if (name == null || !name.endsWith(".apk")) name = "KimiWeb-update.apk";
+        DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url))
+                .setTitle("正在下载 KimiWeb 更新")
+                .setDescription(name)
+                .setMimeType("application/vnd.android.package-archive")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, name);
+        long id = getSystemService(DownloadManager.class).enqueue(request);
+        getSharedPreferences(UpdateDownloadReceiver.PREFS, MODE_PRIVATE).edit()
+                .putLong("download_id", id).putString("download_name", name).apply();
+        intent.removeExtra(EXTRA_UPDATE_URL);
+        Toast.makeText(this, "更新开始下载，完成后将打开安装页面", Toast.LENGTH_LONG).show();
     }
 
 
