@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -59,6 +60,11 @@ public class MainActivity extends Activity {
             if (getIntent().getBooleanExtra(EXTRA_SHOW_CONFIG, false)) showConfig(false);
         } else showConfig(true);
         handleUpdateIntent(getIntent());
+    }
+
+    @Override public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (webView != null) webView.invalidate();
     }
 
     private void startKeepAliveService() {
