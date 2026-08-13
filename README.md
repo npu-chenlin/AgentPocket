@@ -1,10 +1,15 @@
 # KimiWeb
 
-一个非官方 Android 客户端，通过 Tailscale 在手机上使用电脑中的 [Kimi Code](https://github.com/MoonshotAI/kimi-code) Web。
+一个非官方 Android 客户端，通过 Tailscale 在手机上使用电脑中的 [Kimi Code](https://github.com/MoonshotAI/kimi-code) Web，并在后台接收任务状态通知。
 
 <p align="center">
-  <img src="docs/demo.jpg" alt="KimiWeb 使用效果" width="64%">
-  <img src="docs/notification-preview.jpg" alt="KimiWeb 后台任务通知效果" width="32%">
+  <img src="docs/demo.jpg" alt="KimiWeb 使用效果" width="52%">
+  <img src="docs/notify-preview.jpg" alt="KimiWeb 后台任务通知" width="26%">
+</p>
+
+<p align="center">
+  <img src="docs/model-selection.jpg" alt="Kimi Code 模型选择" width="52%">
+  <img src="docs/multi-server.jpg" alt="KimiWeb 多服务器选择" width="26%">
 </p>
 
 ## 使用前提
@@ -25,31 +30,25 @@
    ```
 
 3. 启动 Kimi Code Web，并允许网络访问。
-4. 将电脑的 Tailscale IP、端口和 token 填入 App。
+4. 在 KimiWeb 中添加服务器并连接。
 
 例如：
 
 ```shell
-kimi web --host 0.0.0.0 --port 58627
+kimi web --dangerous-bypass-auth --host 0.0.0.0 --port 58627
 ```
 
-Kimi Code Web 通常会给出包含 token 的访问地址。可将完整地址直接粘贴进 App，例如：
-
-```text
-http://100.x.y.z:58627/#token=YOUR_TOKEN
-```
-
-其中 `100.x.y.z` 替换为电脑的 Tailscale IP。
+此参数会关闭访问认证，请仅在可信的 Tailscale 网络中使用。随后将电脑的 Tailscale IP 和端口添加到 KimiWeb。
 
 ## 功能
 
-- 在手机上使用完整的 Kimi Code Web
-- 切换到后台后继续接收任务通知
-- 支持回合完成、待回答、等待审批和失败通知
+- 在 Android 上使用 Kimi Code Web
+- 管理多个服务器并显示在线状态
+- 后台监听任务状态，接收完成、待回答、审批和失败通知
 
 ## 使用
 
-首次启动时输入连接信息，或直接粘贴 Kimi Code Web 给出的完整地址。之后可从“Kimi 后台监听”通知中的“连接设置”修改。
+首次启动时添加服务器。之后可通过屏幕侧边的悬浮入口切换或管理服务器；后台会同时监听所有已添加的服务器。
 
 ## 说明
 

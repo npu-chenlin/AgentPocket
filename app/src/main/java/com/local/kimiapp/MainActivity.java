@@ -467,6 +467,23 @@ public class MainActivity extends Activity {
             edit.setOnClickListener(v -> { dialog.dismiss(); showConfig(false, server, true); });
             delete.setOnClickListener(v -> { dialog.dismiss(); deleteServer(server); });
         }
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button refresh = new Button(this);
+        refresh.setText("刷新页面");
+        refresh.setTextSize(14);
+        refresh.setTextColor(Color.rgb(78, 88, 105));
+        refresh.setAllCaps(false);
+        refresh.setElevation(0);
+        refresh.setStateListAnimator(null);
+        GradientDrawable refreshBackground = new GradientDrawable();
+        refreshBackground.setColor(Color.rgb(245, 247, 250));
+        refreshBackground.setCornerRadius(dp(14));
+        refreshBackground.setStroke(dp(1), Color.rgb(217, 222, 231));
+        refresh.setBackground(new RippleDrawable(
+                ColorStateList.valueOf(Color.argb(30, 78, 88, 105)), refreshBackground, null));
+
         Button add = new Button(this);
         add.setText("＋  添加服务器");
         add.setTextSize(14);
@@ -477,7 +494,17 @@ public class MainActivity extends Activity {
         addBackground.setCornerRadius(dp(14));
         addBackground.setStroke(dp(1), Color.rgb(180, 207, 244));
         add.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(30, 25, 112, 238)), addBackground, null));
-        list.addView(add, new LinearLayout.LayoutParams(-1, dp(50)));
+        LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(0, dp(50), 1);
+        refreshParams.setMargins(0, 0, dp(5), 0);
+        actions.addView(refresh, refreshParams);
+        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(0, dp(50), 1);
+        addParams.setMargins(dp(5), 0, 0, 0);
+        actions.addView(add, addParams);
+        list.addView(actions, new LinearLayout.LayoutParams(-1, dp(50)));
+        refresh.setOnClickListener(v -> {
+            dialog.dismiss();
+            if (webView != null) webView.reload();
+        });
         add.setOnClickListener(v -> { dialog.dismiss(); showConfig(false, null, true); });
         SharedPreferences.OnSharedPreferenceChangeListener healthListener = (preferences, key) -> {
             String serverId = null;
