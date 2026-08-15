@@ -45,6 +45,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.Button;
 
+import androidx.activity.OnBackPressedCallback;
+import androidx.core.view.WindowInsetsControllerCompat;
+
 import com.petterp.floatingx.assist.FxAdsorbDirection;
 import com.petterp.floatingx.assist.FxGravity;
 import com.petterp.floatingx.assist.helper.FxScopeHelper;
@@ -266,7 +269,6 @@ public class MainActivity extends Activity {
 
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setDomStorageEnabled(true);
-        webView.getSettings().setDatabaseEnabled(true);
         webView.getSettings().setMediaPlaybackRequiresUserGesture(false);
         webView.getSettings().setAllowFileAccess(true);
         webView.getSettings().setBuiltInZoomControls(false);
@@ -360,6 +362,7 @@ public class MainActivity extends Activity {
     }
 
     private class ThemeBridge {
+        @SuppressWarnings("deprecation")
         @JavascriptInterface public void update(String color, boolean dark) {
             runOnUiThread(() -> {
                 int background = dark ? Color.rgb(18, 18, 18) : Color.WHITE;
@@ -374,19 +377,12 @@ public class MainActivity extends Activity {
                 getWindow().setStatusBarColor(background);
                 getWindow().setNavigationBarColor(background);
                 // 图标颜色：暗底用白色图标，亮底用黑色图标
-                int flags = getWindow().getDecorView().getSystemUiVisibility();
-                if (dark) {
-                    flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-                    }
-                } else {
-                    flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-                    }
+                View decor = getWindow().getDecorView();
+                WindowInsetsControllerCompat controller = new WindowInsetsControllerCompat(getWindow(), decor);
+                controller.setAppearanceLightStatusBars(!dark);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    controller.setAppearanceLightNavigationBars(!dark);
                 }
-                getWindow().getDecorView().setSystemUiVisibility(flags);
             });
         }
     }
@@ -803,6 +799,7 @@ public class MainActivity extends Activity {
         webView.loadUrl(url);
     }
 
+    @SuppressWarnings("deprecation")
     @Override public void onBackPressed() {
         if (webView.canGoBack()) webView.goBack(); else super.onBackPressed();
     }

@@ -14,8 +14,8 @@ android {
         applicationId 'com.local.kimiapp'
         minSdk 26
         targetSdk 34
-        versionCode 30
-        versionName '2.3.6'
+        versionCode 32
+        versionName '2.4.1'
     }
 
     signingConfigs {
@@ -34,6 +34,11 @@ android {
             signingConfig signingConfigs.release
             minifyEnabled false
         }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
     }
 }
 
