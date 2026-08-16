@@ -211,6 +211,7 @@ public class MainActivity extends Activity {
                                     event.getRawY() - touchStart[1]) >= touchSlop;
                             if (dragged[0]) {
                                 if (!wasDragged) {
+                                    mainHandler.removeCallbacks(faceFallback);
                                     applyFaceState(GrokFaceState.DRAGGING);
                                     faceView.setGaze(0f, 0f);
                                 }
