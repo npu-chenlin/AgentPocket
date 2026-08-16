@@ -23,6 +23,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -45,17 +46,13 @@ import okhttp3.WebSocketListener;
 /**
  * WebSocket-based real-time monitor for Kimi Code servers.
  *
- * Replaces HTTP polling with a single persistent WebSocket per server.
- * Traffic: ~10-50 KB/hour idle vs ~1.5-3 MB/hour for 3s polling.
- * Latency: real-time push vs 0-3s poll window.
+ * Protocol version: Kimi Code CLI 0.36.1+
  *
- * Protocol: ws://host:port/api/v1/ws
- * 1. Send client_hello (with client_id + optional subscriptions)
- * 2. Receive server_hello
- * 3. Send subscribe with known session_ids
- * 4. Receive session_event payloads:
- *    - event.session.status_changed  → idle/running/awaiting_approval/awaiting_question/aborted
- *    - event.session.work_changed    → busy, pending_interaction
+ * Key differences from older versions:
+ * 1. Auth via Sec-WebSocket-Protocol: "kimi-code.bearer.{token}"
+ * 2. client_hello must include subscriptions + cursors
+ * 3. Events are pushed directly (no session_event wrapper). Current servers use
+ *    event.session.work_changed (busy true/false) and prompt.completed.
  */
 public class KeepAliveService extends Service {
     private static final String SERVICE_CHANNEL = "kimi_background";
@@ -85,8 +82,8 @@ public class KeepAliveService extends Service {
 
         client = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.SECONDS)    // WebSocket needs infinite read
-                .pingInterval(30, TimeUnit.SECONDS)  // RFC 6455 keepalive
+                .readTimeout(0, TimeUnit.SECONDS)
+                .pingInterval(30, TimeUnit.SECONDS)
                 .build();
 
         for (ServerStore.Server server : ServerStore.load(this)) {
@@ -161,30 +158,16 @@ public class KeepAliveService extends Service {
                 serviceNotification(text));
     }
 
-    /**
-     * Per-server WebSocket monitor.
-     *
-     * Lifecycle:
-     *   IDLE → (start) → SYNC_REST → (got list) → WS_CONNECTING → (onOpen) → WS_HANDSHAKE →
-     *   (server_hello) → WS_SUBSCRIBED → session_event flow
-     *   Any failure → BACKOFF → WS_CONNECTING
-     */
     private final class ServerMonitor {
         final ServerStore.Server server;
-
-        // Cached metadata from REST
         final Map<String, String> titleCache = Collections.synchronizedMap(new HashMap<>());
-
-        // State tracking
+        final Map<String, Boolean> busyBySession = Collections.synchronizedMap(new HashMap<>());
+        final Map<String, String> pendingBySession = Collections.synchronizedMap(new HashMap<>());
         WebSocket webSocket;
         volatile boolean connected;
         volatile int activeCount;
-
-        // Reconnect
         long reconnectDelay = RECONNECT_BASE_MS;
         final Runnable reconnectRunnable = this::start;
-
-        // Notification dedup: "serverId:sessionId:status"
         private final Set<String> notifiedKeys = Collections.newSetFromMap(
                 new LinkedHashMap<String, Boolean>() {
                     @Override protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
@@ -193,7 +176,6 @@ public class KeepAliveService extends Service {
                 });
 
         ServerMonitor(ServerStore.Server server) { this.server = server; }
-
         boolean isConnected() { return connected; }
         int getActiveCount() { return activeCount; }
 
@@ -201,17 +183,9 @@ public class KeepAliveService extends Service {
             if (stopped) return;
             connected = false;
             updateSummary();
-            // Step 1: fetch session list over REST to populate title cache
-            fetchSessionList(() -> {
-                if (stopped) return;
-                // Step 2: open WebSocket
-                connectWebSocket();
-            });
+            fetchSessionList(this::connectWebSocket);
         }
 
-        /**
-         * Pull /api/v2/sessions once to build the title cache and get current session IDs.
-         */
         private void fetchSessionList(Runnable then) {
             HttpUrl url;
             try {
@@ -223,7 +197,7 @@ public class KeepAliveService extends Service {
 
             client.newCall(authorize(url)).enqueue(new Callback() {
                 @Override public void onFailure(Call call, IOException e) {
-                    Log.w(TAG, server.name + " REST fetch failed: " + e.getMessage());
+                    Log.w(TAG, server.name + " REST failed: " + e.getMessage());
                     scheduleReconnect();
                 }
                 @Override public void onResponse(Call call, Response response) {
@@ -233,6 +207,8 @@ public class KeepAliveService extends Service {
                                 .getJSONObject("data").getJSONArray("items");
                         synchronized (titleCache) {
                             titleCache.clear();
+                            busyBySession.clear();
+                            pendingBySession.clear();
                             activeCount = 0;
                             for (int i = 0; i < items.length(); i++) {
                                 JSONObject item = items.getJSONObject(i);
@@ -243,7 +219,10 @@ public class KeepAliveService extends Service {
                                 titleCache.put(id, title);
                                 JSONObject activity = item.optJSONObject("activity");
                                 String status = activity != null ? activity.optString("status", "idle") : "idle";
-                                if (!"idle".equals(status)) activeCount++;
+                                boolean busy = !"idle".equals(status);
+                                busyBySession.put(id, busy);
+                                pendingBySession.put(id, "none");
+                                if (busy) activeCount++;
                             }
                         }
                         updateSummary();
@@ -261,8 +240,11 @@ public class KeepAliveService extends Service {
             String wsUrl = server.baseUrl().replace("http://", "ws://").replace("https://", "wss://")
                     + "/api/v1/ws";
             Request.Builder req = new Request.Builder().url(wsUrl);
-            if (server.token != null && !server.token.isEmpty())
-                req.header("Authorization", "Bearer " + server.token);
+
+            // Auth: Kimi Code 0.36+ uses Sec-WebSocket-Protocol with bearer token
+            if (server.token != null && !server.token.isEmpty()) {
+                req.header("Sec-WebSocket-Protocol", "kimi-code.bearer." + server.token);
+            }
 
             webSocket = client.newWebSocket(req.build(), new WebSocketListener() {
                 @Override public void onOpen(WebSocket ws, Response response) {
@@ -272,12 +254,12 @@ public class KeepAliveService extends Service {
                     setHealth(true);
                     updateSummary();
 
-                    // Send client_hello with all known session IDs as subscriptions
+                    // client_hello with subscriptions + cursors (required by 0.36+)
                     List<String> ids = new ArrayList<>(titleCache.keySet());
                     try {
                         sendJson(ws, buildClientHello(ids));
                     } catch (JSONException e) {
-                        Log.e(TAG, server.name + " build hello failed", e);
+                        Log.e(TAG, server.name + " hello failed", e);
                     }
                 }
 
@@ -311,123 +293,197 @@ public class KeepAliveService extends Service {
             try {
                 JSONObject msg = new JSONObject(text);
                 String type = msg.optString("type", "");
+                Log.d(TAG, server.name + " << " + type);
 
                 switch (type) {
                     case "server_hello":
-                        // Now officially subscribed; some servers accept subscriptions in client_hello,
-                        // but we send an explicit subscribe for safety.
-                        if (webSocket != null) {
-                            List<String> ids = new ArrayList<>(titleCache.keySet());
-                            if (!ids.isEmpty()) {
-                                sendJson(webSocket, buildSubscribe(ids));
-                            }
-                        }
+                        // Subscriptions were already included in client_hello. Sending a second
+                        // subscribe here causes an unnecessary acknowledgement and may replay data.
+                        Log.i(TAG, server.name + " subscribed to " + titleCache.size() + " sessions");
                         break;
 
                     case "subscribe_ack":
-                        Log.i(TAG, server.name + " subscribed to " +
-                                msg.optJSONObject("payload").optJSONArray("accepted").length() + " sessions");
+                        Log.i(TAG, server.name + " subscribe ack");
                         break;
 
-                    case "session_event":
-                        handleSessionEvent(msg);
+                    case "ack":
+                        // hello or other ack
                         break;
 
                     case "ping":
-                        // OkHttp handles RFC ping/pong automatically, but protocol-level ping
-                        // messages from the server should be acknowledged with pong if required.
-                        // The asyncapi says "pong" is a client->server message type.
                         if (webSocket != null) {
                             sendJson(webSocket, new JSONObject()
                                     .put("type", "pong")
-                                    .put("id", UUID.randomUUID().toString()));
+                                    .put("payload", new JSONObject().put("nonce", msg.optJSONObject("payload") != null ? msg.optJSONObject("payload").opt("nonce") : UUID.randomUUID().toString())));
                         }
                         break;
 
                     case "resync_required":
-                        Log.i(TAG, server.name + " resync required");
+                        Log.i(TAG, server.name + " resync");
                         fetchSessionList(() -> {
                             if (webSocket != null && !titleCache.isEmpty()) {
                                 try {
                                     sendJson(webSocket, buildSubscribe(new ArrayList<>(titleCache.keySet())));
-                                } catch (JSONException e) {
-                                    Log.e(TAG, server.name + " build subscribe failed", e);
-                                }
+                                } catch (JSONException e) {}
                             }
                         });
                         break;
 
                     case "error":
-                        Log.w(TAG, server.name + " WS error: " + text);
+                        Log.w(TAG, server.name + " error: " + text);
                         break;
 
                     default:
-                        // acks and others ignored
+                        // All other messages are routed based on VY() logic:
+                        // event.session.status_changed → protocol → onWireEvent
+                        // event.session.created → protocol
+                        // prompt.submitted → agent
+                        if (type.startsWith("event.session.")) {
+                            handleProtocolEvent(msg);
+                        } else if (type.equals("prompt.submitted") || type.equals("prompt.completed") || type.equals("prompt.aborted")) {
+                            handleAgentEvent(msg);
+                        }
                         break;
                 }
             } catch (JSONException e) {
-                Log.w(TAG, server.name + " malformed JSON: " + text.substring(0, Math.min(200, text.length())));
+                Log.w(TAG, server.name + " bad JSON: " + text.substring(0, Math.min(200, text.length())));
             }
         }
 
-        private void handleSessionEvent(JSONObject msg) throws JSONException {
-            JSONObject payload = msg.getJSONObject("payload");
-            String eventType = payload.getString("type");
-            String sessionId = msg.optString("sessionId", "");
+        private void handleProtocolEvent(JSONObject msg) {
+            String type = msg.optString("type", "");
+            String sessionId = msg.optString("session_id", "");
+            JSONObject payload = msg.optJSONObject("payload");
+            if (payload == null) payload = new JSONObject();
 
-            switch (eventType) {
+            Log.d(TAG, server.name + " protocol event: " + type + " session=" + sessionId);
+
+            switch (type) {
                 case "event.session.status_changed": {
-                    String status = payload.getString("status");
+                    String status = payload.optString("status", "idle");
                     String previous = payload.optString("previous_status", "");
 
-                    // Update active count
                     boolean wasActive = !"idle".equals(previous) && !previous.isEmpty();
                     boolean isActive = !"idle".equals(status);
                     if (wasActive && !isActive) activeCount = Math.max(0, activeCount - 1);
                     else if (!wasActive && isActive) activeCount++;
                     updateSummary();
 
-                    // Notifications (only when app not visible)
                     if (MainActivity.isVisible) return;
 
                     if ("running".equals(previous) && "idle".equals(status)) {
-                        maybeNotify(sessionId, status, "Kimi Code · 回合完成", getTitle(sessionId));
+                        maybeNotify(sessionId, eventKey(msg, "status-complete"),
+                                "Kimi Code · 回合完成", getTitle(sessionId));
                     } else if ("awaiting_approval".equals(status)) {
-                        maybeNotify(sessionId, status, "Kimi Code · 等待审批", getTitle(sessionId));
+                        maybeNotify(sessionId, eventKey(msg, "status-approval"),
+                                "Kimi Code · 等待审批", getTitle(sessionId));
                     } else if ("awaiting_question".equals(status)) {
-                        maybeNotify(sessionId, status, "Kimi Code · 待回答", getTitle(sessionId));
+                        maybeNotify(sessionId, eventKey(msg, "status-question"),
+                                "Kimi Code · 待回答", getTitle(sessionId));
                     } else if ("aborted".equals(status)) {
-                        maybeNotify(sessionId, status, "Kimi Code · 回合失败", getTitle(sessionId));
+                        maybeNotify(sessionId, eventKey(msg, "status-aborted"),
+                                "Kimi Code · 回合失败", getTitle(sessionId));
                     }
                     break;
                 }
 
                 case "event.session.work_changed": {
-                    // Fallback / supplementary signal
+                    boolean busy = payload.optBoolean("busy", false);
+                    Boolean previousBusy = busyBySession.put(sessionId, busy);
+                    if (previousBusy != null && previousBusy != busy) {
+                        if (busy) activeCount++;
+                        else activeCount = Math.max(0, activeCount - 1);
+                        updateSummary();
+                    }
+
                     String pending = payload.optString("pending_interaction", "none");
-                    if (!"none".equals(pending) && !MainActivity.isVisible) {
-                        String title = getTitle(sessionId);
-                        if ("approval".equals(pending)) {
-                            maybeNotify(sessionId, "approval", "Kimi Code · 等待审批", title);
-                        } else if ("question".equals(pending)) {
-                            maybeNotify(sessionId, "question", "Kimi Code · 待回答", title);
+                    String previousPending = pendingBySession.put(sessionId, pending);
+                    if (!MainActivity.isVisible && isFreshEvent(msg)) {
+                        if (!pending.equals(previousPending)) {
+                            if ("approval".equals(pending)) {
+                                maybeNotify(sessionId, eventKey(msg, "approval"),
+                                        "Kimi Code · 等待审批", getTitle(sessionId));
+                            } else if ("question".equals(pending)) {
+                                maybeNotify(sessionId, eventKey(msg, "question"),
+                                        "Kimi Code · 待回答", getTitle(sessionId));
+                            }
                         }
                     }
                     break;
                 }
 
-                case "event.session.created":
-                case "prompt.submitted": {
-                    // New session or prompt may mean title changed / new session
-                    // Refresh title cache lazily
-                    refreshTitleFor(sessionId);
+                case "event.session.created": {
+                    JSONObject sessionObj = payload.optJSONObject("session");
+                    if (sessionObj != null) {
+                        String newId = sessionObj.optString("id", "");
+                        if (!newId.isEmpty()) {
+                            JSONObject meta = sessionObj.optJSONObject("meta");
+                            String title = meta != null ? meta.optString("title", "") : "";
+                            if (title.isEmpty() || "null".equals(title)) title = "点击查看 Kimi 会话";
+                            synchronized (titleCache) { titleCache.put(newId, title); }
+                            activeCount++;
+                            updateSummary();
+                            if (webSocket != null) {
+                                try {
+                                    sendJson(webSocket, buildSubscribe(Collections.singletonList(newId)));
+                                } catch (JSONException e) {}
+                            }
+                        }
+                    }
                     break;
                 }
 
-                default:
-                    // Other events (turn.started, turn.ended, etc.) ignored for notifications
+                case "event.session.updated":
+                case "event.session.deleted":
+                    // Refresh title cache
                     break;
             }
+        }
+
+        private void handleAgentEvent(JSONObject msg) {
+            String type = msg.optString("type", "");
+            String sessionId = msg.optString("session_id", "");
+            JSONObject payload = msg.optJSONObject("payload");
+            if (payload == null) payload = new JSONObject();
+            Log.d(TAG, server.name + " agent event: " + type + " session=" + sessionId);
+
+            if ("prompt.submitted".equals(type)) {
+                refreshTitleFor(sessionId);
+            } else if ("prompt.completed".equals(type) && !MainActivity.isVisible && isFreshEvent(msg)) {
+                String promptId = payload.optString("promptId", eventKey(msg, "prompt-complete"));
+                notifyTurnFinished(sessionId, payload.optString("reason", "completed"),
+                        "prompt-complete:" + promptId);
+            } else if ("prompt.aborted".equals(type) && !MainActivity.isVisible && isFreshEvent(msg)) {
+                String promptId = payload.optString("promptId", eventKey(msg, "prompt-aborted"));
+                maybeNotify(sessionId, "prompt-aborted:" + promptId,
+                        "Kimi Code · 回合失败", getTitle(sessionId));
+            }
+        }
+
+        private void notifyTurnFinished(String sessionId, String reason, String key) {
+            boolean failed = "aborted".equals(reason) || "failed".equals(reason)
+                    || "error".equals(reason) || "cancelled".equals(reason);
+            maybeNotify(sessionId, key,
+                    failed ? "Kimi Code · 回合失败" : "Kimi Code · 回合完成",
+                    getTitle(sessionId));
+        }
+
+        private boolean isFreshEvent(JSONObject msg) {
+            String timestamp = msg.optString("timestamp", "");
+            if (timestamp.isEmpty()) return true;
+            try {
+                long age = System.currentTimeMillis() - Instant.parse(timestamp).toEpochMilli();
+                return age >= -30000 && age <= 2 * 60 * 1000L;
+            } catch (Exception ignored) {
+                return true;
+            }
+        }
+
+        private String eventKey(JSONObject msg, String prefix) {
+            String epoch = msg.optString("epoch", "");
+            long seq = msg.optLong("seq", -1);
+            if (seq >= 0) return prefix + ":" + epoch + ":" + seq;
+            return prefix + ":" + msg.optString("id", UUID.randomUUID().toString());
         }
 
         private String getTitle(String sessionId) {
@@ -459,14 +515,14 @@ public class KeepAliveService extends Service {
             });
         }
 
-        /**
-         * Deduplicate by (serverId + sessionId + status). Prevents duplicate notifications
-         * when server retransmits or status flaps.
-         */
         private void maybeNotify(String sessionId, String status, String title, String body) {
             String key = server.id + ":" + sessionId + ":" + status;
-            if (!notifiedKeys.add(key)) return; // already sent this exact state
-            KeepAliveService.this.postTask(server, key, title, body);
+            if (!notifiedKeys.add(key)) {
+                Log.d(TAG, server.name + " dedup: " + key);
+                return;
+            }
+            Log.i(TAG, server.name + " notify: " + key);
+            KeepAliveService.this.postTask(server, sessionId, key, title, body);
         }
 
         void scheduleReconnect() {
@@ -479,10 +535,7 @@ public class KeepAliveService extends Service {
 
         void disconnect() {
             handler.removeCallbacks(reconnectRunnable);
-            if (webSocket != null) {
-                webSocket.cancel();
-                webSocket = null;
-            }
+            if (webSocket != null) { webSocket.cancel(); webSocket = null; }
             connected = false;
         }
 
@@ -502,27 +555,45 @@ public class KeepAliveService extends Service {
     // Protocol helpers
     // ------------------------------------------------------------------
 
+    /**
+     * Build client_hello per Kimi Code 0.36+ protocol.
+     * Empty cursors mean "start from now" and avoid replaying the server's event buffer.
+     */
     private static JSONObject buildClientHello(List<String> sessionIds) throws JSONException {
-        JSONObject payload = new JSONObject()
-                .put("client_id", "kimiapp-android");
+        JSONObject payload = new JSONObject().put("client_id", "kimiapp-android");
+
         if (!sessionIds.isEmpty()) {
-            JSONArray arr = new JSONArray();
-            for (String id : sessionIds) arr.put(id);
-            payload.put("subscriptions", arr);
+            JSONArray subs = new JSONArray();
+            for (String id : sessionIds) {
+                subs.put(id);
+            }
+            payload.put("subscriptions", subs);
+            payload.put("cursors", new JSONObject());
+        } else {
+            payload.put("subscriptions", new JSONArray());
+            payload.put("cursors", new JSONObject());
         }
+
         return new JSONObject()
                 .put("type", "client_hello")
                 .put("id", UUID.randomUUID().toString())
                 .put("payload", payload);
     }
 
+    /**
+     * Build subscribe message per Kimi Code 0.36+ protocol.
+     */
     private static JSONObject buildSubscribe(List<String> sessionIds) throws JSONException {
         JSONArray arr = new JSONArray();
-        for (String id : sessionIds) arr.put(id);
+        for (String id : sessionIds) {
+            arr.put(id);
+        }
         return new JSONObject()
                 .put("type", "subscribe")
                 .put("id", UUID.randomUUID().toString())
-                .put("payload", new JSONObject().put("session_ids", arr));
+                .put("payload", new JSONObject()
+                        .put("session_ids", arr)
+                        .put("cursors", new JSONObject()));
     }
 
     private static void sendJson(WebSocket ws, JSONObject json) {
@@ -540,18 +611,21 @@ public class KeepAliveService extends Service {
     // Notifications & updates
     // ------------------------------------------------------------------
 
-    private void postTask(ServerStore.Server server, String tag, String title, String body) {
+    private void postTask(ServerStore.Server server, String sessionId, String tag, String title, String body) {
         if (Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                         != PackageManager.PERMISSION_GRANTED) {
             return;
         }
         String serverName = server.name;
-        PendingIntent pending = PendingIntent.getActivity(this, server.id.hashCode(),
-                new Intent(this, MainActivity.class)
-                        .putExtra(MainActivity.EXTRA_SERVER_ID, server.id)
-                        .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP),
-                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Intent intent = new Intent(this, MainActivity.class)
+                .putExtra(MainActivity.EXTRA_SERVER_ID, server.id)
+                .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        if (sessionId != null && !sessionId.isEmpty()) {
+            intent.putExtra(MainActivity.EXTRA_SESSION_ID, sessionId);
+        }
+        PendingIntent pending = PendingIntent.getActivity(this, tag.hashCode(),
+                intent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         getSystemService(NotificationManager.class).notify(tag, 0,
                 new Notification.Builder(this, TASK_CHANNEL)
                         .setSmallIcon(R.mipmap.ic_launcher)

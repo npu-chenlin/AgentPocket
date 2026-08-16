@@ -68,6 +68,7 @@ public class MainActivity extends Activity {
     public static volatile boolean isVisible = false;
     public static final String EXTRA_SHOW_CONFIG = "show_connection_config";
     public static final String EXTRA_SERVER_ID = "open_server_id";
+    public static final String EXTRA_SESSION_ID = "open_session_id";
     public static final String EXTRA_UPDATE_URL = "update_download_url";
     public static final String EXTRA_UPDATE_NAME = "update_download_name";
     private static final int FILE_CHOOSER = 42;
@@ -84,7 +85,7 @@ public class MainActivity extends Activity {
         buildUi();
         activateServerFromIntent(getIntent());
         if (ServerStore.active(this) != null) {
-            loadConfiguredUrl();
+            loadConfiguredUrl(getIntent().getStringExtra(EXTRA_SESSION_ID));
             if (getIntent().getBooleanExtra(EXTRA_SHOW_CONFIG, false)) showServerList();
         } else showConfig(true, null);
         handleUpdateIntent(getIntent());
@@ -308,7 +309,9 @@ public class MainActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        if (activateServerFromIntent(intent)) loadConfiguredUrl();
+        if (activateServerFromIntent(intent)) {
+            loadConfiguredUrl(intent.getStringExtra(EXTRA_SESSION_ID));
+        }
         if (intent.getBooleanExtra(EXTRA_SHOW_CONFIG, false)) showServerList();
         handleUpdateIntent(intent);
     }
@@ -791,11 +794,20 @@ public class MainActivity extends Activity {
     }
 
     private void loadConfiguredUrl() {
+        loadConfiguredUrl(null);
+    }
+
+    private void loadConfiguredUrl(String sessionId) {
         ServerStore.Server server = ServerStore.active(this);
         if (server == null) return;
         String url = server.baseUrl() + "/";
+        if (sessionId != null && !sessionId.isEmpty()) {
+            url += "sessions/" + sessionId;
+        }
         String token = server.token;
-        if (token != null && !token.isEmpty()) url += "#token=" + Uri.encode(token);
+        if (token != null && !token.isEmpty()) {
+            url += "#token=" + Uri.encode(token);
+        }
         webView.loadUrl(url);
     }
 
