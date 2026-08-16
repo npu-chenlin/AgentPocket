@@ -21,6 +21,8 @@ import android.content.res.ColorStateList;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -45,7 +47,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.Button;
 
-import androidx.activity.OnBackPressedCallback;
 import androidx.core.view.WindowInsetsControllerCompat;
 
 import com.petterp.floatingx.assist.FxAdsorbDirection;
@@ -80,7 +81,7 @@ public class MainActivity extends Activity {
     private ProgressBar progress;
     private GrokFaceView faceView;
     private GrokFaceState lastFaceState;
-    private final android.os.Handler mainHandler = new android.os.Handler();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Runnable faceFallback = this::applyBaseFaceState;
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingPermission;
