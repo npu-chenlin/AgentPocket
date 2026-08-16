@@ -55,6 +55,9 @@ import com.petterp.floatingx.listener.IFxTouchListener;
 import com.petterp.floatingx.listener.control.IFxScopeControl;
 import com.petterp.floatingx.view.IFxInternalHelper;
 
+import com.local.kimiapp.face.GrokFaceState;
+import com.local.kimiapp.face.GrokFaceView;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -75,6 +78,10 @@ public class MainActivity extends Activity {
     private static final String NOTIFICATION_CHANNEL = "kimi_tasks";
     private WebView webView;
     private ProgressBar progress;
+    private GrokFaceView faceView;
+    private GrokFaceState lastFaceState;
+    private final android.os.Handler mainHandler = new android.os.Handler();
+    private final Runnable faceFallback = this::applyBaseFaceState;
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingPermission;
 
@@ -83,6 +90,7 @@ public class MainActivity extends Activity {
         setupNotifications();
         startKeepAliveService();
         buildUi();
+        registerFaceEventListeners();
         activateServerFromIntent(getIntent());
         if (ServerStore.active(this) != null) {
             loadConfiguredUrl(getIntent().getStringExtra(EXTRA_SESSION_ID));
@@ -124,27 +132,12 @@ public class MainActivity extends Activity {
 
     private void installServerHandle(FrameLayout root) {
         FrameLayout handle = new FrameLayout(this);
-        // FloatingX 直接使用该参数，缺省会按 WRAP_CONTENT 收缩
         handle.setLayoutParams(new FrameLayout.LayoutParams(dp(56), dp(56)));
         handle.setContentDescription("切换服务器");
         handle.setElevation(dp(8));
         styleServerHandle(handle);
-        LinearLayout eyes = new LinearLayout(this);
-        eyes.setGravity(Gravity.CENTER);
-        final View[] eyeViews = new View[2];
-        for (int i = 0; i < 2; i++) {
-            View eye = new View(this);
-            GradientDrawable eyeShape = new GradientDrawable();
-            eyeShape.setColor(Color.WHITE);
-            eyeShape.setCornerRadius(dp(4));
-            eye.setBackground(eyeShape);
-            eyeViews[i] = eye;
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(7), dp(10));
-            if (i == 1) params.setMargins(dp(8), 0, 0, 0);
-            eyes.addView(eye, params);
-        }
-        handle.addView(eyes, new FrameLayout.LayoutParams(-1, -1));
-        eyes.setVisibility(View.INVISIBLE);
+        faceView = new GrokFaceView(this);
+        handle.addView(faceView, new FrameLayout.LayoutParams(-1, -1));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             handle.addOnLayoutChangeListener((view, left, top, right, bottom,
                     oldLeft, oldTop, oldRight, oldBottom) -> view.setSystemGestureExclusionRects(
@@ -158,33 +151,16 @@ public class MainActivity extends Activity {
         final long[] touchStartedAt = new long[1];
         final int touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
         final Runnable[] sleep = new Runnable[1];
-        final Runnable[] blink = new Runnable[1];
         final Runnable[] handleClick = new Runnable[1];
         // 睡眠态：略缩小、降透明度，半藏于屏幕边缘
         handle.setAlpha(0.72f);
         handle.setScaleX(0.94f);
         handle.setScaleY(0.94f);
 
-        blink[0] = () -> {
-            if (!awake[0]) return;
-            for (View eye : eyeViews) {
-                eye.setPivotY(eye.getHeight() / 2f);
-                eye.animate().cancel();
-                eye.animate().scaleY(0.12f).setDuration(80).withEndAction(() ->
-                        eye.animate().scaleY(1f).setDuration(120).start()).start();
-            }
-            handle.postDelayed(blink[0], 2400 + (long) (Math.random() * 1800));
-        };
-
         sleep[0] = () -> {
             if (control[0] == null || !awake[0]) return;
             awake[0] = false;
-            handle.removeCallbacks(blink[0]);
-            eyes.animate().cancel();
-            eyes.animate().alpha(0f).setDuration(140).withEndAction(() -> {
-                eyes.setVisibility(View.INVISIBLE);
-                eyes.setAlpha(1f);
-            }).start();
+            applyFaceState(GrokFaceState.SLEEPING);
             handle.animate().cancel();
             handle.animate().alpha(0.72f).scaleX(0.94f).scaleY(0.94f).setDuration(180).start();
             boolean left = control[0].getX() + dp(28) < root.getWidth() / 2f;
@@ -195,16 +171,15 @@ public class MainActivity extends Activity {
             handle.removeCallbacks(sleep[0]);
             if (!awake[0]) {
                 awake[0] = true;
-                eyes.setVisibility(View.VISIBLE);
-                eyes.setAlpha(0f);
-                eyes.animate().cancel();
-                eyes.animate().alpha(1f).setDuration(160).start();
+                faceView.wakeTurn();
+                applyFaceState(GrokFaceState.WAKING);
                 handle.animate().cancel();
                 handle.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(240)
                         .setInterpolator(new OvershootInterpolator(1.6f)).start();
-                handle.postDelayed(blink[0], 1600);
                 boolean left = control[0].getX() + dp(28) < root.getWidth() / 2f;
                 control[0].move(left ? dp(8) : root.getWidth() - dp(64), control[0].getY(), false);
+                mainHandler.removeCallbacks(faceFallback);
+                mainHandler.postDelayed(faceFallback, 900L);   // WAKING 短暂展示后回落基础状态
                 handle.postDelayed(sleep[0], 3500);
             } else {
                 showServerList();
@@ -222,7 +197,7 @@ public class MainActivity extends Activity {
                 .setHalfHidePercent(0.5f)
                 .setEnableAnimation(true)
                 .setTouchListener(new IFxTouchListener() {
-                    @Override public void onDown() { handle.removeCallbacks(sleep[0]); handle.removeCallbacks(blink[0]); }
+                    @Override public void onDown() { handle.removeCallbacks(sleep[0]); }
                     @Override public void onDragIng(MotionEvent event, float x, float y) { }
                     @Override public boolean onTouch(MotionEvent event, IFxInternalHelper helper) {
                         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
@@ -231,14 +206,24 @@ public class MainActivity extends Activity {
                             touchStartedAt[0] = System.currentTimeMillis();
                             dragged[0] = false;
                         } else if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
+                            boolean wasDragged = dragged[0];
                             dragged[0] = Math.hypot(event.getRawX() - touchStart[0],
                                     event.getRawY() - touchStart[1]) >= touchSlop;
+                            if (dragged[0]) {
+                                if (!wasDragged) {
+                                    applyFaceState(GrokFaceState.DRAGGING);
+                                    faceView.setGaze(0f, 0f);
+                                }
+                                faceView.setGaze(clampUnit((event.getRawX() - touchStart[0]) / dp(70)),
+                                        clampUnit((event.getRawY() - touchStart[1]) / dp(70)));
+                            }
                         } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
                             long duration = System.currentTimeMillis() - touchStartedAt[0];
                             if (!dragged[0] && duration <= 600) handleClick[0].run();
                             else if (dragged[0]) {
                                 awake[0] = false;
-                                eyes.setVisibility(View.INVISIBLE);
+                                faceView.setGaze(0f, 0f);
+                                applyFaceState(GrokFaceState.SLEEPING);
                                 handle.animate().cancel();
                                 handle.animate().alpha(0.72f).scaleX(0.94f).scaleY(0.94f)
                                         .setDuration(180).start();
@@ -248,14 +233,77 @@ public class MainActivity extends Activity {
                     }
                     @Override public boolean onInterceptTouchEvent(MotionEvent event, IFxInternalHelper helper) { return false; }
                     @Override public void onUp() {
-                        if (!dragged[0] && awake[0]) {
-                            handle.postDelayed(sleep[0], 3500);
-                            handle.postDelayed(blink[0], 1600);
-                        }
+                        if (!dragged[0] && awake[0]) handle.postDelayed(sleep[0], 3500);
                     }
                 }).build();
         control[0] = helper.toControl(root);
         control[0].show();
+    }
+
+    private float clampUnit(float v) {
+        return Math.max(-1f, Math.min(1f, v));
+    }
+
+    private void registerFaceEventListeners() {
+        SharedPreferences health = getSharedPreferences(KeepAliveService.HEALTH_PREFS, MODE_PRIVATE);
+        health.registerOnSharedPreferenceChangeListener(facePrefsListener);
+        applyBaseFaceState();
+    }
+
+    private final SharedPreferences.OnSharedPreferenceChangeListener facePrefsListener =
+            (prefs, key) -> {
+                if (key == null || faceView == null) return;
+                if (key.equals("active_count")) {
+                    applyBaseFaceState();
+                } else if (key.equals("last_event")) {
+                    long ts = prefs.getLong("last_event_ts", 0L);
+                    if (System.currentTimeMillis() - ts > 8000L) return;   // 过期事件忽略
+                    String ev = prefs.getString("last_event", "");
+                    GrokFaceState s = null;
+                    if ("complete".equals(ev)) {
+                        s = GrokFaceState.CELEBRATE;
+                        faceView.spinOnce();
+                    } else if ("approval".equals(ev) || "question".equals(ev)) {
+                        s = GrokFaceState.THINKING;
+                    } else if ("aborted".equals(ev)) {
+                        s = GrokFaceState.SAD;
+                    }
+                    if (s != null) {
+                        applyFaceState(s);
+                        mainHandler.removeCallbacks(faceFallback);
+                        mainHandler.postDelayed(faceFallback, 3000L);      // 3s 后回落
+                    }
+                }
+            };
+
+    private void applyFaceState(GrokFaceState state) {
+        if (faceView == null || state == lastFaceState) return;
+        lastFaceState = state;
+        faceView.setFaceState(state);
+    }
+
+    private void applyBaseFaceState() {
+        if (faceView == null) return;
+        GrokFaceState s;
+        if (webView != null && progress != null && progress.getVisibility() == View.VISIBLE) {
+            s = GrokFaceState.LOADING;
+        } else {
+            SharedPreferences health = getSharedPreferences(KeepAliveService.HEALTH_PREFS, MODE_PRIVATE);
+            int active = health.getInt("active_count", 0);
+            if (active > 0) {
+                s = GrokFaceState.WORKING;
+            } else {
+                boolean known = false;
+                boolean online = false;
+                for (ServerStore.Server server : ServerStore.load(this)) {
+                    if (!health.contains("checked_" + server.id)) continue;
+                    known = true;
+                    if (health.getBoolean("online_" + server.id, false)) online = true;
+                }
+                s = known && !online ? GrokFaceState.DROWSY : GrokFaceState.IDLE;
+            }
+        }
+        applyFaceState(s);
     }
 
     private void buildUi() {
@@ -290,7 +338,10 @@ public class MainActivity extends Activity {
         webView.setWebChromeClient(new WebChromeClient() {
             @Override public void onProgressChanged(WebView view, int value) {
                 progress.setProgress(value);
-                progress.setVisibility(value == 100 ? View.GONE : View.VISIBLE);
+                boolean loading = value < 100;
+                progress.setVisibility(loading ? View.VISIBLE : View.GONE);
+                if (loading) applyFaceState(GrokFaceState.LOADING);
+                else applyBaseFaceState();
             }
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (fileCallback != null) fileCallback.onReceiveValue(null);
