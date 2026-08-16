@@ -156,6 +156,15 @@ public class KeepAliveService extends Service {
                 + " 台，监听 " + active + " 个会话";
         getSystemService(NotificationManager.class).notify(SERVICE_ID,
                 serviceNotification(text));
+        getSharedPreferences(HEALTH_PREFS, MODE_PRIVATE).edit()
+                .putInt("active_count", active).apply();
+    }
+
+    private void publishEvent(String event) {
+        getSharedPreferences(HEALTH_PREFS, MODE_PRIVATE).edit()
+                .putString("last_event", event)
+                .putLong("last_event_ts", System.currentTimeMillis())
+                .apply();
     }
 
     private final class ServerMonitor {
@@ -369,18 +378,26 @@ public class KeepAliveService extends Service {
                     else if (!wasActive && isActive) activeCount++;
                     updateSummary();
 
-                    if (MainActivity.isVisible) return;
-
+                    // Publish face events before the visibility guard — the floating ball
+                    // exists only while the app is visible, so events must always be emitted.
                     if ("running".equals(previous) && "idle".equals(status)) {
+                        publishEvent("complete");
+                        if (MainActivity.isVisible) return;
                         maybeNotify(sessionId, eventKey(msg, "status-complete"),
                                 "Kimi Code · 回合完成", getTitle(sessionId));
                     } else if ("awaiting_approval".equals(status)) {
+                        publishEvent("approval");
+                        if (MainActivity.isVisible) return;
                         maybeNotify(sessionId, eventKey(msg, "status-approval"),
                                 "Kimi Code · 等待审批", getTitle(sessionId));
                     } else if ("awaiting_question".equals(status)) {
+                        publishEvent("question");
+                        if (MainActivity.isVisible) return;
                         maybeNotify(sessionId, eventKey(msg, "status-question"),
                                 "Kimi Code · 待回答", getTitle(sessionId));
                     } else if ("aborted".equals(status)) {
+                        publishEvent("aborted");
+                        if (MainActivity.isVisible) return;
                         maybeNotify(sessionId, eventKey(msg, "status-aborted"),
                                 "Kimi Code · 回合失败", getTitle(sessionId));
                     }
@@ -398,12 +415,16 @@ public class KeepAliveService extends Service {
 
                     String pending = payload.optString("pending_interaction", "none");
                     String previousPending = pendingBySession.put(sessionId, pending);
-                    if (!MainActivity.isVisible && isFreshEvent(msg)) {
-                        if (!pending.equals(previousPending)) {
-                            if ("approval".equals(pending)) {
+                    if (!pending.equals(previousPending)) {
+                        if ("approval".equals(pending)) {
+                            publishEvent("approval");
+                            if (!MainActivity.isVisible && isFreshEvent(msg)) {
                                 maybeNotify(sessionId, eventKey(msg, "approval"),
                                         "Kimi Code · 等待审批", getTitle(sessionId));
-                            } else if ("question".equals(pending)) {
+                            }
+                        } else if ("question".equals(pending)) {
+                            publishEvent("question");
+                            if (!MainActivity.isVisible && isFreshEvent(msg)) {
                                 maybeNotify(sessionId, eventKey(msg, "question"),
                                         "Kimi Code · 待回答", getTitle(sessionId));
                             }
@@ -449,14 +470,20 @@ public class KeepAliveService extends Service {
 
             if ("prompt.submitted".equals(type)) {
                 refreshTitleFor(sessionId);
-            } else if ("prompt.completed".equals(type) && !MainActivity.isVisible && isFreshEvent(msg)) {
-                String promptId = payload.optString("promptId", eventKey(msg, "prompt-complete"));
-                notifyTurnFinished(sessionId, payload.optString("reason", "completed"),
-                        "prompt-complete:" + promptId);
-            } else if ("prompt.aborted".equals(type) && !MainActivity.isVisible && isFreshEvent(msg)) {
-                String promptId = payload.optString("promptId", eventKey(msg, "prompt-aborted"));
-                maybeNotify(sessionId, "prompt-aborted:" + promptId,
-                        "Kimi Code · 回合失败", getTitle(sessionId));
+            } else if ("prompt.completed".equals(type)) {
+                publishEvent("complete");
+                if (!MainActivity.isVisible && isFreshEvent(msg)) {
+                    String promptId = payload.optString("promptId", eventKey(msg, "prompt-complete"));
+                    notifyTurnFinished(sessionId, payload.optString("reason", "completed"),
+                            "prompt-complete:" + promptId);
+                }
+            } else if ("prompt.aborted".equals(type)) {
+                publishEvent("aborted");
+                if (!MainActivity.isVisible && isFreshEvent(msg)) {
+                    String promptId = payload.optString("promptId", eventKey(msg, "prompt-aborted"));
+                    maybeNotify(sessionId, "prompt-aborted:" + promptId,
+                            "Kimi Code · 回合失败", getTitle(sessionId));
+                }
             }
         }
 
