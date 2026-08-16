@@ -6,3 +6,5 @@
 /release/*.jks
 /kimi-original-favicon.ico
 /kimi-original-favicon.png
+
+.worktrees/
