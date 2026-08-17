@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/model-selection.jpg" alt="模型选择" width="52%">
+  <img src="docs/model-selection.jpg" alt="dsh 模型选择" width="52%">
   <img src="docs/multi-server.jpg" alt="AgentPocket 多服务器选择" width="26%">
 </p>
 
