@@ -25,7 +25,7 @@ public class UpdateDownloadReceiver extends BroadcastReceiver {
                     DownloadManager.COLUMN_STATUS)) != DownloadManager.STATUS_SUCCESSFUL) return;
         }
         String name = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString("download_name", "KimiWeb-update.apk");
+                .getString("download_name", "AgentPocket-update.apk");
         File apk = new File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), name);
         Uri uri = FileProvider.getUriForFile(context, context.getPackageName() + ".files", apk);
         Intent install = new Intent(Intent.ACTION_VIEW).setDataAndType(uri,

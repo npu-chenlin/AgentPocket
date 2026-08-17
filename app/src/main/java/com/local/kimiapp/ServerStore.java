@@ -15,14 +15,22 @@ public final class ServerStore {
     private static final String LEGACY = "kimi_connection";
 
     public static final class Server {
+        public static final String BACKEND_KIMI = "kimi";
+        public static final String BACKEND_DSH = "dsh";
         public String id, name, host, token;
         public int port;
+        /** 后端协议类型：BACKEND_KIMI（Kimi Code web）或 BACKEND_DSH（DeepSeek Harness web）。 */
+        public String backend;
         public Server(String id, String name, String host, int port, String token) {
+            this(id, name, host, port, token, BACKEND_KIMI);
+        }
+        public Server(String id, String name, String host, int port, String token, String backend) {
             this.id = id; this.name = name; this.host = host; this.port = port; this.token = token;
+            this.backend = backend == null || backend.isEmpty() ? BACKEND_KIMI : backend;
         }
         public String baseUrl() { return "http://" + host + ":" + port; }
         JSONObject json() throws Exception { return new JSONObject().put("id", id).put("name", name)
-                .put("host", host).put("port", port).put("token", token); }
+                .put("host", host).put("port", port).put("token", token).put("backend", backend); }
     }
 
     private ServerStore() {}
@@ -36,7 +44,8 @@ public final class ServerStore {
             for (int i = 0; i < items.length(); i++) {
                 JSONObject item = items.getJSONObject(i);
                 result.add(new Server(item.getString("id"), item.optString("name", "Kimi"),
-                        item.getString("host"), item.getInt("port"), item.optString("token", "")));
+                        item.getString("host"), item.getInt("port"), item.optString("token", ""),
+                        item.optString("backend", Server.BACKEND_KIMI)));
             }
         } catch (Exception ignored) {}
         if (result.isEmpty()) {

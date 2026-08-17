@@ -11,6 +11,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
@@ -41,7 +42,10 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.ProgressBar;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -59,14 +63,22 @@ import com.petterp.floatingx.view.IFxInternalHelper;
 import com.local.kimiapp.face.GrokFaceState;
 import com.local.kimiapp.face.GrokFaceView;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 
 public class MainActivity extends Activity {
     public static volatile boolean isVisible = false;
@@ -85,6 +97,11 @@ public class MainActivity extends Activity {
     private final Runnable faceFallback = this::applyBaseFaceState;
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingPermission;
+    /** 后端类型探测用短超时 client，避免阻塞页面加载。 */
+    private final OkHttpClient probeClient = new OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
+            .build();
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -331,6 +348,11 @@ public class MainActivity extends Activity {
                 return true;
             }
 
+            @Override public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                injectUuidPolyfill(view);
+            }
+
             @Override public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 installThemeSync();
@@ -372,9 +394,9 @@ public class MainActivity extends Activity {
         String url = intent.getStringExtra(EXTRA_UPDATE_URL);
         if (url == null || url.isEmpty()) return;
         String name = intent.getStringExtra(EXTRA_UPDATE_NAME);
-        if (name == null || !name.endsWith(".apk")) name = "KimiWeb-update.apk";
+        if (name == null || !name.endsWith(".apk")) name = "AgentPocket-update.apk";
         DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url))
-                .setTitle("正在下载 KimiWeb 更新")
+                .setTitle("正在下载 AgentPocket 更新")
                 .setDescription(name)
                 .setMimeType("application/vnd.android.package-archive")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
@@ -391,7 +413,7 @@ public class MainActivity extends Activity {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(NOTIFICATION_CHANNEL,
-                    "Kimi 任务通知", NotificationManager.IMPORTANCE_DEFAULT);
+                    "AgentPocket 任务通知", NotificationManager.IMPORTANCE_DEFAULT);
             channel.setDescription("任务完成、等待回答或审批时通知");
             manager.createNotificationChannel(channel);
         }
@@ -399,6 +421,22 @@ public class MainActivity extends Activity {
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 8);
         }
+    }
+
+    /**
+     * 为旧版 WebView 注入 crypto.randomUUID polyfill（Chrome/WebView 92 以下不支持）。
+     * DeepSeek Harness 前端会调用 crypto.randomUUID 生成 rpcId，缺失时页面报
+     * "crypto.randomUUID is not a function"。
+     */
+    private void injectUuidPolyfill(WebView view) {
+        String script = "(function(){" +
+                "if(typeof crypto!=='undefined'&&!crypto.randomUUID){" +
+                "crypto.randomUUID=function(){" +
+                "var u='xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx';" +
+                "return u.replace(/[xy]/g,function(c){" +
+                "var r=Math.random()*16|0,v=c==='x'?r:(r&0x3|0x8);return v.toString(16);});};}" +
+                "})();";
+        view.evaluateJavascript(script, null);
     }
 
     private void installThemeSync() {
@@ -465,7 +503,6 @@ public class MainActivity extends Activity {
         List<ServerStore.Server> servers = ServerStore.load(this);
         String active = ServerStore.activeId(this);
         SharedPreferences health = getSharedPreferences(KeepAliveService.HEALTH_PREFS, MODE_PRIVATE);
-        Map<String, TextView> statusViews = new HashMap<>();
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         list.setPadding(dp(20), dp(4), dp(20), dp(8));
@@ -482,12 +519,14 @@ public class MainActivity extends Activity {
             cardBackground.setStroke(dp(1), selected ? Color.rgb(143, 187, 248) : Color.rgb(226, 229, 236));
             card.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(28, 25, 112, 238)), cardBackground, null));
 
-            TextView status = new TextView(this);
-            status.setText("●");
-            status.setTextSize(13);
-            updateServerHealthDot(status, health, server.id);
-            statusViews.put(server.id, status);
-            card.addView(status, new LinearLayout.LayoutParams(dp(24), -2));
+            // 后端类型 logo：在线保持品牌色，离线/未知显示灰色
+            ImageView backendIcon = backendIconView(server.backend);
+            boolean known = health.contains("checked_" + server.id);
+            boolean online = health.getBoolean("online_" + server.id, false);
+            if (!known || !online) {
+                backendIcon.setColorFilter(Color.rgb(156, 163, 175));
+            }
+            card.addView(backendIcon, new LinearLayout.LayoutParams(dp(26), dp(26)));
 
             LinearLayout text = new LinearLayout(this);
             text.setOrientation(LinearLayout.VERTICAL);
@@ -557,31 +596,16 @@ public class MainActivity extends Activity {
             if (webView != null) webView.reload();
         });
         add.setOnClickListener(v -> { dialog.dismiss(); showConfig(false, null, true); });
-        SharedPreferences.OnSharedPreferenceChangeListener healthListener = (preferences, key) -> {
-            String serverId = null;
-            if (key != null && key.startsWith("online_")) serverId = key.substring("online_".length());
-            else if (key != null && key.startsWith("checked_")) serverId = key.substring("checked_".length());
-            if (serverId == null || !statusViews.containsKey(serverId)) return;
-            String changedServerId = serverId;
-            runOnUiThread(() -> updateServerHealthDot(
-                    statusViews.get(changedServerId), preferences, changedServerId));
-        };
-        dialog.setOnDismissListener(ignored ->
-                health.unregisterOnSharedPreferenceChangeListener(healthListener));
-        showModernDialog(dialog, () -> {
-            health.registerOnSharedPreferenceChangeListener(healthListener);
-            for (Map.Entry<String, TextView> entry : statusViews.entrySet()) {
-                updateServerHealthDot(entry.getValue(), health, entry.getKey());
-            }
-        });
+        showModernDialog(dialog, null);
     }
 
-    private void updateServerHealthDot(TextView status, SharedPreferences health, String serverId) {
-        if (status == null) return;
-        boolean known = health.contains("checked_" + serverId);
-        boolean online = health.getBoolean("online_" + serverId, false);
-        status.setTextColor(!known ? Color.rgb(174, 180, 191)
-                : online ? Color.rgb(34, 184, 109) : Color.rgb(235, 76, 76));
+    /** 服务器后端类型图标：dsh 用鲸鱼 logo，Kimi 用官方 logo。 */
+    private ImageView backendIconView(String backend) {
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(ServerStore.Server.BACKEND_DSH.equals(backend)
+                ? R.drawable.ic_backend_dsh : R.drawable.ic_backend_kimi);
+        icon.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
+        return icon;
     }
 
     private TextView serverBadge(String text, int textColor, int backgroundColor) {
@@ -682,6 +706,21 @@ public class MainActivity extends Activity {
         recognize.setLayoutParams(recognizeParams);
         TextView detailLabel = fieldLabel("连接详情");
         detailLabel.setPadding(0, dp(18), 0, dp(7));
+        TextView backendLabel = fieldLabel("服务器类型");
+        final RadioButton kimiRadio = new RadioButton(this);
+        kimiRadio.setText("Kimi Code");
+        kimiRadio.setTextSize(14);
+        final RadioButton dshRadio = new RadioButton(this);
+        dshRadio.setText("DeepSeek Harness");
+        dshRadio.setTextSize(14);
+        RadioGroup backendGroup = new RadioGroup(this);
+        backendGroup.setOrientation(RadioGroup.HORIZONTAL);
+        backendGroup.setPadding(0, 0, 0, dp(10));
+        backendGroup.addView(kimiRadio);
+        backendGroup.addView(dshRadio);
+        String editingBackend = editing == null ? ServerStore.Server.BACKEND_KIMI : editing.backend;
+        kimiRadio.setChecked(ServerStore.Server.BACKEND_KIMI.equals(editingBackend));
+        dshRadio.setChecked(ServerStore.Server.BACKEND_DSH.equals(editingBackend));
         EditText name = modernField("服务器名称（例如：工作站）", false);
         name.setText(editing == null ? "" : editing.name);
         EditText ip = modernField("IP 地址或主机名", false);
@@ -689,7 +728,7 @@ public class MainActivity extends Activity {
         EditText port = modernField("端口", false);
         port.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
         port.setText(String.valueOf(editing == null ? 58627 : editing.port));
-        EditText token = modernField("Token（可留空）", false);
+        EditText token = modernField("Token（Kimi 专用，dsh 留空）", false);
         token.setInputType(android.text.InputType.TYPE_CLASS_TEXT |
                 android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
         token.setText(editing == null ? "" : editing.token);
@@ -703,9 +742,25 @@ public class MainActivity extends Activity {
             port.setText(String.valueOf(parsed.port));
             token.setText(parsed.token);
             if (name.getText().toString().trim().isEmpty()) name.setText(parsed.host + ":" + parsed.port);
-            Toast.makeText(this, "已识别并填充连接信息", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "已识别，正在探测服务器类型…", Toast.LENGTH_SHORT).show();
+            probeBackend(parsed.host, parsed.port, backend -> runOnUiThread(() -> {
+                if (backend == null) {
+                    // 探测失败：dsh 启动串已标明类型则采用，否则回落 Kimi
+                    if (ServerStore.Server.BACKEND_DSH.equals(parsed.backend)) dshRadio.setChecked(true);
+                    else kimiRadio.setChecked(true);
+                    Toast.makeText(this, "未能确认服务器类型，已按 "
+                            + (dshRadio.isChecked() ? "DeepSeek Harness" : "Kimi Code") + " 处理", Toast.LENGTH_SHORT).show();
+                } else if (ServerStore.Server.BACKEND_DSH.equals(backend)) {
+                    dshRadio.setChecked(true);
+                    Toast.makeText(this, "已探测到 DeepSeek Harness", Toast.LENGTH_SHORT).show();
+                } else {
+                    kimiRadio.setChecked(true);
+                    Toast.makeText(this, "已探测到 Kimi Code", Toast.LENGTH_SHORT).show();
+                }
+            }));
         });
         box.addView(hint); box.addView(quickLabel); box.addView(pasted); box.addView(recognize); box.addView(detailLabel);
+        box.addView(backendLabel); box.addView(backendGroup);
         box.addView(name); box.addView(ip); box.addView(port); box.addView(token);
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -744,8 +799,10 @@ public class MainActivity extends Activity {
             if (displayName.isEmpty()) displayName = host + ":" + p;
             List<ServerStore.Server> servers = new ArrayList<>(ServerStore.load(this));
             String id = editing == null ? ServerStore.newId() : editing.id;
-            ServerStore.Server saved = new ServerStore.Server(id, displayName, host, p,
-                    token.getText().toString().trim());
+            String backend = dshRadio.isChecked() ? ServerStore.Server.BACKEND_DSH : ServerStore.Server.BACKEND_KIMI;
+            String tokenValue = ServerStore.Server.BACKEND_DSH.equals(backend)
+                    ? "" : token.getText().toString().trim();
+            ServerStore.Server saved = new ServerStore.Server(id, displayName, host, p, tokenValue, backend);
             if (editing == null) servers.add(saved);
             else for (int i = 0; i < servers.size(); i++) if (servers.get(i).id.equals(id)) servers.set(i, saved);
             ServerStore.save(this, servers, id);
@@ -816,17 +873,30 @@ public class MainActivity extends Activity {
     }
 
     private static class ParsedConnection {
-        final String host, token;
+        final String host, token, backend;
         final int port;
         ParsedConnection(String host, int port, String token) {
-            this.host = host; this.port = port; this.token = token;
+            this(host, port, token, ServerStore.Server.BACKEND_KIMI);
+        }
+        ParsedConnection(String host, int port, String token, String backend) {
+            this.host = host; this.port = port; this.token = token; this.backend = backend;
         }
     }
 
     private ParsedConnection parseConnection(String text) {
         try {
-            Matcher urlMatch = Pattern.compile("https?://[^\\s]+", Pattern.CASE_INSENSITIVE).matcher(text);
-            String raw = urlMatch.find() ? urlMatch.group() : text.trim();
+            boolean isDsh = text.contains("dsh web") || text.contains("DeepSeek Harness");
+            String raw = null;
+            if (isDsh) {
+                // dsh 启动输出形如 "dsh web: http://127.0.0.1:3080 (LAN: http://100.x.y.z:3080)"，
+                // 优先取 LAN 地址（127.0.0.1 是手机自身，无法访问）。
+                Matcher lanMatch = Pattern.compile("LAN: (https?://[^\\s)]+)").matcher(text);
+                if (lanMatch.find()) raw = lanMatch.group(1);
+            }
+            if (raw == null) {
+                Matcher urlMatch = Pattern.compile("https?://[^\\s]+", Pattern.CASE_INSENSITIVE).matcher(text);
+                raw = urlMatch.find() ? urlMatch.group() : text.trim();
+            }
             raw = raw.replaceAll("[),;，。]+$", "");
             Uri uri = Uri.parse(raw);
             String host = uri.getHost();
@@ -834,15 +904,58 @@ public class MainActivity extends Activity {
             if (host == null || host.isEmpty()) return null;
             if (port < 1) port = "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
             String foundToken = "";
-            String fragment = uri.getFragment();
-            if (fragment != null) foundToken = Uri.parse("http://local/?" + fragment).getQueryParameter("token");
-            if (foundToken == null || foundToken.isEmpty()) foundToken = uri.getQueryParameter("token");
-            if (foundToken == null || foundToken.isEmpty()) {
-                Matcher tokenMatch = Pattern.compile("(?i)(?:auth[-_ ]?token|token)\\s*[:=]\\s*([A-Za-z0-9._~-]+)").matcher(text);
-                foundToken = tokenMatch.find() ? tokenMatch.group(1) : "";
+            if (!isDsh) {
+                String fragment = uri.getFragment();
+                if (fragment != null) foundToken = Uri.parse("http://local/?" + fragment).getQueryParameter("token");
+                if (foundToken == null || foundToken.isEmpty()) foundToken = uri.getQueryParameter("token");
+                if (foundToken == null || foundToken.isEmpty()) {
+                    Matcher tokenMatch = Pattern.compile("(?i)(?:auth[-_ ]?token|token)\\s*[:=]\\s*([A-Za-z0-9._~-]+)").matcher(text);
+                    foundToken = tokenMatch.find() ? tokenMatch.group(1) : "";
+                }
             }
-            return new ParsedConnection(host, port, foundToken == null ? "" : foundToken);
+            return new ParsedConnection(host, port, foundToken == null ? "" : foundToken,
+                    isDsh ? ServerStore.Server.BACKEND_DSH : ServerStore.Server.BACKEND_KIMI);
         } catch (Exception ignored) { return null; }
+    }
+
+    /** 后端类型探测回调：backend 为 null 表示无法确认。 */
+    private interface BackendProbe { void onResult(String backend); }
+
+    /**
+     * 自动探测服务器后端类型。
+     * dsh 特征：POST /api/agentPreset.list 返回 RPC 信封（type=server-response）；
+     * Kimi 特征：GET /api/v2/sessions 存在（无 token 时 401/403 也算存在）。
+     */
+    private void probeBackend(String host, int port, BackendProbe callback) {
+        String base = "http://" + host + ":" + port;
+        Request dshProbe = new Request.Builder()
+                .url(base + "/api/agentPreset.list")
+                .post(RequestBody.create("{}", MediaType.parse("application/json; charset=utf-8")))
+                .build();
+        probeClient.newCall(dshProbe).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException e) { probeKimi(); }
+            @Override public void onResponse(Call call, Response response) {
+                try (Response r = response) {
+                    String body = r.body() != null ? r.body().string() : "";
+                    if (r.isSuccessful() && body.contains("\"type\":\"server-response\"")) {
+                        callback.onResult(ServerStore.Server.BACKEND_DSH);
+                        return;
+                    }
+                } catch (Exception ignored) {}
+                probeKimi();
+            }
+            private void probeKimi() {
+                Request kimiProbe = new Request.Builder().url(base + "/api/v2/sessions").build();
+                probeClient.newCall(kimiProbe).enqueue(new Callback() {
+                    @Override public void onFailure(Call call, IOException e) { callback.onResult(null); }
+                    @Override public void onResponse(Call call, Response response) {
+                        try (Response r = response) {
+                            callback.onResult(r.code() != 404 ? ServerStore.Server.BACKEND_KIMI : null);
+                        } catch (Exception ignored) { callback.onResult(null); }
+                    }
+                });
+            }
+        });
     }
 
     private void loadConfiguredUrl() {
@@ -852,6 +965,11 @@ public class MainActivity extends Activity {
     private void loadConfiguredUrl(String sessionId) {
         ServerStore.Server server = ServerStore.active(this);
         if (server == null) return;
+        if (ServerStore.Server.BACKEND_DSH.equals(server.backend)) {
+            // dsh：无 token 鉴权，前端也没有 URL 会话深链，只打开首页
+            webView.loadUrl(server.baseUrl() + "/");
+            return;
+        }
         String url = server.baseUrl() + "/";
         if (sessionId != null && !sessionId.isEmpty()) {
             url += "sessions/" + sessionId;

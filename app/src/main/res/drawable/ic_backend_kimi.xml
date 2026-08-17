@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Kimi Code logo：蓝色圆角方块 + 两个镂空圆角竖条眼睛（还原自 ch-logo SVG，logo 色 #1783ff） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="32"
+    android:viewportHeight="22">
+    <path
+        android:fillColor="#1783ff"
+        android:fillType="evenOdd"
+        android:pathData="M7,1 h18 a6,6 0 0 1 6,6 v8 a6,6 0 0 1 -6,6 h-18 a6,6 0 0 1 -6,-6 v-8 a6,6 0 0 1 6,-6 z
+            M13.2,7 a1.4,1.4 0 0 1 1.4,1.4 v5.2 a1.4,1.4 0 0 1 -1.4,1.4 a1.4,1.4 0 0 1 -1.4,-1.4 v-5.2 a1.4,1.4 0 0 1 1.4,-1.4 z
+            M18.8,7 a1.4,1.4 0 0 1 1.4,1.4 v5.2 a1.4,1.4 0 0 1 -1.4,1.4 a1.4,1.4 0 0 1 -1.4,-1.4 v-5.2 a1.4,1.4 0 0 1 1.4,-1.4 z" />
+</vector>
