@@ -51,14 +51,11 @@
 
    此参数会关闭访问认证，请仅在可信的 Tailscale 网络中使用。
 
-   DeepSeek Harness（dsh）**官方禁止绑定 `0.0.0.0`**（安全原因），只监听 `127.0.0.1`。
-   手机访问需要在电脑上用一个本地反向代理，把请求从 Tailscale IP 转发到 `127.0.0.1:3080`（socat 即可，一行命令）：
+   DeepSeek Harness（dsh）只监听 `127.0.0.1`，手机访问需在电脑上做一次本地转发（socat）：
 
    ```shell
    socat TCP-LISTEN:3080,bind=<Tailscale IP>,reuseaddr,fork TCP:127.0.0.1:3080
    ```
-
-   `--trusted-host` 用于放行手机经反代访问时的 Host 头（`<Tailscale IP>:3080`），与上面的 socat 必须配套使用。
 
    dsh 模型调用需要配置 API Key，二选一：
 
@@ -70,25 +67,20 @@
 ## 功能
 
 - 在 Android 上使用 Kimi Code Web 与 DeepSeek Harness Web
-- 管理多个服务器并显示在线状态，各服务器可混用不同后端（logo 颜色标识在线/离线）
-- 添加服务器时自动识别后端类型（粘贴启动信息即可，也可手动指定）
-- 后台监听任务状态，接收完成、待回答、审批和失败通知
+- 管理多台服务器，后台监听任务状态，接收完成、待回答、审批和失败通知
 
 ## 使用
 
-首次启动时添加服务器。可以直接粘贴电脑上 Web 服务的启动输出，app 会自动识别地址、端口与后端类型：
+首次启动时添加服务器，填写电脑上 Web 服务的地址与端口：
 
-- Kimi：粘贴 `kimi web --dangerous-bypass-auth ...` 启动命令或完整 URL
-- dsh：在 app 中填写 `http://<Tailscale IP>:3080`（经 socat 反代后的地址），类型会自动探测为 DeepSeek Harness
+- Kimi：`http://<Tailscale IP>:58627`
+- dsh：`http://<Tailscale IP>:3080`
 
 之后可通过屏幕侧边的悬浮入口切换或管理服务器；后台会同时监听所有已添加的服务器。
 
 ### DeepSeek Harness 注意事项
 
-- dsh 无 token 鉴权，靠 Host 头信任围栏：默认只信任本机回环地址；手机经 socat 反代访问时 Host 头是 `<Tailscale IP>:3080`，必须用 `--trusted-host <Tailscale IP>` 显式放行，两者配套使用。
-- dsh 官方禁止 `--host 0.0.0.0`（防止把远程代码执行暴露到网络），**不要尝试**在启动命令里加这个参数。
-- `settings.*`、`credentials.*` 等特权接口仅允许本机回环地址调用，手机端无法在网页中修改模型配置（请在电脑 localhost 上操作）。
-- 手机端**不支持新建工作区**：创建新工作区需调用 `host.pickDirectory`（打开电脑原生目录选择器），属特权接口，手机端调用会返回 403。请在电脑浏览器中创建，手机端可正常使用已有会话与工作区。
+- 手机端**不支持新建工作区**：请在电脑浏览器中创建，手机端可正常使用已有会话与工作区。
 
 ## 说明
 
