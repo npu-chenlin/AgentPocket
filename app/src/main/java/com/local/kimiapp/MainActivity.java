@@ -173,14 +173,13 @@ public class MainActivity extends Activity {
             if (!awake[0]) {
                 awake[0] = true;
                 faceView.wakeTurn();
-                applyFaceState(GrokFaceState.WAKING);
+                faceView.blinkNow();
+                applyBaseFaceState();
                 handle.animate().cancel();
                 handle.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(240)
                         .setInterpolator(new OvershootInterpolator(1.6f)).start();
                 boolean left = control[0].getX() + dp(28) < root.getWidth() / 2f;
                 control[0].move(left ? dp(8) : root.getWidth() - dp(64), control[0].getY(), false);
-                mainHandler.removeCallbacks(faceFallback);
-                mainHandler.postDelayed(faceFallback, 900L);   // WAKING 短暂展示后回落基础状态
                 handle.postDelayed(sleep[0], 3500);
             } else {
                 showServerList();
