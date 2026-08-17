@@ -217,7 +217,7 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
         long now = System.currentTimeMillis();
         if (now - state.getLong("last_update_check", 0) < UPDATE_CHECK_MS) return;
         Request request = new Request.Builder()
-                .url("https://api.github.com/repos/npu-chenlin/KimiCodeWebApp/releases/latest")
+                .url("https://api.github.com/repos/npu-chenlin/AgentPocket/releases/latest")
                 .header("Accept", "application/vnd.github+json")
                 .header("User-Agent", "AgentPocket-Android")
                 .build();
