@@ -384,10 +384,29 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         if (activateServerFromIntent(intent)) {
-            loadConfiguredUrl(intent.getStringExtra(EXTRA_SESSION_ID));
+            String sessionId = intent.getStringExtra(EXTRA_SESSION_ID);
+            // 页面已在目标服务器/会话上时不再重新加载，避免从通知栏打开每次都白屏刷新
+            if (!isOnTargetPage(sessionId)) {
+                loadConfiguredUrl(sessionId);
+            }
         }
         if (intent.getBooleanExtra(EXTRA_SHOW_CONFIG, false)) showServerList();
         handleUpdateIntent(intent);
+    }
+
+    /** 当前 WebView 页面是否已指向目标服务器（含目标会话，dsh 无会话深链）。 */
+    private boolean isOnTargetPage(String sessionId) {
+        if (webView == null) return false;
+        String current = webView.getUrl();
+        if (current == null) return false;
+        ServerStore.Server server = ServerStore.active(this);
+        if (server == null) return false;
+        String expected = server.baseUrl() + "/";
+        if (sessionId != null && !sessionId.isEmpty()
+                && ServerStore.Server.BACKEND_KIMI.equals(server.backend)) {
+            expected += "sessions/" + sessionId;
+        }
+        return current.equals(expected) || current.startsWith(expected);
     }
 
     private void handleUpdateIntent(Intent intent) {
