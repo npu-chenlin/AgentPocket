@@ -16,6 +16,8 @@ import {
   type ImportPreview,
   type ServerDraft,
   type ServerForEdit,
+  type SyncInfo,
+  type SyncOption,
 } from "./model";
 import { renderServerList } from "./server-list";
 import {
@@ -44,6 +46,7 @@ app.innerHTML = `
       <nav class="header-actions" aria-label="全局操作">
         <button id="paste-import" class="ghost-button" type="button">导入</button>
         <button class="ghost-button" type="button" data-export-format="android">导出</button>
+        <button id="open-sync" class="ghost-button" type="button">同步</button>
         <button id="open-settings" class="ghost-button" type="button">设置</button>
       </nav>
     </header>
@@ -161,6 +164,22 @@ app.innerHTML = `
       <button class="text-button" type="button" data-close-dialog="export-dialog">取消</button>
       <button id="confirm-export" class="primary-button" type="button">选择保存位置</button>
     </div>
+  </dialog>
+
+  <dialog id="sync-dialog" class="modal modal--small">
+    <div class="modal__heading">
+      <h2>手机同步</h2>
+      <button class="modal__close" type="button" data-close-dialog="sync-dialog" aria-label="关闭">×</button>
+    </div>
+    <select id="sync-address" class="sync-address" aria-label="对外地址"></select>
+    <div id="sync-qr" class="sync-qr"></div>
+    <p id="sync-url" class="sync-url"></p>
+    <p class="modal__summary">手机需要能访问所选地址：同一 Tailnet 选 Tailscale 地址，同一 Wi-Fi 可选局域网地址。</p>
+    <p id="sync-status" class="sync-status">等待手机连接…</p>
+    <div class="modal__actions">
+      <span class="modal__spacer"></span>
+      <button class="text-button" type="button" data-close-dialog="sync-dialog">关闭</button>
+    </div>
   </dialog>`;
 
 function requiredElement<T extends Element>(selector: string): T {
@@ -183,12 +202,19 @@ const pasteError = requiredElement<HTMLElement>("#paste-error");
 const exportDialog = requiredElement<HTMLDialogElement>("#export-dialog");
 const exportText = requiredElement<HTMLTextAreaElement>("#export-text");
 const copyExport = requiredElement<HTMLButtonElement>("#copy-export");
+const syncDialog = requiredElement<HTMLDialogElement>("#sync-dialog");
+const syncAddress = requiredElement<HTMLSelectElement>("#sync-address");
+const syncQr = requiredElement<HTMLElement>("#sync-qr");
+const syncUrl = requiredElement<HTMLElement>("#sync-url");
+const syncStatus = requiredElement<HTMLElement>("#sync-status");
 
 let currentView: AppView | null = null;
 let latestRevision = -1;
 let pendingImport: ImportPreview | null = null;
 let pendingExportFormat: ExportFormat = "full";
 let unlistenState: UnlistenFn | undefined;
+let unlistenPhoneReceived: UnlistenFn | undefined;
+let unlistenPhoneFetched: UnlistenFn | undefined;
 
 /** 以浮动 Toast 提示操作结果；空文本视为清除，直接忽略。 */
 function setMessage(text: string, kind: "info" | "error" | "success" = "info"): void {
@@ -515,10 +541,71 @@ for (const button of document.querySelectorAll<HTMLButtonElement>("[data-close-d
   });
 }
 
+let syncOptions: SyncOption[] = [];
+
+function applySyncOption(address: string): void {
+  const option = syncOptions.find((item) => item.address === address);
+  if (!option) return;
+  syncQr.innerHTML = option.qrSvg;
+  syncUrl.textContent = option.url;
+}
+
+requiredElement<HTMLButtonElement>("#open-sync").addEventListener("click", async () => {
+  syncOptions = [];
+  syncAddress.replaceChildren();
+  syncQr.replaceChildren();
+  syncUrl.textContent = "";
+  syncStatus.textContent = "等待手机连接…";
+  syncStatus.dataset.kind = "";
+  syncDialog.showModal();
+  try {
+    const info = await invoke<SyncInfo>(commands.startSyncServer);
+    syncOptions = info.options;
+    syncAddress.replaceChildren(
+      ...info.options.map((option) => {
+        const item = document.createElement("option");
+        item.value = option.address;
+        item.textContent = `${option.label}:${option.address}`;
+        return item;
+      }),
+    );
+    syncAddress.value = info.selected;
+    applySyncOption(info.selected);
+  } catch (error) {
+    syncStatus.textContent = `启动同步服务失败：${errorMessage(error)}`;
+    syncStatus.dataset.kind = "error";
+  }
+});
+
+syncAddress.addEventListener("change", () => {
+  applySyncOption(syncAddress.value);
+});
+
+syncDialog.addEventListener("close", () => {
+  syncOptions = [];
+  syncAddress.replaceChildren();
+  syncQr.replaceChildren();
+  syncUrl.textContent = "";
+  void invoke(commands.stopSyncServer).catch(() => {
+    // 服务器可能已因超时自停，忽略错误。
+  });
+});
+
 async function initialize(): Promise<void> {
   try {
     unlistenState = await listen<AppView>("app-state-changed", (event) => {
       applyView(event.payload);
+    });
+    unlistenPhoneReceived = await listen<ImportPreview>("phone-config-received", (event) => {
+      pendingImport = event.payload;
+      openImportConfirmation();
+    });
+    unlistenPhoneFetched = await listen("phone-config-fetched", () => {
+      setMessage("手机已获取配置", "success");
+      if (syncDialog.open) {
+        syncStatus.textContent = "手机已获取配置";
+        syncStatus.dataset.kind = "success";
+      }
     });
     applyView(await invoke<AppView>(commands.getAppView));
   } catch (error) {
@@ -531,5 +618,7 @@ void initialize();
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     unlistenState?.();
+    unlistenPhoneReceived?.();
+    unlistenPhoneFetched?.();
   });
 }

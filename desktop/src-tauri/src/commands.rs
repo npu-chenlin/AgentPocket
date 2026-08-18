@@ -34,6 +34,7 @@ pub struct AppState {
     pub store: ConfigStore,
     pub monitors: tokio::sync::Mutex<MonitorManager>,
     pub import_previews: Mutex<HashMap<Uuid, PendingImport>>,
+    pub sync_server: Mutex<Option<crate::sync::SyncServerHandle>>,
     pub explicit_exit: AtomicBool,
     pub revision: AtomicU64,
 }
@@ -46,6 +47,7 @@ impl AppState {
             store,
             monitors: tokio::sync::Mutex::new(monitors),
             import_previews: Mutex::new(HashMap::new()),
+            sync_server: Mutex::new(None),
             explicit_exit: AtomicBool::new(false),
             revision: AtomicU64::new(0),
         }
@@ -91,6 +93,8 @@ pub enum CommandError {
     InvalidExportFormat,
     #[error("invalid import id")]
     InvalidImportId,
+    #[error("sync error: {0}")]
+    Sync(String),
 }
 
 impl From<ConfigError> for CommandError {
@@ -505,7 +509,7 @@ fn request_tray_rebuild<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _ = app.emit("tray-rebuild-requested", ());
 }
 
-fn preview_from_content(
+pub(crate) fn preview_from_content(
     state: &Arc<AppState>,
     content: &str,
 ) -> Result<ImportPreview, CommandError> {

@@ -1,7 +1,6 @@
 package com.local.kimiapp;
 
 import android.Manifest;
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -54,10 +53,16 @@ import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.Button;
 
+import androidx.activity.ComponentActivity;
+import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+
+import com.journeyapps.barcodescanner.ScanContract;
+import com.journeyapps.barcodescanner.ScanOptions;
 
 import com.petterp.floatingx.assist.FxAdsorbDirection;
 import com.petterp.floatingx.assist.FxGravity;
@@ -89,7 +94,7 @@ import okhttp3.Response;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-public class MainActivity extends Activity {
+public class MainActivity extends ComponentActivity {
     public static volatile boolean isVisible = false;
     public static final String EXTRA_SHOW_CONFIG = "show_connection_config";
     public static final String EXTRA_SHOW_SESSIONS = "show_busy_sessions";
@@ -114,6 +119,12 @@ public class MainActivity extends Activity {
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(5, TimeUnit.SECONDS)
             .build();
+    /** 扫码同步：扫描桌面端二维码的结果回调。 */
+    private final ActivityResultLauncher<ScanOptions> syncScanner =
+            registerForActivityResult(new ScanContract(), result -> {
+                String contents = result.getContents();
+                if (contents != null) handleSyncLink(contents);
+            });
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -121,6 +132,16 @@ public class MainActivity extends Activity {
         startKeepAliveService();
         buildUi();
         registerFaceEventListeners();
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() {
+                if (webView != null && webView.canGoBack()) {
+                    webView.goBack();
+                } else {
+                    setEnabled(false);
+                    getOnBackPressedDispatcher().onBackPressed();
+                }
+            }
+        });
         activateServerFromIntent(getIntent());
         if (ServerStore.active(this) != null) {
             loadConfiguredUrl(getIntent().getStringExtra(EXTRA_SESSION_ID));
@@ -128,6 +149,7 @@ public class MainActivity extends Activity {
             if (getIntent().getBooleanExtra(EXTRA_SHOW_SESSIONS, false)) showBusySessions();
         } else showConfig(true, null);
         handleUpdateIntent(getIntent());
+        handleSyncIntent(getIntent());
     }
 
     @Override public void onConfigurationChanged(Configuration newConfig) {
@@ -431,6 +453,7 @@ public class MainActivity extends Activity {
             showBusySessions();
         }
         handleUpdateIntent(intent);
+        handleSyncIntent(intent);
     }
 
     /** 当前 WebView 页面是否已指向目标服务器（含目标会话，dsh 无会话深链）。 */
@@ -626,57 +649,40 @@ public class MainActivity extends Activity {
 
         Button refresh = new Button(this);
         refresh.setText("刷新页面");
-        refresh.setTextSize(14);
-        refresh.setTextColor(Color.rgb(78, 88, 105));
-        refresh.setAllCaps(false);
-        refresh.setElevation(0);
-        refresh.setStateListAnimator(null);
-        GradientDrawable refreshBackground = new GradientDrawable();
-        refreshBackground.setColor(Color.rgb(245, 247, 250));
-        refreshBackground.setCornerRadius(dp(14));
-        refreshBackground.setStroke(dp(1), Color.rgb(217, 222, 231));
-        refresh.setBackground(new RippleDrawable(
-                ColorStateList.valueOf(Color.argb(30, 78, 88, 105)), refreshBackground, null));
+        UiKit.styleSecondaryButton(this, refresh);
 
         Button copy = new Button(this);
         copy.setText("复制配置");
-        copy.setTextSize(14);
-        copy.setTextColor(Color.rgb(78, 88, 105));
-        copy.setAllCaps(false);
-        copy.setElevation(0);
-        copy.setStateListAnimator(null);
-        GradientDrawable copyBackground = new GradientDrawable();
-        copyBackground.setColor(Color.rgb(245, 247, 250));
-        copyBackground.setCornerRadius(dp(14));
-        copyBackground.setStroke(dp(1), Color.rgb(217, 222, 231));
-        copy.setBackground(new RippleDrawable(
-                ColorStateList.valueOf(Color.argb(30, 78, 88, 105)), copyBackground, null));
+        UiKit.styleSecondaryButton(this, copy);
 
-        Button add = new Button(this);
-        add.setText("＋  添加服务器");
-        add.setTextSize(14);
-        add.setTextColor(Color.rgb(25, 112, 238));
-        add.setAllCaps(false);
-        GradientDrawable addBackground = new GradientDrawable();
-        addBackground.setColor(Color.TRANSPARENT);
-        addBackground.setCornerRadius(dp(14));
-        addBackground.setStroke(dp(1), Color.rgb(180, 207, 244));
-        add.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(30, 25, 112, 238)), addBackground, null));
+        Button sync = new Button(this);
+        sync.setText("扫码同步");
+        UiKit.styleSecondaryButton(this, sync);
+
         LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(0, dp(50), 1);
         refreshParams.setMargins(0, 0, dp(5), 0);
         actions.addView(refresh, refreshParams);
         LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(0, dp(50), 1);
         copyParams.setMargins(dp(5), 0, dp(5), 0);
         actions.addView(copy, copyParams);
-        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(0, dp(50), 1);
-        addParams.setMargins(dp(5), 0, 0, 0);
-        actions.addView(add, addParams);
+        LinearLayout.LayoutParams syncParams = new LinearLayout.LayoutParams(0, dp(50), 1);
+        syncParams.setMargins(dp(5), 0, 0, 0);
+        actions.addView(sync, syncParams);
         serverPage.addView(actions, new LinearLayout.LayoutParams(-1, dp(50)));
+
+        Button add = new Button(this);
+        add.setText("＋  添加服务器");
+        UiKit.styleOutlinePrimaryButton(this, add);
+        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(-1, dp(50));
+        addParams.setMargins(0, dp(8), 0, 0);
+        serverPage.addView(add, addParams);
+
         refresh.setOnClickListener(v -> {
             dialog.dismiss();
             if (webView != null) webView.reload();
         });
         copy.setOnClickListener(v -> { dialog.dismiss(); copyServerConfig(); });
+        sync.setOnClickListener(v -> { dialog.dismiss(); launchSyncScanner(); });
         add.setOnClickListener(v -> { dialog.dismiss(); showConfig(false, null, true); });
 
         LinearLayout sessionsPage = buildSessionsPage(dialog);
@@ -704,19 +710,11 @@ public class MainActivity extends Activity {
     }
 
     private void styleTab(Button tab, boolean selected) {
-        GradientDrawable background = new GradientDrawable();
-        background.setCornerRadius(dp(14));
-        if (selected) {
-            background.setColor(Color.rgb(238, 245, 255));
-            background.setStroke(dp(1), Color.rgb(143, 187, 248));
-            tab.setTextColor(Color.rgb(25, 112, 238));
-        } else {
-            background.setColor(Color.rgb(245, 247, 250));
-            background.setStroke(dp(1), Color.rgb(217, 222, 231));
-            tab.setTextColor(Color.rgb(78, 88, 105));
-        }
-        tab.setBackground(new RippleDrawable(
-                ColorStateList.valueOf(Color.argb(30, 25, 112, 238)), background, null));
+        tab.setTextColor(selected ? UiKit.BLUE : UiKit.BUTTON_TEXT);
+        tab.setBackground(UiKit.rippledPanel(this,
+                selected ? UiKit.BLUE_BG : UiKit.BUTTON_BG,
+                selected ? UiKit.BLUE_STROKE : UiKit.BUTTON_STROKE,
+                1, 14, UiKit.BLUE_RIPPLE));
     }
 
     /** 活跃会话页：与服务器卡片同款样式，点击跳转到对应会话。 */
@@ -736,7 +734,7 @@ public class MainActivity extends Activity {
             TextView empty = new TextView(this);
             empty.setText("暂无运行中的会话");
             empty.setTextSize(14);
-            empty.setTextColor(Color.rgb(112, 120, 135));
+            empty.setTextColor(UiKit.TEXT_SECONDARY);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(0, dp(24), 0, dp(24));
             page.addView(empty, new LinearLayout.LayoutParams(-1, -2));
@@ -762,12 +760,7 @@ public class MainActivity extends Activity {
             card.setOrientation(LinearLayout.HORIZONTAL);
             card.setGravity(Gravity.CENTER_VERTICAL);
             card.setPadding(dp(9), dp(8), dp(14), dp(8));
-            GradientDrawable cardBackground = new GradientDrawable();
-            cardBackground.setColor(Color.rgb(248, 249, 252));
-            cardBackground.setCornerRadius(dp(15));
-            cardBackground.setStroke(dp(1), Color.rgb(226, 229, 236));
-            card.setBackground(new RippleDrawable(
-                    ColorStateList.valueOf(Color.argb(28, 25, 112, 238)), cardBackground, null));
+            card.setBackground(UiKit.cardBackground(this, false));
 
             ImageView icon = backendIconView(server != null ? server.backend : ServerStore.Server.BACKEND_KIMI);
             LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(26), dp(26));
@@ -780,7 +773,7 @@ public class MainActivity extends Activity {
                 TextView titleView = new TextView(this);
                 titleView.setText(title);
                 titleView.setTextSize(16);
-                titleView.setTextColor(Color.rgb(28, 34, 45));
+                titleView.setTextColor(UiKit.TEXT_PRIMARY);
                 titleView.setSingleLine(true);
                 titleView.setEllipsize(TextUtils.TruncateAt.END);
                 text.addView(titleView);
@@ -792,14 +785,14 @@ public class MainActivity extends Activity {
                     : address;
             sub.setText(subText);
             sub.setTextSize(13);
-            sub.setTextColor(Color.rgb(112, 120, 135));
+            sub.setTextColor(UiKit.TEXT_SECONDARY);
             if (text.getChildCount() > 0) sub.setPadding(0, dp(3), 0, 0);
             text.addView(sub);
             card.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
 
             ProgressBar spinner = new ProgressBar(this);
             spinner.setIndeterminate(true);
-            spinner.setIndeterminateTintList(ColorStateList.valueOf(Color.rgb(25, 112, 238)));
+            spinner.setIndeterminateTintList(ColorStateList.valueOf(UiKit.BLUE));
             LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(dp(20), dp(20));
             spinnerParams.setMargins(dp(8), 0, 0, 0);
             card.addView(spinner, spinnerParams);
@@ -861,16 +854,16 @@ public class MainActivity extends Activity {
             text.setOrientation(LinearLayout.VERTICAL);
             TextView title = new TextView(context);
             title.setTextSize(16);
-            title.setTextColor(Color.rgb(28, 34, 45));
+            title.setTextColor(UiKit.TEXT_PRIMARY);
             TextView address = new TextView(context);
             address.setTextSize(13);
-            address.setTextColor(Color.rgb(112, 120, 135));
+            address.setTextColor(UiKit.TEXT_SECONDARY);
             address.setPadding(0, dp(3), 0, 0);
             text.addView(title);
             text.addView(address);
             card.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
 
-            TextView badge = serverBadge("当前", Color.rgb(25, 112, 238), Color.rgb(220, 235, 255));
+            TextView badge = serverBadge("当前", UiKit.BLUE, UiKit.BLUE_BADGE_BG);
             badge.setVisibility(View.GONE);
             LinearLayout.LayoutParams badgeParams = new LinearLayout.LayoutParams(dp(44), dp(28));
             card.addView(badge, badgeParams);
@@ -889,12 +882,7 @@ public class MainActivity extends Activity {
             ServerStore.Server server = servers.get(position);
             boolean selected = server.id.equals(activeId);
 
-            GradientDrawable cardBackground = new GradientDrawable();
-            cardBackground.setColor(selected ? Color.rgb(238, 245, 255) : Color.rgb(248, 249, 252));
-            cardBackground.setCornerRadius(dp(15));
-            cardBackground.setStroke(dp(1), selected ? Color.rgb(143, 187, 248) : Color.rgb(226, 229, 236));
-            holder.card.setBackground(new RippleDrawable(
-                    ColorStateList.valueOf(Color.argb(28, 25, 112, 238)), cardBackground, null));
+            holder.card.setBackground(UiKit.cardBackground(MainActivity.this, selected));
 
             holder.backendIcon.setImageResource(ServerStore.Server.BACKEND_DSH.equals(server.backend)
                     ? R.drawable.ic_backend_dsh : R.drawable.ic_backend_kimi);
@@ -902,7 +890,7 @@ public class MainActivity extends Activity {
             boolean known = health.contains("checked_" + server.id);
             boolean online = health.getBoolean("online_" + server.id, false);
             if (!known || !online) {
-                holder.backendIcon.setColorFilter(Color.rgb(156, 163, 175));
+                holder.backendIcon.setColorFilter(UiKit.ICON_DISABLED);
             }
 
             holder.title.setText(server.name);
@@ -949,6 +937,71 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "配置已复制到剪贴板（含 API 凭据，注意安全）", Toast.LENGTH_LONG).show();
     }
 
+    // ---------- 扫码同步（手机端 ⇄ 桌面端） ----------
+
+    /** 处理 agentpocket://sync 深链（系统相机扫码拉起）。 */
+    private void handleSyncIntent(Intent intent) {
+        Uri data = intent.getData();
+        if (data == null) return;
+        intent.setData(null);
+        handleSyncLink(data.toString());
+    }
+
+    /** 解析二维码/深链文本，合法则弹出同步方向选择。 */
+    private void handleSyncLink(String text) {
+        SyncClient.SyncLink link = SyncClient.parseLink(text);
+        if (link == null) {
+            Toast.makeText(this, "不是有效的同步二维码", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        showSyncChoice(link);
+    }
+
+    private void launchSyncScanner() {
+        ScanOptions options = new ScanOptions();
+        options.setDesiredBarcodeFormats(ScanOptions.QR_CODE);
+        options.setPrompt("对准电脑上的同步二维码");
+        options.setBeepEnabled(false);
+        options.setOrientationLocked(false);
+        syncScanner.launch(options);
+    }
+
+    private void showSyncChoice(SyncClient.SyncLink link) {
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("扫码成功")
+                .setMessage("已连接电脑 " + link.host + ":" + link.port + "，请选择同步方向。")
+                .setPositiveButton("获取电脑配置", (d, w) -> fetchDesktopConfig(link))
+                .setNeutralButton("取消", null)
+                .setNegativeButton("上传手机配置", (d, w) -> uploadPhoneConfig(link))
+                .create();
+        showModernDialog(dialog, null);
+    }
+
+    private void fetchDesktopConfig(SyncClient.SyncLink link) {
+        SyncClient.fetch(probeClient, this, link, new SyncClient.FetchCallback() {
+            @Override public void onMerged(int count) {
+                Toast.makeText(MainActivity.this, "已同步 " + count + " 台服务器", Toast.LENGTH_LONG).show();
+                restartListener();
+                applyBaseFaceState();
+                if (webView != null && webView.getUrl() == null) loadConfiguredUrl();
+            }
+            @Override public void onError(String message) {
+                Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
+    private void uploadPhoneConfig(SyncClient.SyncLink link) {
+        SyncClient.upload(probeClient, this, link, new SyncClient.UploadCallback() {
+            @Override public void onSent() {
+                Toast.makeText(MainActivity.this, "已发送，请在电脑上确认导入", Toast.LENGTH_LONG).show();
+            }
+            @Override public void onError(String message) {
+                Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
     /** 服务器后端类型图标：dsh 用鲸鱼 logo，Kimi 用官方 logo。 */
     private ImageView backendIconView(String backend) {
         ImageView icon = new ImageView(this);
@@ -977,13 +1030,10 @@ public class MainActivity extends Activity {
         button.setScaleType(android.widget.ImageView.ScaleType.CENTER);
         button.setPadding(dp(9), dp(9), dp(9), dp(9));
         button.setContentDescription(description);
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(destructive ? Color.rgb(255, 241, 241) : Color.rgb(241, 244, 249));
-        background.setStroke(dp(1), destructive ? Color.rgb(247, 199, 199) : Color.rgb(218, 224, 234));
-        background.setCornerRadius(dp(11));
-        button.setBackground(new RippleDrawable(
-                ColorStateList.valueOf(destructive ? Color.argb(35, 217, 67, 67)
-                        : Color.argb(35, 83, 98, 122)), background, null));
+        button.setBackground(UiKit.rippledPanel(this,
+                destructive ? UiKit.DANGER_BG : UiKit.ICON_BG,
+                destructive ? UiKit.DANGER_STROKE : UiKit.ICON_STROKE,
+                1, 11, destructive ? UiKit.DANGER_RIPPLE : UiKit.ICON_RIPPLE));
         return button;
     }
 
@@ -1023,7 +1073,7 @@ public class MainActivity extends Activity {
     private void deleteServer(ServerStore.Server target) {
         List<ServerStore.Server> servers = new ArrayList<>(ServerStore.load(this));
         if (servers.size() <= 1) { Toast.makeText(this, "至少保留一台服务器", Toast.LENGTH_SHORT).show(); return; }
-        new AlertDialog.Builder(this).setTitle("删除 " + target.name + "？")
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("删除 " + target.name + "？")
                 .setMessage(target.host + ":" + target.port)
                 .setNegativeButton("取消", null).setPositiveButton("删除", (d, w) -> {
                     boolean wasActive = target.id.equals(ServerStore.activeId(this));
@@ -1033,7 +1083,8 @@ public class MainActivity extends Activity {
                     ServerStore.save(this, servers, active);
                     restartListener();
                     if (wasActive) loadConfiguredUrl();
-                }).show();
+                }).create();
+        showModernDialog(dialog, null);
     }
 
     private boolean activateServerFromIntent(Intent intent) {
@@ -1061,7 +1112,7 @@ public class MainActivity extends Activity {
         TextView hint = new TextView(this);
         hint.setText("可直接粘贴 Kimi 输出的完整连接地址或整段启动信息，下面内容会自动识别。");
         hint.setTextSize(14);
-        hint.setTextColor(Color.rgb(96, 103, 117));
+        hint.setTextColor(UiKit.TEXT_HINT);
         hint.setLineSpacing(dp(3), 1f);
         hint.setPadding(0, 0, 0, dp(18));
         TextView quickLabel = fieldLabel("快速导入");
@@ -1070,14 +1121,7 @@ public class MainActivity extends Activity {
         pasted.setMinLines(2);
         Button recognize = new Button(this);
         recognize.setText("识别并填充");
-        recognize.setTextSize(14);
-        recognize.setTextColor(Color.WHITE);
-        recognize.setAllCaps(false);
-        GradientDrawable recognizeBackground = new GradientDrawable();
-        recognizeBackground.setColor(Color.rgb(25, 112, 238));
-        recognizeBackground.setCornerRadius(dp(12));
-        recognize.setBackground(new RippleDrawable(
-                ColorStateList.valueOf(Color.argb(65, 255, 255, 255)), recognizeBackground, null));
+        UiKit.styleFilledPrimaryButton(this, recognize);
         LinearLayout.LayoutParams recognizeParams = new LinearLayout.LayoutParams(-1, dp(46));
         recognizeParams.setMargins(0, 0, 0, dp(2));
         recognize.setLayoutParams(recognizeParams);
@@ -1144,7 +1188,7 @@ public class MainActivity extends Activity {
         scroll.addView(box);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
-            .setTitle(editing == null ? "添加 Kimi 服务器" : "编辑服务器")
+            .setTitle(editing == null ? "添加服务器" : "编辑服务器")
             .setView(scroll)
             .setCancelable(!required)
             .setNegativeButton(required ? null : "取消", null)
@@ -1205,7 +1249,7 @@ public class MainActivity extends Activity {
         TextView label = new TextView(this);
         label.setText(text);
         label.setTextSize(13);
-        label.setTextColor(Color.rgb(57, 65, 82));
+        label.setTextColor(UiKit.TEXT_LABEL);
         label.setPadding(0, 0, 0, dp(7));
         return label;
     }
@@ -1214,14 +1258,14 @@ public class MainActivity extends Activity {
         EditText field = new EditText(this);
         field.setHint(hint);
         field.setTextSize(15);
-        field.setTextColor(Color.rgb(30, 35, 45));
-        field.setHintTextColor(Color.rgb(145, 151, 164));
+        field.setTextColor(UiKit.TEXT_PRIMARY);
+        field.setHintTextColor(UiKit.FIELD_HINT);
         field.setPadding(dp(14), dp(11), dp(14), dp(11));
         field.setSingleLine(!multiline);
         GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.rgb(248, 249, 252));
+        background.setColor(UiKit.CARD_BG);
         background.setCornerRadius(dp(12));
-        background.setStroke(dp(1), Color.rgb(222, 226, 234));
+        background.setStroke(dp(1), UiKit.FIELD_STROKE);
         field.setBackground(background);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, multiline ? dp(82) : dp(50));
         params.setMargins(0, 0, 0, dp(10));
@@ -1236,9 +1280,9 @@ public class MainActivity extends Activity {
             panel.setCornerRadius(dp(22));
             dialog.getWindow().setBackgroundDrawable(panel);
             Button positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
-            if (positive != null) positive.setTextColor(Color.rgb(25, 112, 238));
+            if (positive != null) positive.setTextColor(UiKit.BLUE);
             Button negative = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
-            if (negative != null) negative.setTextColor(Color.rgb(94, 101, 116));
+            if (negative != null) negative.setTextColor(UiKit.DIALOG_NEGATIVE);
             if (afterShow != null) afterShow.run();
         });
         dialog.show();
@@ -1358,11 +1402,6 @@ public class MainActivity extends Activity {
         webView.loadUrl(url);
     }
 
-    @SuppressWarnings("deprecation")
-    @Override public void onBackPressed() {
-        if (webView.canGoBack()) webView.goBack(); else super.onBackPressed();
-    }
-
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == FILE_CHOOSER && fileCallback != null) {
@@ -1386,5 +1425,5 @@ public class MainActivity extends Activity {
         super.onStop();
     }
 
-    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+    private int dp(int value) { return UiKit.dp(this, value); }
 }

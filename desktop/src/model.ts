@@ -55,6 +55,18 @@ export interface ImportPreview {
 export type ImportMode = "merge" | "replace";
 export type ExportFormat = "full" | "android";
 
+export interface SyncOption {
+  address: string;
+  label: string;
+  url: string;
+  qrSvg: string;
+}
+
+export interface SyncInfo {
+  selected: string;
+  options: SyncOption[];
+}
+
 export const commands = {
   getAppView: "get_app_view",
   getServerForEdit: "get_server_for_edit",
@@ -68,6 +80,8 @@ export const commands = {
   applyImport: "apply_import",
   exportConfig: "export_config",
   exportConfigText: "export_config_text",
+  startSyncServer: "start_sync_server",
+  stopSyncServer: "stop_sync_server",
 } as const;
 
 export function emptyServerDraft(): ServerDraft {

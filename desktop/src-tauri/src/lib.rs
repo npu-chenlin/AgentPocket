@@ -18,6 +18,7 @@ pub mod monitor;
 pub mod notification;
 pub mod opener;
 pub mod protocol;
+pub mod sync;
 pub mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -132,6 +133,8 @@ pub fn run() {
             commands::apply_import,
             commands::export_config,
             commands::export_config_text,
+            sync::start_sync_server,
+            sync::stop_sync_server,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgentPocket Desktop");

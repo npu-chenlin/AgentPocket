@@ -713,6 +713,70 @@ input[role="switch"]:checked::after {
   font-weight: 700;
 }
 
+/* ---------- 手机同步 ---------- */
+
+.sync-address {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  outline: none;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.sync-address:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(26, 106, 92, 0.13);
+}
+
+.sync-qr {
+  display: flex;
+  justify-content: center;
+  margin: 2px 0 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.sync-qr svg {
+  width: 200px;
+  height: 200px;
+}
+
+.sync-url {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  background: var(--surface-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  word-break: break-all;
+  user-select: text;
+}
+
+.sync-status {
+  margin: 8px 0 0;
+  color: var(--text-faint);
+  font-size: 0.76rem;
+}
+
+.sync-status[data-kind="success"] {
+  color: #1f7a63;
+}
+
+.sync-status[data-kind="error"] {
+  color: var(--danger);
+}
+
 /* ---------- 响应式与动效偏好 ---------- */
 
 @media (max-width: 560px) {
