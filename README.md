@@ -95,6 +95,10 @@
 
 ## Desktop（Linux）
 
+<p align="center">
+  <img src="docs/desktop.jpg" alt="AgentPocket 桌面端" width="60%">
+</p>
+
 `desktop/` 提供基于 Tauri 2 的轻量托盘控制中心。它可以同时监听多台 Kimi/dsh 服务器，在任务完成、失败或中断、等待审批、等待回答时发送系统通知，并通过系统浏览器打开服务器。设置窗口关闭后，监听仍会在托盘中继续运行。
 
 Releases 页面提供 `.deb`（Debian/Ubuntu）与 AppImage 两种安装包。窗口为固定尺寸，单实例运行（重复启动会唤起已有窗口）。
