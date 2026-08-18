@@ -761,7 +761,7 @@ public class MainActivity extends Activity {
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.HORIZONTAL);
             card.setGravity(Gravity.CENTER_VERTICAL);
-            card.setPadding(dp(9), dp(12), dp(14), dp(12));
+            card.setPadding(dp(9), dp(8), dp(14), dp(8));
             GradientDrawable cardBackground = new GradientDrawable();
             cardBackground.setColor(Color.rgb(248, 249, 252));
             cardBackground.setCornerRadius(dp(15));
@@ -801,7 +801,7 @@ public class MainActivity extends Activity {
             final String targetSessionId = sessionId;
             card.setOnClickListener(v -> { dialog.dismiss(); openSession(targetServerId, targetSessionId); });
 
-            card.setMinimumHeight(dp(72));
+            card.setMinimumHeight(dp(56));
             LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, -2);
             cardParams.setMargins(0, 0, 0, dp(10));
             cards.addView(card, cardParams);
