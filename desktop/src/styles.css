@@ -340,10 +340,11 @@ h2 {
   line-height: 1.35;
 }
 
-.settings-actions {
-  display: grid;
+.panel-toolbar {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  padding-top: 14px;
+  margin-bottom: 14px;
 }
 
 input[role="switch"] {

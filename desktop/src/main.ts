@@ -53,6 +53,12 @@ app.innerHTML = `
           </div>
           <button id="reconnect-all" class="secondary-button" type="button">全部重连</button>
         </div>
+        <div class="panel-toolbar" aria-label="服务器操作">
+          <button id="add-server" class="primary-button" type="button">添加服务器</button>
+          <button id="import-config" class="secondary-button" type="button">导入 JSON 文件</button>
+          <button id="paste-import" class="secondary-button" type="button">粘贴导入</button>
+          <button class="secondary-button" type="button" data-export-format="android">导出服务器列表</button>
+        </div>
         <div id="server-list" class="server-list" aria-live="polite"></div>
       </section>
 
@@ -76,12 +82,6 @@ app.innerHTML = `
             <span><strong>系统通知</strong><small>仅通知完成、失败、审批和提问</small></span>
             <input type="checkbox" role="switch" data-setting="notifications" />
           </label>
-          <div class="settings-actions">
-            <button id="add-server" class="secondary-button" type="button">添加服务器</button>
-            <button id="import-config" class="secondary-button" type="button">导入 JSON 文件</button>
-            <button id="paste-import" class="secondary-button" type="button">粘贴导入</button>
-            <button class="secondary-button" type="button" data-export-format="android">导出服务器列表</button>
-          </div>
         </section>
       </aside>
     </main>
