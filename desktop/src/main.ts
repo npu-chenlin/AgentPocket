@@ -77,19 +77,11 @@ app.innerHTML = `
             <span><strong>系统通知</strong><small>仅通知完成、失败、审批和提问</small></span>
             <input type="checkbox" role="switch" data-setting="notifications" />
           </label>
-        </section>
-
-        <section class="panel transfer-panel" aria-labelledby="transfer-title">
-          <div class="section-heading section-heading--compact">
-            <div>
-              <p class="section-kicker">PORTABILITY</p>
-              <h2 id="transfer-title">导入与导出</h2>
-            </div>
+          <div class="settings-actions">
+            <button id="import-config" class="secondary-button" type="button">导入 JSON 文件</button>
+            <button id="paste-import" class="secondary-button" type="button">粘贴导入</button>
+            <button class="secondary-button" type="button" data-export-format="android">导出服务器列表</button>
           </div>
-          <button id="import-config" class="secondary-button secondary-button--wide" type="button">导入 JSON 文件</button>
-          <button id="paste-import" class="secondary-button secondary-button--wide" type="button">粘贴导入</button>
-          <button class="secondary-button secondary-button--wide" type="button" data-export-format="full">导出完整配置</button>
-          <button class="text-button transfer-link" type="button" data-export-format="android">导出 Android 兼容列表</button>
         </section>
       </aside>
     </main>
@@ -300,12 +292,6 @@ serverList.addEventListener("click", async (event) => {
     await editServer(id);
   } else if (id && action === "delete") {
     await deleteServer(id);
-  } else if (id && action === "activate") {
-    try {
-      applyView(await invoke<AppView>(commands.setActiveServer, { id }));
-    } catch (error) {
-      setMessage(`设置当前服务器失败：${errorMessage(error)}`, "error");
-    }
   } else if (id && action === "open") {
     try {
       await invoke(commands.openServer, { id, sessionId: null });

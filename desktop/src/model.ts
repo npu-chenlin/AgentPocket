@@ -60,7 +60,6 @@ export const commands = {
   getServerForEdit: "get_server_for_edit",
   saveServer: "save_server",
   deleteServer: "delete_server",
-  setActiveServer: "set_active_server",
   updateSettings: "update_settings",
   probeBackend: "probe_backend",
   reconnectAll: "reconnect_all",

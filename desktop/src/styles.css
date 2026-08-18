@@ -128,12 +128,6 @@ h2 {
   background: #fff;
 }
 
-.secondary-button--wide {
-  width: 100%;
-  margin-top: 9px;
-  text-align: left;
-}
-
 .text-button,
 .icon-button {
   padding: 6px 8px;
@@ -194,8 +188,7 @@ h2 {
 }
 
 .servers-panel,
-.settings-panel,
-.transfer-panel {
+.settings-panel {
   padding: 18px;
 }
 
@@ -347,6 +340,12 @@ h2 {
   line-height: 1.35;
 }
 
+.settings-actions {
+  display: grid;
+  gap: 8px;
+  padding-top: 14px;
+}
+
 input[role="switch"] {
   appearance: none;
   position: relative;
@@ -377,12 +376,6 @@ input[role="switch"]:checked {
 
 input[role="switch"]:checked::after {
   transform: translateX(14px);
-}
-
-.transfer-link {
-  width: 100%;
-  margin-top: 8px;
-  text-align: left;
 }
 
 .empty-state {

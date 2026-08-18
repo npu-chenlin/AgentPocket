@@ -230,20 +230,6 @@ pub async fn delete_server(
 }
 
 #[tauri::command]
-pub async fn set_active_server(
-    state: State<'_, Arc<AppState>>,
-    app: AppHandle,
-    id: Option<String>,
-) -> Result<AppView, CommandError> {
-    mutate_config(&state, &app, |config| {
-        config.active_id = id
-            .clone()
-            .filter(|active_id| config.servers.iter().any(|server| &server.id == active_id));
-    })
-    .await
-}
-
-#[tauri::command]
 pub async fn update_settings(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,

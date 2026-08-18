@@ -29,11 +29,7 @@ function statusLabel(status: ServerStatus | undefined): string {
   return "在线";
 }
 
-function renderServerCard(
-  server: ServerSummary,
-  status: ServerStatus | undefined,
-  active: boolean,
-): string {
+function renderServerCard(server: ServerSummary, status: ServerStatus | undefined): string {
   const connected = status?.connected === true;
   const id = escapeHtml(server.id);
   const name = escapeHtml(server.name);
@@ -46,14 +42,12 @@ function renderServerCard(
         <span class="server-copy">
           <span class="server-title-row">
             <strong>${name}</strong>
-            ${active ? '<span class="badge badge--active">当前</span>' : ""}
           </span>
           <span class="server-address">${address}</span>
           <span class="server-status${connected ? " server-status--online" : ""}">${statusLabel(status)}</span>
         </span>
       </button>
       <div class="server-actions" aria-label="${name} 操作">
-        ${active ? "" : `<button class="text-button" type="button" data-action="activate" data-id="${id}">设为当前</button>`}
         <button class="icon-button" type="button" data-action="edit" data-id="${id}" aria-label="编辑 ${name}">编辑</button>
         <button class="icon-button icon-button--danger" type="button" data-action="delete" data-id="${id}" aria-label="删除 ${name}">删除</button>
       </div>
@@ -71,9 +65,5 @@ export function renderServerList(view: AppView): string {
       </div>`;
   }
 
-  return view.servers
-    .map((server) =>
-      renderServerCard(server, view.statuses[server.id], view.activeId === server.id),
-    )
-    .join("");
+  return view.servers.map((server) => renderServerCard(server, view.statuses[server.id])).join("");
 }

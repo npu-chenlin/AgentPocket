@@ -34,10 +34,16 @@ describe("renderServerList", () => {
     expect(html).not.toContain("green-dot");
   });
 
-  it("shows active badge and running count", () => {
+  it("shows running count for online servers", () => {
     const html = renderServerList(viewFixture());
-    expect(html).toContain("badge--active");
     expect(html).toContain("2 个任务运行中");
+  });
+
+  it("does not expose the active selector or badge", () => {
+    const html = renderServerList(viewFixture());
+    expect(html).not.toContain("badge--active");
+    expect(html).not.toContain("设为当前");
+    expect(html).not.toContain("data-action=\"activate\"");
   });
 
   it("never serializes token-like error details", () => {

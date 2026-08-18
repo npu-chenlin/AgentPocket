@@ -108,7 +108,6 @@ pub fn run() {
             commands::get_server_for_edit,
             commands::save_server,
             commands::delete_server,
-            commands::set_active_server,
             commands::update_settings,
             commands::probe_backend,
             commands::reconnect_all,
