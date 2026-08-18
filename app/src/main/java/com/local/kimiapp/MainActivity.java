@@ -97,6 +97,8 @@ public class MainActivity extends Activity {
     private final Runnable faceFallback = this::applyBaseFaceState;
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingPermission;
+    /** 悬浮球控制器（配置变化/折叠屏展开时需要重新贴边）。 */
+    private IFxScopeControl floatingControl;
     /** 后端类型探测用短超时 client，避免阻塞页面加载。 */
     private final OkHttpClient probeClient = new OkHttpClient.Builder()
             .connectTimeout(5, TimeUnit.SECONDS)
@@ -120,6 +122,29 @@ public class MainActivity extends Activity {
     @Override public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         if (webView != null) webView.invalidate();
+        reattachFloatingBall();
+    }
+
+    /**
+     * 折叠屏展开/旋转导致屏幕宽度变化时，把悬浮球重新贴到新的屏幕边缘。
+     * onConfigurationChanged 时布局尚未更新，先记录旧位置，等布局完成后移动。
+     */
+    private void reattachFloatingBall() {
+        if (floatingControl == null) return;
+        final IFxScopeControl ball = floatingControl;
+        final float oldX = ball.getX();
+        final float oldY = ball.getY();
+        final int ballWidth = ball.getView().getWidth();
+        final int oldWidth = ball.getManagerView().getWidth();
+        if (oldWidth <= 0 || ballWidth <= 0) return;
+        ball.getManagerView().post(() -> {
+            int newWidth = ball.getManagerView().getWidth();
+            if (newWidth <= 0 || newWidth == oldWidth) return;
+            boolean leftSide = (oldX + ballWidth / 2f) < oldWidth / 2f;
+            float offset = leftSide ? oldX : (oldWidth - oldX - ballWidth);
+            float newX = leftSide ? offset : newWidth - ballWidth - offset;
+            ball.move(newX, oldY, true);
+        });
     }
 
     private void startKeepAliveService() {
@@ -162,7 +187,6 @@ public class MainActivity extends Activity {
                     Collections.singletonList(new Rect(0, 0, view.getWidth(), view.getHeight()))));
         }
 
-        final IFxScopeControl[] control = new IFxScopeControl[1];
         final boolean[] awake = new boolean[]{false};
         final boolean[] dragged = new boolean[]{false};
         final float[] touchStart = new float[2];
@@ -176,13 +200,13 @@ public class MainActivity extends Activity {
         handle.setScaleY(0.94f);
 
         sleep[0] = () -> {
-            if (control[0] == null || !awake[0]) return;
+            if (floatingControl == null || !awake[0]) return;
             awake[0] = false;
             applyFaceState(GrokFaceState.SLEEPING);
             handle.animate().cancel();
             handle.animate().alpha(0.72f).scaleX(0.94f).scaleY(0.94f).setDuration(180).start();
-            boolean left = control[0].getX() + dp(28) < root.getWidth() / 2f;
-            control[0].move(left ? -dp(28) : root.getWidth() - dp(28), control[0].getY(), false);
+            boolean left = floatingControl.getX() + dp(28) < root.getWidth() / 2f;
+            floatingControl.move(left ? -dp(28) : root.getWidth() - dp(28), floatingControl.getY(), false);
         };
 
         handleClick[0] = () -> {
@@ -195,8 +219,8 @@ public class MainActivity extends Activity {
                 handle.animate().cancel();
                 handle.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(240)
                         .setInterpolator(new OvershootInterpolator(1.6f)).start();
-                boolean left = control[0].getX() + dp(28) < root.getWidth() / 2f;
-                control[0].move(left ? dp(8) : root.getWidth() - dp(64), control[0].getY(), false);
+                boolean left = floatingControl.getX() + dp(28) < root.getWidth() / 2f;
+                floatingControl.move(left ? dp(8) : root.getWidth() - dp(64), floatingControl.getY(), false);
                 handle.postDelayed(sleep[0], 3500);
             } else {
                 showServerList();
@@ -254,8 +278,8 @@ public class MainActivity extends Activity {
                         if (!dragged[0] && awake[0]) handle.postDelayed(sleep[0], 3500);
                     }
                 }).build();
-        control[0] = helper.toControl(root);
-        control[0].show();
+        floatingControl = helper.toControl(root);
+        floatingControl.show();
     }
 
     private float clampUnit(float v) {
