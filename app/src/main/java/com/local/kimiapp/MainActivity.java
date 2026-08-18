@@ -86,10 +86,12 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 import org.json.JSONArray;
+import org.json.JSONObject;
 
 public class MainActivity extends Activity {
     public static volatile boolean isVisible = false;
     public static final String EXTRA_SHOW_CONFIG = "show_connection_config";
+    public static final String EXTRA_SHOW_SESSIONS = "show_busy_sessions";
     public static final String EXTRA_SERVER_ID = "open_server_id";
     public static final String EXTRA_SESSION_ID = "open_session_id";
     public static final String EXTRA_UPDATE_URL = "update_download_url";
@@ -122,6 +124,7 @@ public class MainActivity extends Activity {
         if (ServerStore.active(this) != null) {
             loadConfiguredUrl(getIntent().getStringExtra(EXTRA_SESSION_ID));
             if (getIntent().getBooleanExtra(EXTRA_SHOW_CONFIG, false)) showServerList();
+            if (getIntent().getBooleanExtra(EXTRA_SHOW_SESSIONS, false)) showBusySessions();
         } else showConfig(true, null);
         handleUpdateIntent(getIntent());
     }
@@ -422,6 +425,10 @@ public class MainActivity extends Activity {
             }
         }
         if (intent.getBooleanExtra(EXTRA_SHOW_CONFIG, false)) showServerList();
+        if (intent.getBooleanExtra(EXTRA_SHOW_SESSIONS, false)) {
+            intent.removeExtra(EXTRA_SHOW_SESSIONS);
+            showBusySessions();
+        }
         handleUpdateIntent(intent);
     }
 
@@ -636,6 +643,23 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(0, dp(50), 1);
         addParams.setMargins(dp(5), 0, 0, 0);
         actions.addView(add, addParams);
+        Button sessions = new Button(this);
+        sessions.setText("运行中的会话");
+        sessions.setTextSize(14);
+        sessions.setTextColor(Color.rgb(78, 88, 105));
+        sessions.setAllCaps(false);
+        sessions.setElevation(0);
+        sessions.setStateListAnimator(null);
+        GradientDrawable sessionsBackground = new GradientDrawable();
+        sessionsBackground.setColor(Color.rgb(245, 247, 250));
+        sessionsBackground.setCornerRadius(dp(14));
+        sessionsBackground.setStroke(dp(1), Color.rgb(217, 222, 231));
+        sessions.setBackground(new RippleDrawable(
+                ColorStateList.valueOf(Color.argb(30, 78, 88, 105)), sessionsBackground, null));
+        LinearLayout.LayoutParams sessionsParams = new LinearLayout.LayoutParams(-1, dp(50));
+        sessionsParams.setMargins(0, 0, 0, dp(8));
+        list.addView(sessions, sessionsParams);
+        sessions.setOnClickListener(v -> { dialog.dismiss(); showBusySessions(); });
         list.addView(actions, new LinearLayout.LayoutParams(-1, dp(50)));
         refresh.setOnClickListener(v -> {
             dialog.dismiss();
@@ -819,6 +843,49 @@ public class MainActivity extends Activity {
         List<ServerStore.Server> servers = ServerStore.load(this);
         ServerStore.save(this, servers, id);
         loadConfiguredUrl();
+    }
+
+    /** 运行中会话选择：数据来自后台监听写入的 busy_sessions。 */
+    private void showBusySessions() {
+        SharedPreferences health = getSharedPreferences(KeepAliveService.HEALTH_PREFS, MODE_PRIVATE);
+        JSONArray parsed;
+        try {
+            parsed = new JSONArray(health.getString("busy_sessions", "[]"));
+        } catch (Exception e) {
+            parsed = new JSONArray();
+        }
+        final JSONArray sessions = parsed;
+        if (sessions.length() == 0) {
+            showServerList();
+            return;
+        }
+        boolean multi = ServerStore.load(this).size() > 1;
+        String[] labels = new String[sessions.length()];
+        for (int i = 0; i < sessions.length(); i++) {
+            JSONObject o = sessions.optJSONObject(i);
+            String title = o != null ? o.optString("title", "") : "";
+            String serverName = o != null ? o.optString("serverName", "") : "";
+            String label = title.isEmpty() ? "会话" : title;
+            labels[i] = (multi && !serverName.isEmpty() ? "[" + serverName + "] " : "") + label;
+        }
+        new AlertDialog.Builder(this).setTitle("运行中的会话")
+                .setItems(labels, (d, which) -> {
+                    JSONObject o = sessions.optJSONObject(which);
+                    if (o != null) openSession(o.optString("serverId"), o.optString("sessionId"));
+                })
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void openSession(String serverId, String sessionId) {
+        List<ServerStore.Server> servers = ServerStore.load(this);
+        for (ServerStore.Server server : servers) {
+            if (server.id.equals(serverId)) {
+                ServerStore.save(this, servers, serverId);
+                loadConfiguredUrl(sessionId);
+                return;
+            }
+        }
     }
 
     private void deleteServer(ServerStore.Server target) {

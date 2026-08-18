@@ -70,6 +70,9 @@ public abstract class ServerMonitor {
     /** 当前忙碌会话的标题列表，用于常驻摘要通知。默认无。 */
     public List<String> busySessionTitles() { return Collections.emptyList(); }
 
+    /** 当前忙碌会话明细（serverId / sessionId / 标题），用于会话选择。默认无。 */
+    public List<String[]> busySessions() { return Collections.emptyList(); }
+
     /** 启动连接流程：由子类实现（拉列表 → 连 WebSocket → 解析事件）。 */
     public abstract void start();
 

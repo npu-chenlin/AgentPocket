@@ -113,7 +113,9 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
 
     private Notification serviceNotification(String text, List<String> sessions) {
         PendingIntent open = PendingIntent.getActivity(this, 1,
-                new Intent(this, MainActivity.class),
+                new Intent(this, MainActivity.class)
+                        .putExtra(MainActivity.EXTRA_SHOW_SESSIONS, true)
+                        .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification.Builder builder = new Notification.Builder(this, SERVICE_CHANNEL)
                 .setSmallIcon(R.mipmap.ic_launcher)
@@ -162,6 +164,7 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
     private synchronized void updateSummary() {
         int connected = 0, active = 0;
         List<String> busyTitles = new ArrayList<>();
+        JSONArray busySessions = new JSONArray();
         boolean multi = monitors.size() > 1;
         for (ServerMonitor m : monitors) {
             if (m.isConnected()) connected++;
@@ -170,13 +173,23 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
             for (String title : m.busySessionTitles()) {
                 busyTitles.add(prefix + title);
             }
+            for (String[] s : m.busySessions()) {
+                try {
+                    busySessions.put(new JSONObject()
+                            .put("serverId", s[0])
+                            .put("serverName", m.serverName())
+                            .put("sessionId", s[1])
+                            .put("title", s[2]));
+                } catch (Exception ignored) {}
+            }
         }
         String text = "已连接 " + connected + "/" + monitors.size()
                 + " 台，监听 " + active + " 个会话";
         getSystemService(NotificationManager.class).notify(SERVICE_ID,
                 serviceNotification(text, busyTitles));
         getSharedPreferences(HEALTH_PREFS, MODE_PRIVATE).edit()
-                .putInt("active_count", active).apply();
+                .putInt("active_count", active)
+                .putString("busy_sessions", busySessions.toString()).apply();
     }
 
     private void publishEvent(String event) {

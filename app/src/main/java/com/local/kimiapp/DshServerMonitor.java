@@ -274,6 +274,18 @@ public class DshServerMonitor extends ServerMonitor {
         return titles;
     }
 
+    @Override public List<String[]> busySessions() {
+        List<String[]> result = new ArrayList<>();
+        synchronized (busyBySession) {
+            for (Map.Entry<String, Boolean> entry : busyBySession.entrySet()) {
+                if (Boolean.TRUE.equals(entry.getValue())) {
+                    result.add(new String[]{ server.id, entry.getKey(), getTitle(entry.getKey()) });
+                }
+            }
+        }
+        return result;
+    }
+
     /** 忙碌会话数：与桌面端一致，按忙碌集合大小去重统计。 */
     private int busyCount() {
         int count = 0;
