@@ -23,6 +23,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio-tungstenite = { version = "0.27", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+http = "1"
 
 [dev-dependencies]
 tempfile = "3"

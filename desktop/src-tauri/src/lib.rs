@@ -1,5 +1,6 @@
 pub mod config;
 pub mod model;
+pub mod monitor;
 pub mod protocol;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
