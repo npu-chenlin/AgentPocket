@@ -450,6 +450,26 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     }
 }
 
+fn backup_sort_key(name: &str) -> (String, u32) {
+    let stem = name
+        .strip_prefix("config-")
+        .and_then(|stem| stem.strip_suffix(".json"))
+        .unwrap_or(name);
+    // Plain backups are named `config-YYYYMMDD-HHMMSS.json` (15-char timestamp
+    // stem); same-second collisions append a monotonic `-NNN` suffix. Lexically
+    // `-001` sorts before `.`, so a raw string comparison would rank the plain
+    // (oldest) name *after* its suffixed siblings. Treat the plain name as
+    // suffix 0 instead so filename order matches creation order.
+    if stem.len() > 15 {
+        if let Some(suffix) = stem[15..].strip_prefix('-') {
+            if let Ok(suffix) = suffix.parse::<u32>() {
+                return (stem[..15].to_string(), suffix);
+            }
+        }
+    }
+    (stem.to_string(), 0)
+}
+
 fn backup_paths(backup_dir: &Path) -> Result<Vec<PathBuf>, ConfigError> {
     if !backup_dir.exists() {
         return Ok(Vec::new());
@@ -458,14 +478,22 @@ fn backup_paths(backup_dir: &Path) -> Result<Vec<PathBuf>, ConfigError> {
     for entry in fs::read_dir(backup_dir)? {
         let entry = entry?;
         let name = entry.file_name();
-        if name
+        if let Some(name) = name
             .to_str()
-            .is_some_and(|name| name.starts_with("config-") && name.ends_with(".json"))
+            .filter(|name| name.starts_with("config-") && name.ends_with(".json"))
         {
-            entries.push((entry.metadata()?.modified()?, name, entry.path()));
+            entries.push((
+                entry.metadata()?.modified()?,
+                name.to_string(),
+                entry.path(),
+            ));
         }
     }
-    entries.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    entries.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| backup_sort_key(&left.1).cmp(&backup_sort_key(&right.1)))
+    });
     Ok(entries.into_iter().map(|(_, _, path)| path).collect())
 }
 
@@ -517,6 +545,28 @@ mod tests {
     }
 
     #[test]
+    fn full_import_missing_backend_counts_invalid_and_keeps_valid_for_replace() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let import_path = dir.path().join("full-mixed.json");
+        fs::write(
+            &import_path,
+            r#"{"schema":1,"activeId":"valid","servers":[{"id":"valid","name":"Work","host":"host","port":3080,"token":"","backend":"dsh"},{"id":"broken","name":"Broken","host":"host","port":3080}],"settings":{"startHidden":true,"autostart":false,"notifications":true}}"#,
+        )
+        .unwrap();
+
+        let data = store.preview_import(&import_path).unwrap();
+
+        assert_eq!(data.preview.valid_servers, 1);
+        assert_eq!(data.preview.invalid_servers, 1);
+        let replaced = store
+            .apply_import(&AppConfig::default(), data, ImportMode::Replace)
+            .unwrap();
+        assert_eq!(replaced.servers.len(), 1);
+        assert_eq!(replaced.servers[0].id, "valid");
+    }
+
+    #[test]
     fn full_import_missing_schema_defaults_to_one() {
         let dir = tempdir().unwrap();
         let store = ConfigStore::new(dir.path().to_path_buf());
@@ -530,6 +580,20 @@ mod tests {
         let data = store.preview_import(&import_path).unwrap();
 
         assert_eq!(data.config.schema, 1);
+    }
+
+    #[test]
+    fn full_import_rejects_schema_zero() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let import_path = dir.path().join("schema-zero.json");
+        fs::write(
+            &import_path,
+            r#"{"schema":0,"activeId":null,"servers":[],"settings":{"startHidden":true,"autostart":false,"notifications":true}}"#,
+        )
+        .unwrap();
+
+        assert!(store.preview_import(&import_path).is_err());
     }
 
     #[test]
@@ -801,6 +865,46 @@ mod tests {
         assert_eq!(
             second.file_name().unwrap(),
             "config-20260818-105049-001.json"
+        );
+    }
+
+    #[test]
+    fn same_second_backups_sort_plain_name_before_suffixes() {
+        let dir = tempdir().unwrap();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-08-18T10:50:49Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let first = next_backup_path(dir.path(), now);
+        fs::write(&first, b"first").unwrap();
+        let second = next_backup_path(dir.path(), now);
+        fs::write(&second, b"second").unwrap();
+        let third = next_backup_path(dir.path(), now);
+        fs::write(&third, b"third").unwrap();
+
+        // Force identical mtimes so only filename order can disambiguate:
+        // creation order is plain, -001, -002.
+        let epoch = std::time::UNIX_EPOCH;
+        for path in [&first, &second, &third] {
+            fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(epoch))
+                .unwrap();
+        }
+
+        let paths = backup_paths(dir.path()).unwrap();
+
+        assert_eq!(
+            paths
+                .iter()
+                .map(|path| path.file_name().unwrap().to_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "config-20260818-105049.json",
+                "config-20260818-105049-001.json",
+                "config-20260818-105049-002.json",
+            ]
         );
     }
 
