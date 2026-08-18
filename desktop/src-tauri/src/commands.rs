@@ -627,6 +627,11 @@ fn expire_old_previews(previews: &mut HashMap<Uuid, PendingImport>) {
     previews.retain(|_, pending| pending.created_at > cutoff);
 }
 
+/// 比较两次服务器状态是否“实质相同”，忽略仅时间戳刷新的差异。
+fn same_status(a: &ServerStatus, b: &ServerStatus) -> bool {
+    a.connected == b.connected && a.active_count == b.active_count && a.error == b.error
+}
+
 // ------------------------------------------------------------------
 // Monitor coordinator
 // ------------------------------------------------------------------
@@ -642,8 +647,22 @@ pub async fn run_monitor_coordinator(
     while let Some(update) = update_rx.recv().await {
         match update {
             MonitorUpdate::Status { server_id, status } => {
-                if let Ok(mut statuses) = state.statuses.write() {
+                let changed = {
+                    let mut statuses = state
+                        .statuses
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let changed = statuses
+                        .get(&server_id)
+                        .map(|existing| !same_status(existing, &status))
+                        .unwrap_or(true);
                     statuses.insert(server_id, status);
+                    changed
+                };
+                // 状态没有实质变化（如仅 last_checked_at 刷新）时跳过重绘，
+                // 避免高频 monitor 上报导致界面闪烁。
+                if !changed {
+                    continue;
                 }
                 state.revision.fetch_add(1, Ordering::SeqCst);
                 let view = build_app_view(&state);
@@ -853,5 +872,33 @@ mod tests {
             ..AppConfig::default()
         };
         assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn same_status_ignores_last_checked_at_refresh() {
+        let base = ServerStatus {
+            connected: true,
+            active_count: 2,
+            last_checked_at: Some(Utc::now()),
+            error: None,
+        };
+        let refreshed = ServerStatus {
+            last_checked_at: Some(Utc::now() + chrono::Duration::seconds(9)),
+            ..base.clone()
+        };
+        assert!(same_status(&base, &refreshed));
+
+        let busier = ServerStatus {
+            active_count: 3,
+            last_checked_at: Some(Utc::now()),
+            ..base.clone()
+        };
+        assert!(!same_status(&base, &busier));
+
+        let errored = ServerStatus {
+            error: Some("boom".to_string()),
+            ..base
+        };
+        assert!(!same_status(&base, &errored));
     }
 }
