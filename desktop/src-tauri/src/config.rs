@@ -111,20 +111,14 @@ impl ConfigStore {
     pub fn preview_import(&self, path: &Path) -> Result<ImportPreviewData, ConfigError> {
         let bytes = fs::read(path)?;
         let parsed = parse_config(&bytes)?;
-        let servers = parsed
-            .config
-            .servers
-            .iter()
-            .map(ServerSummary::from)
-            .collect();
-        Ok(ImportPreviewData {
-            preview: ImportPreview {
-                valid_servers: parsed.config.servers.len(),
-                invalid_servers: parsed.invalid_servers,
-                servers,
-            },
-            config: parsed.config,
-        })
+        Ok(import_preview_from_parsed(parsed))
+    }
+
+    /// Parse an in-memory import payload (pasted JSON) without touching the
+    /// filesystem, so the frontend can offer a copy/paste import flow.
+    pub fn preview_import_text(&self, content: &str) -> Result<ImportPreviewData, ConfigError> {
+        let parsed = parse_config(content.as_bytes())?;
+        Ok(import_preview_from_parsed(parsed))
     }
 
     pub fn apply_import(
@@ -176,16 +170,26 @@ impl ConfigStore {
         path: &Path,
         format: ExportFormat,
     ) -> Result<(), ConfigError> {
+        let text = self.export_text(config, format)?;
+        atomic_write(path, text.as_bytes())
+    }
+
+    /// Serialize the config (or the Android-compatible server list) to a
+    /// pretty JSON string so the frontend can show it for copy/paste export.
+    pub fn export_text(
+        &self,
+        config: &AppConfig,
+        format: ExportFormat,
+    ) -> Result<String, ConfigError> {
         validate_schema(config.schema)?;
-        let bytes = match format {
-            ExportFormat::Full => serde_json::to_vec_pretty(config)?,
+        match format {
+            ExportFormat::Full => Ok(serde_json::to_string_pretty(config)?),
             ExportFormat::Android => {
                 let servers: Vec<AndroidServerRef<'_>> =
                     config.servers.iter().map(AndroidServerRef::from).collect();
-                serde_json::to_vec_pretty(&servers)?
+                Ok(serde_json::to_string_pretty(&servers)?)
             }
-        };
-        atomic_write(path, &bytes)
+        }
     }
 
     fn load_latest_backup(&self) -> Result<LoadOutcome, ConfigError> {
@@ -222,6 +226,23 @@ impl ConfigStore {
             fs::remove_file(path)?;
         }
         Ok(())
+    }
+}
+
+fn import_preview_from_parsed(parsed: ParsedConfig) -> ImportPreviewData {
+    let servers = parsed
+        .config
+        .servers
+        .iter()
+        .map(ServerSummary::from)
+        .collect();
+    ImportPreviewData {
+        preview: ImportPreview {
+            valid_servers: parsed.config.servers.len(),
+            invalid_servers: parsed.invalid_servers,
+            servers,
+        },
+        config: parsed.config,
     }
 }
 
@@ -990,5 +1011,51 @@ mod tests {
         let exported: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
 
         assert_eq!(exported[0]["id"], "stable-id");
+    }
+
+    #[test]
+    fn preview_import_text_parses_pasted_json() {
+        let store = ConfigStore::new(tempdir().unwrap().path().to_path_buf());
+        let data = store
+            .preview_import_text(
+                r#"[{"id":"s1","name":"Work","host":"host","port":3080,"token":"secret","backend":"dsh"}]"#,
+            )
+            .unwrap();
+
+        assert_eq!(data.preview.valid_servers, 1);
+        assert_eq!(data.preview.invalid_servers, 0);
+        assert_eq!(data.preview.servers[0].name, "Work");
+    }
+
+    #[test]
+    fn preview_import_text_counts_malformed_items() {
+        let store = ConfigStore::new(tempdir().unwrap().path().to_path_buf());
+        let data = store
+            .preview_import_text(
+                r#"{"schema":1,"servers":[{"id":"ok","name":"Work","host":"host","port":3080,"token":"","backend":"kimi"},{"id":"bad","name":"Bad","port":"oops","backend":"dsh"}]}"#,
+            )
+            .unwrap();
+
+        assert_eq!(data.preview.valid_servers, 1);
+        assert_eq!(data.preview.invalid_servers, 1);
+    }
+
+    #[test]
+    fn export_text_serializes_both_formats_without_writing() {
+        let store = ConfigStore::new(tempdir().unwrap().path().to_path_buf());
+        let config = AppConfig {
+            servers: vec![server("stable-id", "Work")],
+            ..AppConfig::default()
+        };
+
+        let full: serde_json::Value =
+            serde_json::from_str(&store.export_text(&config, ExportFormat::Full).unwrap()).unwrap();
+        assert_eq!(full["servers"][0]["id"], "stable-id");
+        assert_eq!(full["schema"], 1);
+
+        let android: serde_json::Value =
+            serde_json::from_str(&store.export_text(&config, ExportFormat::Android).unwrap())
+                .unwrap();
+        assert_eq!(android[0]["id"], "stable-id");
     }
 }

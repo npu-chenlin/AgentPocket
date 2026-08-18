@@ -114,8 +114,10 @@ pub fn run() {
             commands::reconnect_all,
             commands::open_server,
             commands::preview_import,
+            commands::preview_import_text,
             commands::apply_import,
             commands::export_config,
+            commands::export_config_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgentPocket Desktop");

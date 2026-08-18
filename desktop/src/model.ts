@@ -66,8 +66,10 @@ export const commands = {
   reconnectAll: "reconnect_all",
   openServer: "open_server",
   previewImport: "preview_import",
+  previewImportText: "preview_import_text",
   applyImport: "apply_import",
   exportConfig: "export_config",
+  exportConfigText: "export_config_text",
 } as const;
 
 export function emptyServerDraft(): ServerDraft {

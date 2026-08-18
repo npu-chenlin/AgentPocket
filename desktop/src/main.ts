@@ -4,6 +4,7 @@ import {
   CREDENTIAL_WARNING,
   chooseExportPath,
   chooseImportPath,
+  copyTextToClipboard,
   importIssueText,
   importPreviewText,
 } from "./import-export";
@@ -85,7 +86,8 @@ app.innerHTML = `
               <h2 id="transfer-title">导入与导出</h2>
             </div>
           </div>
-          <button id="import-config" class="secondary-button secondary-button--wide" type="button">导入 JSON</button>
+          <button id="import-config" class="secondary-button secondary-button--wide" type="button">导入 JSON 文件</button>
+          <button id="paste-import" class="secondary-button secondary-button--wide" type="button">粘贴导入</button>
           <button class="secondary-button secondary-button--wide" type="button" data-export-format="full">导出完整配置</button>
           <button class="text-button transfer-link" type="button" data-export-format="android">导出 Android 兼容列表</button>
         </section>
@@ -136,11 +138,33 @@ app.innerHTML = `
     </form>
   </dialog>
 
-  <dialog id="export-dialog" class="modal modal--small">
-    <div class="modal__heading"><div><p class="section-kicker">EXPORT</p><h2>导出配置</h2></div></div>
+  <dialog id="paste-dialog" class="modal modal--small">
+    <form id="paste-form" method="dialog">
+      <div class="modal__heading">
+        <div><p class="section-kicker">PASTE</p><h2>粘贴导入</h2></div>
+        <button class="modal__close" type="button" data-close-dialog="paste-dialog" aria-label="关闭">×</button>
+      </div>
+      <p class="modal__summary">把复制好的 JSON 配置粘贴到下方（Android 服务器数组或完整桌面配置均可）。</p>
+      <textarea id="paste-content" class="code-area" rows="10" spellcheck="false" placeholder='[{"name":"工作站","host":"100.64.0.2","port":3080,"backend":"dsh"}]'></textarea>
+      <div id="paste-error" class="inline-error" role="alert"></div>
+      <div class="modal__actions">
+        <span class="modal__spacer"></span>
+        <button class="text-button" type="button" data-close-dialog="paste-dialog">取消</button>
+        <button id="preview-paste" class="primary-button" type="submit">预览导入</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="export-dialog" class="modal">
+    <div class="modal__heading">
+      <div><p class="section-kicker">EXPORT</p><h2>导出配置</h2></div>
+      <button class="modal__close" type="button" data-close-dialog="export-dialog" aria-label="关闭">×</button>
+    </div>
     <p class="credential-warning">${CREDENTIAL_WARNING}</p>
-    <p class="modal__summary">导出的 JSON 会保留连接服务器所需的令牌，请仅保存到可信位置。</p>
+    <p class="modal__summary">直接复制下方 JSON，或另存为文件。</p>
+    <textarea id="export-text" class="code-area" rows="12" readonly spellcheck="false"></textarea>
     <div class="modal__actions">
+      <button id="copy-export" class="secondary-button" type="button">复制</button>
       <span class="modal__spacer"></span>
       <button class="text-button" type="button" data-close-dialog="export-dialog">取消</button>
       <button id="confirm-export" class="primary-button" type="button">选择保存位置</button>
@@ -159,7 +183,13 @@ const serverDialog = requiredElement<HTMLDialogElement>("#server-dialog");
 const serverForm = requiredElement<HTMLFormElement>("#server-form");
 const importDialog = requiredElement<HTMLDialogElement>("#import-dialog");
 const importForm = requiredElement<HTMLFormElement>("#import-form");
+const pasteDialog = requiredElement<HTMLDialogElement>("#paste-dialog");
+const pasteForm = requiredElement<HTMLFormElement>("#paste-form");
+const pasteContent = requiredElement<HTMLTextAreaElement>("#paste-content");
+const pasteError = requiredElement<HTMLElement>("#paste-error");
 const exportDialog = requiredElement<HTMLDialogElement>("#export-dialog");
+const exportText = requiredElement<HTMLTextAreaElement>("#export-text");
+const copyExport = requiredElement<HTMLButtonElement>("#copy-export");
 
 let currentView: AppView | null = null;
 let latestRevision = -1;
@@ -369,22 +399,54 @@ requiredElement<HTMLButtonElement>("#import-config").addEventListener("click", a
     const path = await chooseImportPath();
     if (!path) return;
     pendingImport = await invoke<ImportPreview>(commands.previewImport, { path });
-    requiredElement<HTMLElement>("#import-summary").textContent = importPreviewText(pendingImport);
-    const issues = requiredElement<HTMLUListElement>("#import-issues");
-    issues.replaceChildren(
-      ...importIssueText(pendingImport).map((text) => {
-        const item = document.createElement("li");
-        item.textContent = text;
-        return item;
-      }),
-    );
-    requiredElement<HTMLButtonElement>("#apply-import").disabled = pendingImport.validCount === 0;
-    requiredElement<HTMLElement>("#import-error").textContent = "";
-    importDialog.showModal();
+    openImportConfirmation();
   } catch (error) {
     setMessage(`读取导入文件失败：${errorMessage(error)}`, "error");
   }
 });
+
+requiredElement<HTMLButtonElement>("#paste-import").addEventListener("click", () => {
+  pasteContent.value = "";
+  pasteError.textContent = "";
+  pasteDialog.showModal();
+  pasteContent.focus();
+});
+
+pasteForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const content = pasteContent.value.trim();
+  if (!content) {
+    pasteError.textContent = "请先粘贴配置 JSON";
+    return;
+  }
+  const button = requiredElement<HTMLButtonElement>("#preview-paste");
+  button.disabled = true;
+  try {
+    pendingImport = await invoke<ImportPreview>(commands.previewImportText, { content });
+    openImportConfirmation();
+    pasteDialog.close();
+  } catch (error) {
+    pasteError.textContent = `无法解析导入内容：${errorMessage(error)}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+function openImportConfirmation(): void {
+  if (!pendingImport) return;
+  requiredElement<HTMLElement>("#import-summary").textContent = importPreviewText(pendingImport);
+  const issues = requiredElement<HTMLUListElement>("#import-issues");
+  issues.replaceChildren(
+    ...importIssueText(pendingImport).map((text) => {
+      const item = document.createElement("li");
+      item.textContent = text;
+      return item;
+    }),
+  );
+  requiredElement<HTMLButtonElement>("#apply-import").disabled = pendingImport.validCount === 0;
+  requiredElement<HTMLElement>("#import-error").textContent = "";
+  importDialog.showModal();
+}
 
 importForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -411,11 +473,36 @@ importForm.addEventListener("submit", async (event) => {
 });
 
 for (const button of document.querySelectorAll<HTMLButtonElement>("[data-export-format]")) {
-  button.addEventListener("click", () => {
+  button.addEventListener("click", async () => {
     pendingExportFormat = button.dataset.exportFormat as ExportFormat;
-    exportDialog.showModal();
+    exportText.value = "";
+    button.disabled = true;
+    try {
+      exportText.value = await invoke<string>(commands.exportConfigText, {
+        format: pendingExportFormat,
+      });
+      exportDialog.showModal();
+    } catch (error) {
+      setMessage(`导出失败：${errorMessage(error)}`, "error");
+    } finally {
+      button.disabled = false;
+    }
   });
 }
+
+copyExport.addEventListener("click", async () => {
+  if (!exportText.value) return;
+  const original = copyExport.textContent;
+  try {
+    await copyTextToClipboard(exportText.value);
+    copyExport.textContent = "已复制";
+    window.setTimeout(() => {
+      copyExport.textContent = original;
+    }, 1500);
+  } catch (error) {
+    setMessage(`复制失败：${errorMessage(error)}`, "error");
+  }
+});
 
 requiredElement<HTMLButtonElement>("#confirm-export").addEventListener("click", async (event) => {
   const button = event.currentTarget as HTMLButtonElement;

@@ -303,6 +303,16 @@ pub async fn preview_import(
 }
 
 #[tauri::command]
+pub async fn preview_import_text(
+    state: State<'_, Arc<AppState>>,
+    content: String,
+) -> Result<ImportPreview, CommandError> {
+    let data = state.store.preview_import_text(&content)?;
+    let (source_kind, invalid) = analyze_import_content(&content)?;
+    Ok(cache_preview(&state, data, source_kind, invalid))
+}
+
+#[tauri::command]
 pub async fn apply_import(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
@@ -358,6 +368,18 @@ pub fn export_config(
         .store
         .export(&config, Path::new(&path), format.into())?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn export_config_text(
+    state: State<'_, Arc<AppState>>,
+    format: ExportFormatArg,
+) -> Result<String, CommandError> {
+    let config = state
+        .config
+        .read()
+        .map_err(|_| CommandError::Config("config lock poisoned".to_string()))?;
+    Ok(state.store.export_text(&config, format.into())?)
 }
 
 // ------------------------------------------------------------------
@@ -512,45 +534,45 @@ async fn preview_import_inner(
     path: &Path,
 ) -> Result<ImportPreview, CommandError> {
     let data = state.store.preview_import(path)?;
-    let (source_kind, invalid) = analyze_import_file(path)?;
+    let content = std::fs::read_to_string(path).map_err(ConfigError::Io)?;
+    let (source_kind, invalid) = analyze_import_content(&content)?;
+    Ok(cache_preview(state, data, source_kind, invalid))
+}
 
-    expire_old_previews(
-        &mut state
+fn cache_preview(
+    state: &Arc<AppState>,
+    data: ImportPreviewData,
+    source_kind: ImportSourceKind,
+    invalid: Vec<ImportIssue>,
+) -> ImportPreview {
+    let import_id = Uuid::new_v4();
+    let valid_count = data.preview.valid_servers;
+    {
+        let mut previews = state
             .import_previews
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
-    );
-
-    let import_id = Uuid::new_v4();
-    state
-        .import_previews
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        expire_old_previews(&mut previews);
+        previews.insert(
             import_id,
             PendingImport {
                 data,
                 created_at: Instant::now(),
             },
         );
-
-    Ok(ImportPreview {
+    }
+    ImportPreview {
         import_id,
-        valid_count: state
-            .import_previews
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(&import_id)
-            .map(|pending| pending.data.preview.valid_servers)
-            .unwrap_or(0),
+        valid_count,
         invalid,
         source_kind,
-    })
+    }
 }
 
-fn analyze_import_file(path: &Path) -> Result<(ImportSourceKind, Vec<ImportIssue>), CommandError> {
-    let bytes = std::fs::read(path).map_err(ConfigError::Io)?;
-    let value: Value = serde_json::from_slice(&bytes).map_err(ConfigError::Json)?;
+fn analyze_import_content(
+    content: &str,
+) -> Result<(ImportSourceKind, Vec<ImportIssue>), CommandError> {
+    let value: Value = serde_json::from_str(content).map_err(ConfigError::Json)?;
 
     match value {
         Value::Array(values) => Ok((ImportSourceKind::Android, collect_issues(values))),

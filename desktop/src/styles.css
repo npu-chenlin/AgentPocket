@@ -469,6 +469,21 @@ input[role="switch"]:checked::after {
   line-height: 1.55;
 }
 
+.code-area {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 14px;
+  padding: 11px 12px;
+  border: 1px solid rgba(31, 59, 53, 0.18);
+  border-radius: 10px;
+  background: #f4f6f2;
+  color: #1c2825;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
