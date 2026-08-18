@@ -1,5 +1,7 @@
-use crate::model::{AppConfig, Backend, ServerConfig, ServerSummary};
-use chrono::{Duration, Utc};
+use crate::model::{
+    default_schema, AppConfig, Backend, DesktopSettings, ServerConfig, ServerSummary,
+};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::{self, File};
@@ -48,6 +50,8 @@ pub enum ConfigError {
     Json(#[from] serde_json::Error),
     #[error("configuration must be an object or an array")]
     UnsupportedFormat,
+    #[error("unsupported configuration schema {0}; expected schema 1")]
+    UnsupportedSchema(u32),
     #[error("import contains no valid servers")]
     NoValidServers,
     #[error("primary configuration is corrupt and no valid backup exists")]
@@ -80,7 +84,7 @@ impl ConfigStore {
 
         match fs::read(&self.config_path)
             .map_err(ConfigError::from)
-            .and_then(|bytes| parse_config(&bytes).map(|parsed| parsed.config))
+            .and_then(|bytes| parse_config(&bytes)?.into_loadable_config())
         {
             Ok(config) => Ok(LoadOutcome {
                 config,
@@ -91,6 +95,7 @@ impl ConfigStore {
     }
 
     pub fn save(&self, config: &AppConfig) -> Result<(), ConfigError> {
+        validate_schema(config.schema)?;
         if config
             .servers
             .iter()
@@ -171,6 +176,7 @@ impl ConfigStore {
         path: &Path,
         format: ExportFormat,
     ) -> Result<(), ConfigError> {
+        validate_schema(config.schema)?;
         let bytes = match format {
             ExportFormat::Full => serde_json::to_vec_pretty(config)?,
             ExportFormat::Android => {
@@ -184,13 +190,14 @@ impl ConfigStore {
 
     fn load_latest_backup(&self) -> Result<LoadOutcome, ConfigError> {
         let backup_dir = self.app_dir.join("backups");
-        let mut paths = backup_paths(&backup_dir)?;
-        paths.sort();
+        let paths = backup_paths(&backup_dir)?;
         for path in paths.into_iter().rev() {
             if let Ok(bytes) = fs::read(&path) {
-                if let Ok(parsed) = parse_config(&bytes) {
+                if let Ok(config) =
+                    parse_config(&bytes).and_then(ParsedConfig::into_loadable_config)
+                {
                     return Ok(LoadOutcome {
-                        config: parsed.config,
+                        config,
                         recovered_from_backup: Some(path),
                     });
                 }
@@ -206,18 +213,10 @@ impl ConfigStore {
         let backup_dir = self.app_dir.join("backups");
         fs::create_dir_all(&backup_dir)?;
 
-        let now = Utc::now();
-        let backup_path = (0_i64..)
-            .map(|offset| {
-                let timestamp = now + Duration::seconds(offset);
-                backup_dir.join(format!("config-{}.json", timestamp.format("%Y%m%d-%H%M%S")))
-            })
-            .find(|path| !path.exists())
-            .expect("an unused backup timestamp must exist");
+        let backup_path = next_backup_path(&backup_dir, Utc::now());
         fs::copy(&self.config_path, backup_path)?;
 
-        let mut paths = backup_paths(&backup_dir)?;
-        paths.sort();
+        let paths = backup_paths(&backup_dir)?;
         let remove_count = paths.len().saturating_sub(5);
         for path in paths.into_iter().take(remove_count) {
             fs::remove_file(path)?;
@@ -226,15 +225,49 @@ impl ConfigStore {
     }
 }
 
+fn next_backup_path(backup_dir: &Path, now: DateTime<Utc>) -> PathBuf {
+    let timestamp = now.format("%Y%m%d-%H%M%S");
+    (0_u32..)
+        .map(|suffix| {
+            if suffix == 0 {
+                backup_dir.join(format!("config-{timestamp}.json"))
+            } else {
+                backup_dir.join(format!("config-{timestamp}-{suffix:03}.json"))
+            }
+        })
+        .find(|path| !path.exists())
+        .expect("an unused backup suffix must exist")
+}
+
 struct ParsedConfig {
     config: AppConfig,
     invalid_servers: usize,
+    server_entries: usize,
+}
+
+impl ParsedConfig {
+    fn into_loadable_config(self) -> Result<AppConfig, ConfigError> {
+        if self.server_entries > 0 && self.config.servers.is_empty() {
+            Err(ConfigError::NoValidServers)
+        } else {
+            Ok(self.config)
+        }
+    }
+}
+
+fn validate_schema(schema: u32) -> Result<(), ConfigError> {
+    if schema == 1 {
+        Ok(())
+    } else {
+        Err(ConfigError::UnsupportedSchema(schema))
+    }
 }
 
 fn parse_config(bytes: &[u8]) -> Result<ParsedConfig, ConfigError> {
     let value: Value = serde_json::from_slice(bytes)?;
     match value {
         Value::Array(values) => {
+            let server_entries = values.len();
             let (servers, invalid_servers) = parse_servers(values);
             Ok(ParsedConfig {
                 config: AppConfig {
@@ -243,25 +276,26 @@ fn parse_config(bytes: &[u8]) -> Result<ParsedConfig, ConfigError> {
                     ..AppConfig::default()
                 },
                 invalid_servers,
+                server_entries,
             })
         }
         Value::Object(_) => {
-            let mut config: AppConfig = serde_json::from_value(value)?;
-            let original_count = config.servers.len();
-            config.servers.retain(|server| server.validate().is_ok());
-            for server in &mut config.servers {
-                if server.id.is_empty() {
-                    server.id = Uuid::new_v4().to_string();
-                }
-            }
-            if config.active_id.as_ref().is_some_and(|active_id| {
-                !config.servers.iter().any(|server| &server.id == active_id)
-            }) {
-                config.active_id = None;
-            }
+            let full: FullConfig = serde_json::from_value(value)?;
+            validate_schema(full.schema)?;
+            let server_entries = full.servers.len();
+            let (servers, invalid_servers) = parse_servers(full.servers);
+            let active_id = full
+                .active_id
+                .filter(|active_id| servers.iter().any(|server| &server.id == active_id));
             Ok(ParsedConfig {
-                invalid_servers: original_count - config.servers.len(),
-                config,
+                config: AppConfig {
+                    schema: full.schema,
+                    active_id,
+                    servers,
+                    settings: full.settings,
+                },
+                invalid_servers,
+                server_entries,
             })
         }
         _ => Err(ConfigError::UnsupportedFormat),
@@ -278,6 +312,17 @@ fn parse_servers(values: Vec<Value>) -> (Vec<ServerConfig>, usize) {
         .collect::<Vec<_>>();
     let invalid = total - servers.len();
     (servers, invalid)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FullConfig {
+    #[serde(default = "default_schema")]
+    schema: u32,
+    active_id: Option<String>,
+    servers: Vec<Value>,
+    #[serde(default)]
+    settings: DesktopSettings,
 }
 
 #[derive(Deserialize)]
@@ -352,24 +397,76 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600))?;
     }
-    fs::rename(&tmp_path, path)?;
+    replace_file(&tmp_path, path)?;
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(
+            existing_file_name: *const u16,
+            new_file_name: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+
+    // MoveFileExW can replace an existing file on Windows. The temp file is in
+    // the same directory to avoid cross-volume moves. Atomicity still depends
+    // on the destination filesystem honoring same-volume rename semantics.
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 fn backup_paths(backup_dir: &Path) -> Result<Vec<PathBuf>, ConfigError> {
     if !backup_dir.exists() {
         return Ok(Vec::new());
     }
-    let paths = fs::read_dir(backup_dir)?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("config-") && name.ends_with(".json"))
-        })
-        .collect();
-    Ok(paths)
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(backup_dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name
+            .to_str()
+            .is_some_and(|name| name.starts_with("config-") && name.ends_with(".json"))
+        {
+            entries.push((entry.metadata()?.modified()?, name, entry.path()));
+        }
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    Ok(entries.into_iter().map(|(_, _, path)| path).collect())
 }
 
 #[cfg(test)]
@@ -399,6 +496,91 @@ mod tests {
         assert_eq!(outcome.config.servers.len(), 1);
         assert!(!outcome.config.servers[0].id.is_empty());
         assert_eq!(outcome.config.servers[0].name, "Work");
+    }
+
+    #[test]
+    fn full_import_keeps_valid_servers_and_counts_malformed_items() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let import_path = dir.path().join("full-import.json");
+        fs::write(
+            &import_path,
+            r#"{"schema":1,"activeId":"valid","servers":[{"id":"valid","name":"Work","host":"host","port":3080,"token":"","backend":"dsh"},{"id":"bad","name":"Bad","host":"host","port":"not-a-port","backend":"dsh"}],"settings":{"startHidden":true,"autostart":false,"notifications":true}}"#,
+        )
+        .unwrap();
+
+        let data = store.preview_import(&import_path).unwrap();
+
+        assert_eq!(data.preview.valid_servers, 1);
+        assert_eq!(data.preview.invalid_servers, 1);
+        assert_eq!(data.preview.servers[0].id, "valid");
+    }
+
+    #[test]
+    fn full_import_missing_schema_defaults_to_one() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let import_path = dir.path().join("missing-schema.json");
+        fs::write(
+            &import_path,
+            r#"{"activeId":null,"servers":[],"settings":{"startHidden":true,"autostart":false,"notifications":true}}"#,
+        )
+        .unwrap();
+
+        let data = store.preview_import(&import_path).unwrap();
+
+        assert_eq!(data.config.schema, 1);
+    }
+
+    #[test]
+    fn full_import_rejects_unsupported_schema() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let import_path = dir.path().join("future-schema.json");
+        fs::write(
+            &import_path,
+            r#"{"schema":2,"activeId":null,"servers":[],"settings":{"startHidden":true,"autostart":false,"notifications":true}}"#,
+        )
+        .unwrap();
+
+        assert!(store.preview_import(&import_path).is_err());
+    }
+
+    #[test]
+    fn save_rejects_unsupported_schema_without_overwriting_existing() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let original = AppConfig {
+            servers: vec![server("id", "Original")],
+            ..AppConfig::default()
+        };
+        store.save(&original).unwrap();
+        let unsupported = AppConfig {
+            schema: 2,
+            servers: vec![server("id", "Unsupported")],
+            ..AppConfig::default()
+        };
+
+        assert!(store.save(&unsupported).is_err());
+        assert_eq!(store.load().unwrap().config, original);
+    }
+
+    #[test]
+    fn export_rejects_unsupported_schema_without_overwriting_existing() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let export_path = dir.path().join("export.json");
+        fs::write(&export_path, b"original bytes").unwrap();
+        let unsupported = AppConfig {
+            schema: 2,
+            servers: vec![server("id", "Unsupported")],
+            ..AppConfig::default()
+        };
+
+        assert!(store
+            .export(&unsupported, &export_path, ExportFormat::Full)
+            .is_err());
+        assert_eq!(fs::read(export_path).unwrap(), b"original bytes");
     }
 
     #[test]
@@ -473,6 +655,60 @@ mod tests {
     }
 
     #[test]
+    fn save_replaces_existing_config_on_second_write() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let first = AppConfig {
+            servers: vec![server("id", "First")],
+            ..AppConfig::default()
+        };
+        let second = AppConfig {
+            servers: vec![server("id", "Second")],
+            ..AppConfig::default()
+        };
+
+        store.save(&first).unwrap();
+        store.save(&second).unwrap();
+
+        assert_eq!(store.load().unwrap().config, second);
+    }
+
+    #[test]
+    fn export_replaces_existing_file_on_second_write() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let path = dir.path().join("export.json");
+        let first = AppConfig {
+            servers: vec![server("id", "First")],
+            ..AppConfig::default()
+        };
+        let second = AppConfig {
+            servers: vec![server("id", "Second")],
+            ..AppConfig::default()
+        };
+
+        store.export(&first, &path, ExportFormat::Full).unwrap();
+        store.export(&second, &path, ExportFormat::Full).unwrap();
+        let exported: AppConfig = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+
+        assert_eq!(exported, second);
+    }
+
+    #[test]
+    fn replace_file_replaces_existing_destination() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source.tmp");
+        let destination = dir.path().join("destination.json");
+        fs::write(&source, b"new").unwrap();
+        fs::write(&destination, b"old").unwrap();
+
+        replace_file(&source, &destination).unwrap();
+
+        assert_eq!(fs::read(destination).unwrap(), b"new");
+        assert!(!source.exists());
+    }
+
+    #[test]
     fn corrupted_primary_recovers_latest_backup_without_overwriting_primary() {
         let dir = tempdir().unwrap();
         let store = ConfigStore::new(dir.path().to_path_buf());
@@ -501,6 +737,113 @@ mod tests {
             fs::read(dir.path().join("config.json")).unwrap(),
             b"bad bytes"
         );
+    }
+
+    #[test]
+    fn all_invalid_primary_servers_recover_latest_backup() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let recoverable = AppConfig {
+            servers: vec![server("id", "Recovered")],
+            ..AppConfig::default()
+        };
+        store.save(&recoverable).unwrap();
+        let import_path = dir.path().join("import.json");
+        fs::write(
+            &import_path,
+            r#"[{"name":"Other","host":"host","port":3080,"backend":"dsh"}]"#,
+        )
+        .unwrap();
+        let data = store.preview_import(&import_path).unwrap();
+        store
+            .apply_import(&recoverable, data, ImportMode::Merge)
+            .unwrap();
+        fs::write(
+            dir.path().join("config.json"),
+            r#"{"schema":1,"activeId":null,"servers":[{"id":"bad","name":"Bad","host":"http://host","port":3080,"backend":"dsh"}],"settings":{"startHidden":true,"autostart":false,"notifications":true}}"#,
+        )
+        .unwrap();
+
+        let loaded = store.load().unwrap();
+
+        assert_eq!(loaded.config, recoverable);
+        assert!(loaded.recovered_from_backup.is_some());
+    }
+
+    #[test]
+    fn empty_primary_config_loads_without_backup_recovery() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        fs::write(
+            dir.path().join("config.json"),
+            r#"{"schema":1,"activeId":null,"servers":[],"settings":{"startHidden":true,"autostart":false,"notifications":true}}"#,
+        )
+        .unwrap();
+
+        let loaded = store.load().unwrap();
+
+        assert!(loaded.config.servers.is_empty());
+        assert!(loaded.recovered_from_backup.is_none());
+    }
+
+    #[test]
+    fn backup_name_collision_uses_monotonic_suffix() {
+        let dir = tempdir().unwrap();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-08-18T10:50:49Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let first = next_backup_path(dir.path(), now);
+        fs::write(&first, b"first").unwrap();
+
+        let second = next_backup_path(dir.path(), now);
+
+        assert_eq!(first.file_name().unwrap(), "config-20260818-105049.json");
+        assert_eq!(
+            second.file_name().unwrap(),
+            "config-20260818-105049-001.json"
+        );
+    }
+
+    #[test]
+    fn backup_rotation_uses_modified_time_before_filename() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let config = AppConfig {
+            servers: vec![server("id", "Work")],
+            ..AppConfig::default()
+        };
+        store.save(&config).unwrap();
+        let backup_dir = dir.path().join("backups");
+        fs::create_dir_all(&backup_dir).unwrap();
+        let old_future_named = backup_dir.join("config-99999999-999999.json");
+        fs::write(&old_future_named, b"old").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&old_future_named)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH))
+            .unwrap();
+        for index in 0..4 {
+            fs::write(
+                backup_dir.join(format!("config-20200101-00000{index}.json")),
+                b"newer",
+            )
+            .unwrap();
+        }
+        let import_path = dir.path().join("import.json");
+        fs::write(
+            &import_path,
+            r#"[{"name":"Other","host":"host","port":3080,"backend":"dsh"}]"#,
+        )
+        .unwrap();
+
+        let data = store.preview_import(&import_path).unwrap();
+        store
+            .apply_import(&config, data, ImportMode::Merge)
+            .unwrap();
+
+        assert!(!old_future_named.exists());
+        assert_eq!(fs::read_dir(backup_dir).unwrap().count(), 5);
     }
 
     #[test]

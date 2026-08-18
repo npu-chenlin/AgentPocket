@@ -80,9 +80,14 @@ impl Default for DesktopSettings {
     }
 }
 
+pub(crate) fn default_schema() -> u32 {
+    1
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    #[serde(default = "default_schema")]
     pub schema: u32,
     pub active_id: Option<String>,
     pub servers: Vec<ServerConfig>,
@@ -152,6 +157,16 @@ mod tests {
         assert!(ServerConfig::new("id", "Work", "host", 0, "", Backend::Dsh)
             .validate()
             .is_err());
+    }
+
+    #[test]
+    fn app_config_missing_schema_deserializes_as_one() {
+        let config: AppConfig = serde_json::from_str(
+            r#"{"activeId":null,"servers":[],"settings":{"startHidden":true,"autostart":false,"notifications":true}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.schema, 1);
     }
 
     #[test]
