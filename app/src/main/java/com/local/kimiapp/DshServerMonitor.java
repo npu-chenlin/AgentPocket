@@ -75,19 +75,18 @@ public class DshServerMonitor extends ServerMonitor {
                     synchronized (titleCache) {
                         titleCache.clear();
                         busyBySession.clear();
-                        activeCount = 0;
                         for (int i = 0; i < items.length(); i++) {
                             JSONObject item = items.getJSONObject(i);
                             String id = item.getString("sessionId");
                             boolean running = item.optBoolean("running", false);
                             busyBySession.put(id, running);
-                            if (running) activeCount++;
                             JSONObject projections = item.optJSONObject("projections");
                             JSONObject values = projections != null ? projections.optJSONObject("values") : null;
                             String title = values != null ? values.optString("title", "") : "";
                             if (title.isEmpty() || "null".equals(title)) title = "";
                             if (!title.isEmpty()) titleCache.put(id, title);
                         }
+                        activeCount = busyCount();
                     }
                     notifySummary();
                     then.run();
@@ -255,13 +254,23 @@ public class DshServerMonitor extends ServerMonitor {
         }
     }
 
-    /** 按会话维护忙碌计数：turn/start 置忙，turn/end 置闲。 */
+    /** 按会话维护忙碌集合：turn/start 置忙，turn/end 置闲。 */
     private void setBusy(String sessionId, boolean busy) {
         Boolean prev = busyBySession.put(sessionId, busy);
         if (prev != null && prev == busy) return;
-        if (busy) activeCount++;
-        else activeCount = Math.max(0, activeCount - 1);
+        activeCount = busyCount();
         notifySummary();
+    }
+
+    /** 忙碌会话数：与桌面端一致，按忙碌集合大小去重统计。 */
+    private int busyCount() {
+        int count = 0;
+        synchronized (busyBySession) {
+            for (Boolean busy : busyBySession.values()) {
+                if (Boolean.TRUE.equals(busy)) count++;
+            }
+        }
+        return count;
     }
 
     private static String rpc(String method, String payloadJson) {

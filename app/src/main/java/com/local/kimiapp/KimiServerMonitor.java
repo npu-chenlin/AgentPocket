@@ -44,6 +44,17 @@ public class KimiServerMonitor extends ServerMonitor {
         super(host, server, client);
     }
 
+    /** 忙碌会话数：与桌面端一致，按忙碌集合大小去重统计。 */
+    private int busyCount() {
+        int count = 0;
+        synchronized (busyBySession) {
+            for (Boolean busy : busyBySession.values()) {
+                if (Boolean.TRUE.equals(busy)) count++;
+            }
+        }
+        return count;
+    }
+
     @Override public void start() {
         if (stopped) return;
         connected = false;
@@ -74,7 +85,6 @@ public class KimiServerMonitor extends ServerMonitor {
                         titleCache.clear();
                         busyBySession.clear();
                         pendingBySession.clear();
-                        activeCount = 0;
                         for (int i = 0; i < items.length(); i++) {
                             JSONObject item = items.getJSONObject(i);
                             String id = item.getString("id");
@@ -87,8 +97,8 @@ public class KimiServerMonitor extends ServerMonitor {
                             boolean busy = !"idle".equals(status);
                             busyBySession.put(id, busy);
                             pendingBySession.put(id, "none");
-                            if (busy) activeCount++;
                         }
+                        activeCount = busyCount();
                     }
                     notifySummary();
                     then.run();
@@ -223,8 +233,10 @@ public class KimiServerMonitor extends ServerMonitor {
 
                 boolean wasActive = !"idle".equals(previous) && !previous.isEmpty();
                 boolean isActive = !"idle".equals(status);
-                if (wasActive && !isActive) activeCount = Math.max(0, activeCount - 1);
-                else if (!wasActive && isActive) activeCount++;
+                if (!sessionId.isEmpty() && wasActive != isActive) {
+                    busyBySession.put(sessionId, isActive);
+                    activeCount = busyCount();
+                }
                 notifySummary();
 
                 if ("running".equals(previous) && "idle".equals(status)) {
@@ -253,10 +265,10 @@ public class KimiServerMonitor extends ServerMonitor {
 
             case "event.session.work_changed": {
                 boolean busy = payload.optBoolean("busy", false);
-                Boolean previousBusy = busyBySession.put(sessionId, busy);
-                if (previousBusy != null && previousBusy != busy) {
-                    if (busy) activeCount++;
-                    else activeCount = Math.max(0, activeCount - 1);
+                boolean wasBusy = Boolean.TRUE.equals(busyBySession.get(sessionId));
+                busyBySession.put(sessionId, busy);
+                if (busy != wasBusy) {
+                    activeCount = busyCount();
                     notifySummary();
                 }
 
@@ -289,7 +301,8 @@ public class KimiServerMonitor extends ServerMonitor {
                         String title = meta != null ? meta.optString("title", "") : "";
                         if (title.isEmpty() || "null".equals(title)) title = "点击查看 Kimi 会话";
                         synchronized (titleCache) { titleCache.put(newId, title); }
-                        activeCount++;
+                        busyBySession.put(newId, true);
+                        activeCount = busyCount();
                         notifySummary();
                         if (webSocket != null) {
                             try {
