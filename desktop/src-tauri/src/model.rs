@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -163,6 +165,47 @@ pub enum ValidationError {
     InvalidHost,
     #[error("port must be greater than zero")]
     InvalidPort,
+}
+
+/// Redacted view of the application state sent to the frontend.
+///
+/// Tokens are intentionally excluded; use [`ServerForEdit`] or
+/// [`crate::opener::open_saved_server`] when token access is required.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppView {
+    pub settings: DesktopSettings,
+    pub servers: Vec<ServerSummary>,
+    pub active_id: Option<String>,
+    pub statuses: HashMap<String, ServerStatus>,
+}
+
+/// Server configuration for the edit form, including the saved token.
+///
+/// This DTO is only returned for the exact server the user asked to edit;
+/// listing APIs must use [`ServerSummary`] instead.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerForEdit {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub backend: Backend,
+    pub token: String,
+}
+
+impl From<&ServerConfig> for ServerForEdit {
+    fn from(server: &ServerConfig) -> Self {
+        Self {
+            id: server.id.clone(),
+            name: server.name.clone(),
+            host: server.host.clone(),
+            port: server.port,
+            backend: server.backend,
+            token: server.token.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
