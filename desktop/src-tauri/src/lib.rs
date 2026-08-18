@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -8,6 +9,7 @@ use crate::commands::{run_monitor_coordinator, AppState};
 use crate::config::{ConfigStore, LoadOutcome};
 use crate::model::AppConfig;
 use crate::monitor::MonitorManager;
+use crate::tray::TrayController;
 
 pub mod commands;
 pub mod config;
@@ -16,13 +18,14 @@ pub mod monitor;
 pub mod notification;
 pub mod opener;
 pub mod protocol;
+pub mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None::<Vec<&'static str>>,
+            Some(vec!["--hidden"]),
         ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -42,7 +45,7 @@ pub fn run() {
             let monitors = MonitorManager::new(update_tx);
             let state = Arc::new(AppState::new(loaded.config, store, monitors));
             let state_for_coordinator = Arc::clone(&state);
-            app.manage(state);
+            app.manage(Arc::clone(&state));
 
             let app_handle = app.handle().clone();
             let monitor_started_at = Utc::now();
@@ -55,6 +58,48 @@ pub fn run() {
                 )
                 .await;
             });
+
+            // Install the tray icon before showing the main window so the tray
+            // is available even when the window is hidden on startup.
+            let controller = TrayController::install(app, Arc::clone(&state))?;
+
+            // Listen for rebuild requests from commands/monitor updates.
+            app.listen("tray-rebuild-requested", move |_| {
+                let state = Arc::clone(&state);
+                let _ = controller.rebuild(state);
+            });
+
+            // Close-to-hide behavior: closing the window only hides it unless
+            // the user explicitly chose Quit from the tray menu.
+            if let Some(window) = app.get_window("main") {
+                let state_for_close = Arc::clone(&state);
+                let window_for_close = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api } = event {
+                        if !state_for_close.explicit_exit.load(Ordering::SeqCst) {
+                            api.prevent_close();
+                            let _ = window_for_close.hide();
+                        }
+                    }
+                });
+            }
+
+            // Startup visibility: respect startHidden in production and the
+            // --hidden argument in all modes. The window defaults to hidden in
+            // tauri.conf.json so we control visibility explicitly here.
+            let start_hidden = state
+                .config
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .settings
+                .start_hidden;
+            let hidden_by_arg = std::env::args().any(|arg| arg == "--hidden");
+            let show_on_startup = !hidden_by_arg && (tauri::is_dev() || !start_hidden);
+            if let Some(window) = app.get_window("main") {
+                if show_on_startup {
+                    let _ = window.show();
+                }
+            }
 
             Ok(())
         })

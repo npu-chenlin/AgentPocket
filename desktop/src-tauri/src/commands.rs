@@ -391,7 +391,7 @@ fn get_server_for_edit_inner(state: &AppState, id: &str) -> Result<ServerForEdit
         .ok_or(CommandError::ServerNotFound)
 }
 
-async fn mutate_config<F>(
+pub(crate) async fn mutate_config<F>(
     state: &Arc<AppState>,
     app: &AppHandle,
     mutate: F,

@@ -15,7 +15,7 @@
         "title": "AgentPocket",
         "width": 760,
         "height": 620,
-        "visible": true
+        "visible": false
       }
     ]
   }
