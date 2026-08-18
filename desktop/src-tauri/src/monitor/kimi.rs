@@ -287,7 +287,32 @@ async fn connect_ws(
         .unwrap_or(if ws_url.scheme() == "wss" { 443 } else { 80 });
 
     let stream = TcpStream::connect((host, port)).await?;
-    let stream = MaybeTlsStream::Plain(stream);
+    let stream: MaybeTlsStream<TcpStream> = if ws_url.scheme() == "wss" {
+        let cert_result = rustls_native_certs::load_native_certs();
+        if !cert_result.errors.is_empty() {
+            let msg = cert_result
+                .errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(tokio_tungstenite::tungstenite::Error::Io(
+                std::io::Error::other(msg),
+            ));
+        }
+        let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
+        root_store.add_parsable_certificates(cert_result.certs);
+        let config = tokio_rustls::rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+        let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(config));
+        let server_name =
+            tokio_rustls::rustls::pki_types::ServerName::try_from(host.to_string())
+                .map_err(|e| tokio_tungstenite::tungstenite::Error::Io(std::io::Error::other(e)))?;
+        MaybeTlsStream::Rustls(connector.connect(server_name, stream).await?)
+    } else {
+        MaybeTlsStream::Plain(stream)
+    };
 
     let key = base64::engine::general_purpose::STANDARD.encode(uuid::Uuid::new_v4().as_bytes());
     let mut request = http::Request::builder()
@@ -359,4 +384,56 @@ enum MonitorError {
     Ws(String),
     #[error("protocol error: {0}")]
     Protocol(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Backend, ServerConfig};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn ws_url_selects_ws_for_http_base_url() {
+        let server = ServerConfig::new("s1", "S", "127.0.0.1", 3080, "", Backend::Kimi);
+        let ws = ws_url(&server).unwrap();
+        assert_eq!(ws.scheme(), "ws");
+        assert_eq!(ws.path(), "/api/v1/ws");
+    }
+
+    #[tokio::test]
+    async fn connect_ws_selects_tls_path_for_wss() {
+        // Spin up a plain TCP server so the TLS handshake fails deterministically.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 64];
+            let _ = stream.read(&mut buf).await;
+            // Respond with plain HTTP, which causes the TLS client to fail handshake.
+            let _ = stream
+                .write_all(b"HTTP/1.1 400 Not WebSocket\r\n\r\n")
+                .await;
+        });
+
+        let server = ServerConfig::new("s1", "S", "127.0.0.1", port, "token", Backend::Kimi);
+        let mut url = server.base_url().unwrap();
+        url.set_scheme("wss").unwrap();
+        url.set_path("/api/v1/ws");
+
+        let err = connect_ws(&url, &server).await.unwrap_err();
+        let err_str = err.to_string();
+        // Rustls TLS handshake errors indicate the TLS path was selected.
+        assert!(
+            err_str.contains("tls")
+                || err_str.contains("TLS")
+                || err_str.contains("handshake")
+                || err_str.contains("InvalidContentType")
+                || err_str.contains("corrupt message"),
+            "expected TLS handshake error, got: {}",
+            err_str
+        );
+
+        let _ = tokio::time::timeout(Duration::from_secs(1), server_task).await;
+    }
 }
