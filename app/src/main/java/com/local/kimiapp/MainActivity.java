@@ -797,13 +797,20 @@ public class MainActivity extends Activity {
             text.addView(sub);
             card.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
 
+            ProgressBar spinner = new ProgressBar(this);
+            spinner.setIndeterminate(true);
+            spinner.setIndeterminateTintList(ColorStateList.valueOf(Color.rgb(25, 112, 238)));
+            LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(dp(20), dp(20));
+            spinnerParams.setMargins(dp(8), 0, 0, 0);
+            card.addView(spinner, spinnerParams);
+
             final String targetServerId = serverId;
             final String targetSessionId = sessionId;
             card.setOnClickListener(v -> { dialog.dismiss(); openSession(targetServerId, targetSessionId); });
 
-            card.setMinimumHeight(dp(56));
+            card.setMinimumHeight(dp(52));
             LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, -2);
-            cardParams.setMargins(0, 0, 0, dp(10));
+            cardParams.setMargins(0, 0, 0, dp(6));
             cards.addView(card, cardParams);
         }
         scroll.addView(cards, new ViewGroup.LayoutParams(-1, -2));
@@ -840,9 +847,9 @@ public class MainActivity extends Activity {
             Context context = parent.getContext();
             LinearLayout card = new LinearLayout(context);
             card.setGravity(Gravity.CENTER_VERTICAL);
-            card.setPadding(dp(9), dp(12), dp(14), dp(12));
-            RecyclerView.LayoutParams cardParams = new RecyclerView.LayoutParams(-1, dp(72));
-            cardParams.setMargins(0, 0, 0, dp(10));
+            card.setPadding(dp(9), dp(9), dp(14), dp(9));
+            RecyclerView.LayoutParams cardParams = new RecyclerView.LayoutParams(-1, dp(66));
+            cardParams.setMargins(0, 0, 0, dp(6));
             card.setLayoutParams(cardParams);
 
             ImageView backendIcon = backendIconView(ServerStore.Server.BACKEND_KIMI);
