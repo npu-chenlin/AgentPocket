@@ -730,7 +730,6 @@ public class MainActivity extends Activity {
             sessions = new JSONArray();
         }
         List<ServerStore.Server> servers = ServerStore.load(this);
-        boolean multi = servers.size() > 1;
 
         if (sessions.length() == 0) {
             TextView empty = new TextView(this);
@@ -776,20 +775,22 @@ public class MainActivity extends Activity {
 
             LinearLayout text = new LinearLayout(this);
             text.setOrientation(LinearLayout.VERTICAL);
-            TextView titleView = new TextView(this);
-            titleView.setText(title.isEmpty() ? "会话" : title);
-            titleView.setTextSize(16);
-            titleView.setTextColor(Color.rgb(28, 34, 45));
-            TextView sub = new TextView(this);
-            String subText = server != null ? server.host + ":" + server.port : "";
-            if (multi && !serverName.isEmpty()) {
-                subText = serverName + (subText.isEmpty() ? "" : " · " + subText);
+            if (isMeaningfulSessionTitle(title)) {
+                TextView titleView = new TextView(this);
+                titleView.setText(title);
+                titleView.setTextSize(16);
+                titleView.setTextColor(Color.rgb(28, 34, 45));
+                text.addView(titleView);
             }
+            TextView sub = new TextView(this);
+            String address = server != null ? server.host + ":" + server.port : "";
+            String subText = !serverName.isEmpty()
+                    ? (address.isEmpty() ? serverName : serverName + " · " + address)
+                    : address;
             sub.setText(subText);
             sub.setTextSize(13);
             sub.setTextColor(Color.rgb(112, 120, 135));
-            sub.setPadding(0, dp(3), 0, 0);
-            text.addView(titleView);
+            if (text.getChildCount() > 0) sub.setPadding(0, dp(3), 0, 0);
             text.addView(sub);
             card.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
 
@@ -981,9 +982,20 @@ public class MainActivity extends Activity {
         loadConfiguredUrl();
     }
 
-    /** 运行中会话入口：直接打开服务器列表的"活跃会话"页签。 */
+    /** 活跃会话入口：直接打开服务器列表的"活跃会话"页签。 */
     private void showBusySessions() {
         showServerList(true);
+    }
+
+    /** 过滤掉默认的占位会话标题，避免在卡片里展示无意义的文字。 */
+    private boolean isMeaningfulSessionTitle(String title) {
+        if (title == null) return false;
+        String trimmed = title.trim();
+        if (trimmed.isEmpty()) return false;
+        return !"会话".equals(trimmed)
+                && !"点击查看会话".equals(trimmed)
+                && !"点击查看 Kimi 会话".equals(trimmed)
+                && !"New Session".equals(trimmed);
     }
 
     private void openSession(String serverId, String sessionId) {
