@@ -10,7 +10,6 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.BitmapFactory;
-import android.graphics.drawable.Icon;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -116,19 +115,11 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
         PendingIntent open = PendingIntent.getActivity(this, 1,
                 new Intent(this, MainActivity.class),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        PendingIntent settings = PendingIntent.getActivity(this, 3,
-                new Intent(this, MainActivity.class)
-                        .putExtra(MainActivity.EXTRA_SHOW_CONFIG, true)
-                        .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP),
-                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification.Builder builder = new Notification.Builder(this, SERVICE_CHANNEL)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.mipmap.ic_launcher))
                 .setContentTitle("AgentPocket 后台监听").setContentText(text).setOngoing(true)
-                .setContentIntent(open)
-                .addAction(new Notification.Action.Builder(
-                        Icon.createWithResource(this, R.mipmap.ic_launcher),
-                        "服务器", settings).build());
+                .setContentIntent(open);
         if (sessions != null && !sessions.isEmpty()) {
             Notification.InboxStyle style = new Notification.InboxStyle()
                     .setBigContentTitle(text);
