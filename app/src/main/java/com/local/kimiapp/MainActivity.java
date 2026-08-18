@@ -6,6 +6,8 @@ import android.app.AlertDialog;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.DownloadManager;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -79,6 +81,8 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+
+import org.json.JSONArray;
 
 public class MainActivity extends Activity {
     public static volatile boolean isVisible = false;
@@ -619,6 +623,20 @@ public class MainActivity extends Activity {
         refresh.setBackground(new RippleDrawable(
                 ColorStateList.valueOf(Color.argb(30, 78, 88, 105)), refreshBackground, null));
 
+        Button copy = new Button(this);
+        copy.setText("复制配置");
+        copy.setTextSize(14);
+        copy.setTextColor(Color.rgb(78, 88, 105));
+        copy.setAllCaps(false);
+        copy.setElevation(0);
+        copy.setStateListAnimator(null);
+        GradientDrawable copyBackground = new GradientDrawable();
+        copyBackground.setColor(Color.rgb(245, 247, 250));
+        copyBackground.setCornerRadius(dp(14));
+        copyBackground.setStroke(dp(1), Color.rgb(217, 222, 231));
+        copy.setBackground(new RippleDrawable(
+                ColorStateList.valueOf(Color.argb(30, 78, 88, 105)), copyBackground, null));
+
         Button add = new Button(this);
         add.setText("＋  添加服务器");
         add.setTextSize(14);
@@ -632,6 +650,9 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(0, dp(50), 1);
         refreshParams.setMargins(0, 0, dp(5), 0);
         actions.addView(refresh, refreshParams);
+        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(0, dp(50), 1);
+        copyParams.setMargins(dp(5), 0, dp(5), 0);
+        actions.addView(copy, copyParams);
         LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(0, dp(50), 1);
         addParams.setMargins(dp(5), 0, 0, 0);
         actions.addView(add, addParams);
@@ -640,8 +661,21 @@ public class MainActivity extends Activity {
             dialog.dismiss();
             if (webView != null) webView.reload();
         });
+        copy.setOnClickListener(v -> { dialog.dismiss(); copyServerConfig(); });
         add.setOnClickListener(v -> { dialog.dismiss(); showConfig(false, null, true); });
         showModernDialog(dialog, null);
+    }
+
+    /** 把全部服务器配置序列化为 JSON 数组并复制到系统剪贴板（格式与 ServerStore 存储一致，桌面端可直接导入）。 */
+    private void copyServerConfig() {
+        List<ServerStore.Server> servers = ServerStore.load(this);
+        JSONArray items = new JSONArray();
+        for (ServerStore.Server server : servers) try {
+            items.put(server.json());
+        } catch (Exception ignored) {}
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        clipboard.setPrimaryClip(ClipData.newPlainText("服务器配置", items.toString()));
+        Toast.makeText(this, "配置已复制到剪贴板（含 API 凭据，注意安全）", Toast.LENGTH_LONG).show();
     }
 
     /** 服务器后端类型图标：dsh 用鲸鱼 logo，Kimi 用官方 logo。 */
