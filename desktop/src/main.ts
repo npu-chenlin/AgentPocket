@@ -34,14 +34,6 @@ if (!app) {
 
 app.innerHTML = `
   <div class="app-shell">
-    <header class="hero">
-      <div>
-        <p class="eyebrow">AGENT CONTROL CENTER</p>
-        <h1>AgentPocket</h1>
-        <p class="hero__copy">安静驻留，集中监听每一台 Kimi 与 dsh 服务器。</p>
-      </div>
-    </header>
-
     <div id="app-message" class="app-message" role="status" aria-live="polite"></div>
 
     <main class="content-grid">

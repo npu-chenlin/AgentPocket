@@ -48,15 +48,6 @@ input:disabled {
   padding: 34px clamp(22px, 5vw, 54px) 48px;
 }
 
-.hero {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 22px;
-}
-
-.eyebrow,
 .section-kicker {
   margin: 0 0 6px;
   color: #2b7669;
@@ -65,31 +56,15 @@ input:disabled {
   letter-spacing: 0.17em;
 }
 
-h1,
 h2,
 p {
   margin-top: 0;
-}
-
-h1 {
-  margin-bottom: 6px;
-  font-family: Georgia, "Noto Serif SC", serif;
-  font-size: clamp(2.15rem, 7vw, 3.7rem);
-  font-weight: 500;
-  letter-spacing: -0.05em;
-  line-height: 0.96;
 }
 
 h2 {
   margin-bottom: 0;
   font-size: 1.15rem;
   letter-spacing: -0.02em;
-}
-
-.hero__copy {
-  margin: 0;
-  color: #64706d;
-  font-size: 0.92rem;
 }
 
 .primary-button,
@@ -588,10 +563,6 @@ input[role="switch"]:checked::after {
 
   .app-shell {
     padding: 25px 16px 36px;
-  }
-
-  .hero {
-    align-items: flex-start;
   }
 
   .side-column,
