@@ -482,7 +482,7 @@ async fn update_autostart<R: tauri::Runtime>(
     Ok(())
 }
 
-async fn sync_monitors(state: &Arc<AppState>) -> Result<(), CommandError> {
+pub(crate) async fn sync_monitors(state: &Arc<AppState>) -> Result<(), CommandError> {
     let servers = {
         let config = state
             .config

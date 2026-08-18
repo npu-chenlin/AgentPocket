@@ -23,6 +23,15 @@ pub mod tray;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 单实例：重复启动时把已有窗口唤到前台，而不是再开一个进程。
+        // 需在其他插件之前注册。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--hidden"]),
@@ -57,6 +66,13 @@ pub fn run() {
                     monitor_started_at,
                 )
                 .await;
+            });
+
+            // 启动时按已加载的配置拉起所有监控任务；否则状态表一直为空，
+            // 界面上所有服务器都会显示“离线”，直到首次手动重连或改配置。
+            let state_for_initial_sync = Arc::clone(&state);
+            tauri::async_runtime::spawn(async move {
+                let _ = commands::sync_monitors(&state_for_initial_sync).await;
             });
 
             // Install the tray icon before showing the main window so the tray

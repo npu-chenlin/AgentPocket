@@ -33,54 +33,64 @@ if (!app) {
 
 app.innerHTML = `
   <div class="app-shell">
-    <div id="app-message" class="app-message" role="status" aria-live="polite"></div>
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">⌁</span>
+        <div class="brand-copy">
+          <h1>AgentPocket</h1>
+          <p>编码 Agent 桌面伴侣</p>
+        </div>
+      </div>
+      <nav class="header-actions" aria-label="全局操作">
+        <button id="paste-import" class="ghost-button" type="button">导入</button>
+        <button class="ghost-button" type="button" data-export-format="android">导出</button>
+        <button id="open-settings" class="ghost-button" type="button">设置</button>
+      </nav>
+    </header>
 
-    <main class="content-grid">
-      <section class="panel servers-panel" aria-labelledby="servers-title">
+    <main class="content">
+      <section class="servers-section" aria-labelledby="servers-title">
         <div class="section-heading">
-          <div>
-            <p class="section-kicker">SERVERS</p>
-            <h2 id="servers-title">服务器</h2>
-          </div>
-          <div class="panel-toolbar" aria-label="服务器操作">
-            <button id="add-server" class="primary-button" type="button">添加服务器</button>
-            <button id="paste-import" class="secondary-button" type="button">粘贴导入</button>
-            <button class="secondary-button" type="button" data-export-format="android">导出服务器列表</button>
-            <button id="reconnect-all" class="secondary-button" type="button">全部重连</button>
-          </div>
+          <h2 id="servers-title">服务器</h2>
+          <button id="add-server" class="primary-button" type="button">添加服务器</button>
         </div>
         <div id="server-list" class="server-list" aria-live="polite"></div>
       </section>
-
-      <aside class="side-column">
-        <section class="panel settings-panel" aria-labelledby="settings-title">
-          <div class="section-heading section-heading--compact">
-            <div>
-              <p class="section-kicker">PREFERENCES</p>
-              <h2 id="settings-title">设置</h2>
-            </div>
-          </div>
-          <label class="setting-row">
-            <span><strong>开机启动</strong><small>登录系统后自动启动托盘</small></span>
-            <input type="checkbox" role="switch" data-setting="autostart" />
-          </label>
-          <label class="setting-row">
-            <span><strong>启动时隐藏</strong><small>直接在系统托盘中运行</small></span>
-            <input type="checkbox" role="switch" data-setting="startHidden" />
-          </label>
-          <label class="setting-row">
-            <span><strong>系统通知</strong><small>仅通知完成、失败、审批和提问</small></span>
-            <input type="checkbox" role="switch" data-setting="notifications" />
-          </label>
-        </section>
-      </aside>
     </main>
+
+    <div id="toast-root" class="toast-root" aria-live="polite"></div>
   </div>
+
+  <dialog id="settings-dialog" class="modal modal--small">
+    <div class="modal__heading">
+      <h2>设置</h2>
+      <button class="modal__close" type="button" data-close-dialog="settings-dialog" aria-label="关闭">×</button>
+    </div>
+    <div class="settings-body">
+      <label class="setting-row">
+        <span><strong>开机启动</strong><small>登录系统后自动启动托盘</small></span>
+        <input type="checkbox" role="switch" data-setting="autostart" />
+      </label>
+      <label class="setting-row">
+        <span><strong>启动时隐藏</strong><small>直接在系统托盘中运行</small></span>
+        <input type="checkbox" role="switch" data-setting="startHidden" />
+      </label>
+      <label class="setting-row">
+        <span><strong>系统通知</strong><small>仅通知完成、失败、审批和提问</small></span>
+        <input type="checkbox" role="switch" data-setting="notifications" />
+      </label>
+    </div>
+    <div class="modal__actions">
+      <button id="reconnect-all" class="secondary-button" type="button">重新连接所有服务器</button>
+      <span class="modal__spacer"></span>
+      <button class="text-button" type="button" data-close-dialog="settings-dialog">完成</button>
+    </div>
+  </dialog>
 
   <dialog id="server-dialog" class="modal">
     <form id="server-form" method="dialog" novalidate>
       <div class="modal__heading">
-        <div><p class="section-kicker">CONNECTION</p><h2 id="server-dialog-title">添加服务器</h2></div>
+        <h2 id="server-dialog-title">添加服务器</h2>
         <button class="modal__close" type="button" data-close-dialog="server-dialog" aria-label="关闭">×</button>
       </div>
       <input type="hidden" name="id" />
@@ -103,7 +113,7 @@ app.innerHTML = `
 
   <dialog id="import-dialog" class="modal modal--small">
     <form id="import-form" method="dialog">
-      <div class="modal__heading"><div><p class="section-kicker">IMPORT</p><h2>确认导入</h2></div></div>
+      <div class="modal__heading"><h2>确认导入</h2></div>
       <p id="import-summary" class="modal__summary"></p>
       <ul id="import-issues" class="issue-list"></ul>
       <fieldset class="mode-picker">
@@ -123,7 +133,7 @@ app.innerHTML = `
   <dialog id="paste-dialog" class="modal modal--small">
     <form id="paste-form" method="dialog">
       <div class="modal__heading">
-        <div><p class="section-kicker">PASTE</p><h2>粘贴导入</h2></div>
+        <h2>粘贴导入</h2>
         <button class="modal__close" type="button" data-close-dialog="paste-dialog" aria-label="关闭">×</button>
       </div>
       <p class="modal__summary">把复制好的 JSON 配置粘贴到下方（Android 服务器数组或完整桌面配置均可）。</p>
@@ -139,7 +149,7 @@ app.innerHTML = `
 
   <dialog id="export-dialog" class="modal">
     <div class="modal__heading">
-      <div><p class="section-kicker">EXPORT</p><h2>导出配置</h2></div>
+      <h2>导出配置</h2>
       <button class="modal__close" type="button" data-close-dialog="export-dialog" aria-label="关闭">×</button>
     </div>
     <p class="credential-warning">${CREDENTIAL_WARNING}</p>
@@ -160,7 +170,8 @@ function requiredElement<T extends Element>(selector: string): T {
 }
 
 const serverList = requiredElement<HTMLElement>("#server-list");
-const message = requiredElement<HTMLElement>("#app-message");
+const toastRoot = requiredElement<HTMLElement>("#toast-root");
+const settingsDialog = requiredElement<HTMLDialogElement>("#settings-dialog");
 const serverDialog = requiredElement<HTMLDialogElement>("#server-dialog");
 const serverForm = requiredElement<HTMLFormElement>("#server-form");
 const importDialog = requiredElement<HTMLDialogElement>("#import-dialog");
@@ -179,9 +190,19 @@ let pendingImport: ImportPreview | null = null;
 let pendingExportFormat: ExportFormat = "full";
 let unlistenState: UnlistenFn | undefined;
 
+/** 以浮动 Toast 提示操作结果；空文本视为清除，直接忽略。 */
 function setMessage(text: string, kind: "info" | "error" | "success" = "info"): void {
-  message.textContent = text;
-  message.dataset.kind = text ? kind : "";
+  if (!text) return;
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.dataset.kind = kind;
+  toast.textContent = text;
+  toastRoot.appendChild(toast);
+  const lifetime = kind === "error" ? 5200 : 3200;
+  window.setTimeout(() => {
+    toast.classList.add("toast--leaving");
+    toast.addEventListener("transitionend", () => toast.remove(), { once: true });
+  }, lifetime);
 }
 
 function errorMessage(error: unknown): string {
@@ -293,6 +314,10 @@ serverList.addEventListener("click", async (event) => {
 
 requiredElement<HTMLButtonElement>("#add-server").addEventListener("click", () => {
   showServerDialog(emptyServerDraft(), "添加服务器");
+});
+
+requiredElement<HTMLButtonElement>("#open-settings").addEventListener("click", () => {
+  settingsDialog.showModal();
 });
 
 serverForm.addEventListener("submit", async (event) => {

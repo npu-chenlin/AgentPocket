@@ -13,10 +13,14 @@ export function escapeHtml(value: string): string {
   });
 }
 
-function backendLogo(backend: Backend, connected: boolean): string {
+function backendMark(backend: Backend, connected: boolean): string {
   const label = backend === "kimi" ? "Kimi" : "dsh";
   const mark = backend === "kimi" ? "K" : "🐋";
-  return `<span class="backend-logo backend-logo--${backend}${connected ? "" : " backend-logo--offline"}" data-backend="${backend}" aria-label="${label}">${mark}</span>`;
+  return `
+    <span class="server-badge">
+      <span class="backend-logo backend-logo--${backend}${connected ? "" : " backend-logo--offline"}" data-backend="${backend}" aria-label="${label}">${mark}</span>
+      <span class="status-dot${connected ? " status-dot--online" : ""}" aria-hidden="true"></span>
+    </span>`;
 }
 
 function statusLabel(status: ServerStatus | undefined): string {
@@ -38,19 +42,23 @@ function renderServerCard(server: ServerSummary, status: ServerStatus | undefine
   return `
     <article class="server-card${connected ? "" : " server-card--offline"}" data-server-id="${id}">
       <button class="server-open" type="button" data-action="open" data-id="${id}" aria-label="在浏览器中打开 ${name}">
-        ${backendLogo(server.backend, connected)}
+        ${backendMark(server.backend, connected)}
         <span class="server-copy">
           <span class="server-title-row">
             <strong>${name}</strong>
           </span>
-          <span class="server-address">${address}</span>
-          <span class="server-status${connected ? " server-status--online" : ""}">${statusLabel(status)}</span>
+          <span class="server-meta">
+            <span class="server-address">${address}</span>
+            <span class="server-meta-sep" aria-hidden="true">·</span>
+            <span class="server-status${connected ? " server-status--online" : ""}">${statusLabel(status)}</span>
+          </span>
         </span>
       </button>
       <div class="server-actions" aria-label="${name} 操作">
         <button class="icon-button" type="button" data-action="edit" data-id="${id}" aria-label="编辑 ${name}">编辑</button>
         <button class="icon-button icon-button--danger" type="button" data-action="delete" data-id="${id}" aria-label="删除 ${name}">删除</button>
       </div>
+      <span class="server-open-hint" aria-hidden="true">↗</span>
     </article>`;
 }
 
