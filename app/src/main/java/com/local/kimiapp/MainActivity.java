@@ -27,6 +27,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -780,6 +781,8 @@ public class MainActivity extends Activity {
                 titleView.setText(title);
                 titleView.setTextSize(16);
                 titleView.setTextColor(Color.rgb(28, 34, 45));
+                titleView.setSingleLine(true);
+                titleView.setEllipsize(TextUtils.TruncateAt.END);
                 text.addView(titleView);
             }
             TextView sub = new TextView(this);
@@ -798,7 +801,8 @@ public class MainActivity extends Activity {
             final String targetSessionId = sessionId;
             card.setOnClickListener(v -> { dialog.dismiss(); openSession(targetServerId, targetSessionId); });
 
-            LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, dp(72));
+            card.setMinimumHeight(dp(72));
+            LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, -2);
             cardParams.setMargins(0, 0, 0, dp(10));
             cards.addView(card, cardParams);
         }
