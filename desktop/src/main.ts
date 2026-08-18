@@ -43,13 +43,13 @@ app.innerHTML = `
             <p class="section-kicker">SERVERS</p>
             <h2 id="servers-title">服务器</h2>
           </div>
-          <button id="reconnect-all" class="secondary-button" type="button">全部重连</button>
-        </div>
-        <div class="panel-toolbar" aria-label="服务器操作">
-          <button id="add-server" class="primary-button" type="button">添加服务器</button>
-          <button id="import-config" class="secondary-button" type="button">导入 JSON 文件</button>
-          <button id="paste-import" class="secondary-button" type="button">粘贴导入</button>
-          <button class="secondary-button" type="button" data-export-format="android">导出服务器列表</button>
+          <div class="panel-toolbar" aria-label="服务器操作">
+            <button id="add-server" class="primary-button" type="button">添加服务器</button>
+            <button id="import-config" class="secondary-button" type="button">导入 JSON 文件</button>
+            <button id="paste-import" class="secondary-button" type="button">粘贴导入</button>
+            <button class="secondary-button" type="button" data-export-format="android">导出服务器列表</button>
+            <button id="reconnect-all" class="secondary-button" type="button">全部重连</button>
+          </div>
         </div>
         <div id="server-list" class="server-list" aria-live="polite"></div>
       </section>
