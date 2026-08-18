@@ -3,12 +3,12 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder};
+use tauri::menu::{CheckMenuItemBuilder, MenuBuilder};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::commands::{mutate_config, AppState};
-use crate::model::{AppConfig, Backend, ServerStatus};
+use crate::model::{AppConfig, ServerStatus};
 use crate::opener::open_saved_server;
 
 const TRAY_ID: &str = "main-tray";
@@ -20,51 +20,26 @@ const TRAY_ID: &str = "main-tray";
 /// running app.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TrayItemKind {
-    Server {
-        id: String,
-        name: String,
-        backend: Backend,
-        connected: bool,
-    },
-    OpenActive {
-        enabled: bool,
-    },
     Manage,
-    Reconnect {
-        running_count: u32,
-    },
-    Autostart {
-        checked: bool,
-    },
+    Reconnect { running_count: u32 },
+    Autostart { checked: bool },
     Quit,
-    Separator,
 }
 
 impl TrayItemKind {
     /// Stable ID used for both the plan and the built menu item.
     pub fn id(&self) -> String {
         match self {
-            TrayItemKind::Server { id, .. } => format!("server:{id}"),
-            TrayItemKind::OpenActive { .. } => "open-active".to_string(),
             TrayItemKind::Manage => "manage".to_string(),
             TrayItemKind::Reconnect { .. } => "reconnect".to_string(),
             TrayItemKind::Autostart { .. } => "autostart".to_string(),
             TrayItemKind::Quit => "quit".to_string(),
-            TrayItemKind::Separator => String::new(),
         }
     }
 
     /// Human-readable label for the entry.
-    pub fn text(&self, _config: &AppConfig, _statuses: &HashMap<String, ServerStatus>) -> String {
+    pub fn text(&self) -> String {
         match self {
-            TrayItemKind::Server { name, .. } => name.clone(),
-            TrayItemKind::OpenActive { enabled } => {
-                if *enabled {
-                    "打开当前服务".to_string()
-                } else {
-                    "打开当前服务 (未选择)".to_string()
-                }
-            }
             TrayItemKind::Manage => "管理窗口".to_string(),
             TrayItemKind::Reconnect { running_count } => {
                 if *running_count == 0 {
@@ -75,53 +50,25 @@ impl TrayItemKind {
             }
             TrayItemKind::Autostart { .. } => "开机启动".to_string(),
             TrayItemKind::Quit => "退出".to_string(),
-            TrayItemKind::Separator => String::new(),
         }
     }
 }
 
-/// Build a deterministic menu plan from the current config and statuses.
-///
-/// Order: one icon item per server, then open-active, manage, reconnect,
-/// autostart and quit.
+/// Build a deterministic tray menu plan: keep it short, per-server entries
+/// live in the management window instead.
 pub fn build_menu_plan(
     config: &AppConfig,
     statuses: &HashMap<String, ServerStatus>,
 ) -> Vec<TrayItemKind> {
-    let mut plan = Vec::new();
-
-    for server in &config.servers {
-        let connected = statuses
-            .get(&server.id)
-            .map(|s| s.connected)
-            .unwrap_or(false);
-        plan.push(TrayItemKind::Server {
-            id: server.id.clone(),
-            name: server.name.clone(),
-            backend: server.backend,
-            connected,
-        });
-    }
-
-    let active_enabled = config
-        .active_id
-        .as_ref()
-        .map(|id| config.servers.iter().any(|s| &s.id == id))
-        .unwrap_or(false);
-    plan.push(TrayItemKind::OpenActive {
-        enabled: active_enabled,
-    });
-    plan.push(TrayItemKind::Manage);
-
     let running_count = statuses.values().map(|s| s.active_count).sum();
-    plan.push(TrayItemKind::Reconnect { running_count });
-
-    plan.push(TrayItemKind::Autostart {
-        checked: config.settings.autostart,
-    });
-    plan.push(TrayItemKind::Quit);
-
-    plan
+    vec![
+        TrayItemKind::Manage,
+        TrayItemKind::Reconnect { running_count },
+        TrayItemKind::Autostart {
+            checked: config.settings.autostart,
+        },
+        TrayItemKind::Quit,
+    ]
 }
 
 /// Tooltip summarizing connected servers and running tasks.
@@ -198,38 +145,18 @@ impl<R: Runtime> TrayController<R> {
         let mut builder = MenuBuilder::new(&self.app_handle);
         for item in plan {
             builder = match item {
-                TrayItemKind::Server {
-                    id,
-                    name,
-                    backend,
-                    connected,
-                } => {
-                    let icon = server_icon(backend, connected);
-                    builder.icon(format!("server:{id}"), name, icon)
-                }
-                TrayItemKind::OpenActive { enabled } => {
-                    let label = TrayItemKind::OpenActive { enabled }.text(&config, &statuses);
-                    MenuItemBuilder::with_id("open-active", label)
-                        .enabled(enabled)
-                        .build(&self.app_handle)
-                        .map(|i| builder.item(&i))?
-                }
-                TrayItemKind::Manage => {
-                    let label = TrayItemKind::Manage.text(&config, &statuses);
-                    builder.text("manage", label)
-                }
-                TrayItemKind::Reconnect { running_count } => {
-                    let label = TrayItemKind::Reconnect { running_count }.text(&config, &statuses);
-                    builder.text("reconnect", label)
-                }
+                TrayItemKind::Manage => builder.text("manage", TrayItemKind::Manage.text()),
+                TrayItemKind::Reconnect { running_count } => builder.text(
+                    "reconnect",
+                    TrayItemKind::Reconnect { running_count }.text(),
+                ),
                 TrayItemKind::Autostart { checked } => {
                     let item = CheckMenuItemBuilder::with_id("autostart", "开机启动")
                         .checked(checked)
                         .build(&self.app_handle)?;
                     builder.item(&item)
                 }
-                TrayItemKind::Quit => builder.text("quit", "退出"),
-                TrayItemKind::Separator => builder.separator(),
+                TrayItemKind::Quit => builder.text("quit", TrayItemKind::Quit.text()),
             };
         }
 
@@ -256,19 +183,6 @@ fn tooltip_text(state: &AppState) -> String {
     tooltip(&statuses, config.servers.len())
 }
 
-fn server_icon(backend: Backend, connected: bool) -> tauri::image::Image<'static> {
-    tauri::image::Image::from_bytes(server_icon_bytes(backend, connected))
-        .expect("embedded server icon decodes")
-}
-
-fn server_icon_bytes(backend: Backend, connected: bool) -> &'static [u8] {
-    match (backend, connected) {
-        (Backend::Kimi, true) => include_bytes!("../icons/backend-kimi.png"),
-        (Backend::Dsh, true) => include_bytes!("../icons/backend-dsh.png"),
-        (_, false) => include_bytes!("../icons/backend-offline.png"),
-    }
-}
-
 fn tray_icon_image() -> tauri::image::Image<'static> {
     tauri::image::Image::from_bytes(include_bytes!("../icons/backend-offline.png"))
         .expect("embedded tray icon decodes")
@@ -276,25 +190,6 @@ fn tray_icon_image() -> tauri::image::Image<'static> {
 
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, state: &Arc<AppState>, id: String) {
     match id.as_str() {
-        id_str if id_str.starts_with("server:") => {
-            let server_id = &id_str["server:".len()..];
-            let config = state
-                .config
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone();
-            let _ = open_saved_server(app, &config, server_id, None);
-        }
-        "open-active" => {
-            let config = state
-                .config
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone();
-            if let Some(active_id) = &config.active_id {
-                let _ = open_saved_server(app, &config, active_id, None);
-            }
-        }
         "manage" => {
             let _ = show_main_window(app);
         }
@@ -386,62 +281,19 @@ mod tests {
     }
 
     #[test]
-    fn menu_orders_servers_then_actions() {
+    fn menu_orders_actions() {
         let config = sample_config();
         let statuses = HashMap::new();
         let plan = build_menu_plan(&config, &statuses);
 
         let ids: Vec<String> = plan.iter().map(TrayItemKind::id).collect();
-        assert_eq!(
-            ids,
-            vec![
-                "server:s1",
-                "server:s2",
-                "open-active",
-                "manage",
-                "reconnect",
-                "autostart",
-                "quit",
-            ]
-        );
+        assert_eq!(ids, vec!["manage", "reconnect", "autostart", "quit"]);
     }
 
     #[test]
-    fn offline_server_uses_gray_icon_and_running_count_changes_label() {
-        let mut config = AppConfig::default();
-        config.servers.push(ServerConfig::new(
-            "s1",
-            "Work",
-            "host",
-            3080,
-            "t",
-            Backend::Kimi,
-        ));
-
+    fn running_count_changes_reconnect_label() {
+        let config = AppConfig::default();
         let mut statuses = HashMap::new();
-        statuses.insert(
-            "s1".to_string(),
-            ServerStatus {
-                connected: false,
-                ..Default::default()
-            },
-        );
-
-        let plan = build_menu_plan(&config, &statuses);
-        let server_item = plan
-            .iter()
-            .find(|item| item.id() == "server:s1")
-            .expect("server item exists");
-        assert_eq!(
-            *server_item,
-            TrayItemKind::Server {
-                id: "s1".to_string(),
-                name: "Work".to_string(),
-                backend: Backend::Kimi,
-                connected: false,
-            }
-        );
-
         statuses.insert(
             "s1".to_string(),
             ServerStatus {
@@ -450,12 +302,13 @@ mod tests {
                 ..Default::default()
             },
         );
+
         let plan = build_menu_plan(&config, &statuses);
         let reconnect = plan
             .iter()
             .find(|item| item.id() == "reconnect")
             .expect("reconnect item exists");
-        assert!(reconnect.text(&config, &statuses).contains('4'));
+        assert!(reconnect.text().contains('4'));
     }
 
     #[test]

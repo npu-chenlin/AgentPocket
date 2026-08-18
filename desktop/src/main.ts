@@ -40,7 +40,6 @@ app.innerHTML = `
         <h1>AgentPocket</h1>
         <p class="hero__copy">安静驻留，集中监听每一台 Kimi 与 dsh 服务器。</p>
       </div>
-      <button id="add-server" class="primary-button" type="button">添加服务器</button>
     </header>
 
     <div id="app-message" class="app-message" role="status" aria-live="polite"></div>
@@ -78,6 +77,7 @@ app.innerHTML = `
             <input type="checkbox" role="switch" data-setting="notifications" />
           </label>
           <div class="settings-actions">
+            <button id="add-server" class="secondary-button" type="button">添加服务器</button>
             <button id="import-config" class="secondary-button" type="button">导入 JSON 文件</button>
             <button id="paste-import" class="secondary-button" type="button">粘贴导入</button>
             <button class="secondary-button" type="button" data-export-format="android">导出服务器列表</button>
