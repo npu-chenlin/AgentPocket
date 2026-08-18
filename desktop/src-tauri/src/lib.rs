@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use chrono::Utc;
-use tauri::Manager;
+use tauri::{Listener, Manager};
 use tokio::sync::mpsc;
 
 use crate::commands::{run_monitor_coordinator, AppState};
@@ -64,18 +64,18 @@ pub fn run() {
             let controller = TrayController::install(app, Arc::clone(&state))?;
 
             // Listen for rebuild requests from commands/monitor updates.
+            let state_for_rebuild = Arc::clone(&state);
             app.listen("tray-rebuild-requested", move |_| {
-                let state = Arc::clone(&state);
-                let _ = controller.rebuild(state);
+                let _ = controller.rebuild(Arc::clone(&state_for_rebuild));
             });
 
             // Close-to-hide behavior: closing the window only hides it unless
             // the user explicitly chose Quit from the tray menu.
-            if let Some(window) = app.get_window("main") {
+            if let Some(window) = app.get_webview_window("main") {
                 let state_for_close = Arc::clone(&state);
                 let window_for_close = window.clone();
                 window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api } = event {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         if !state_for_close.explicit_exit.load(Ordering::SeqCst) {
                             api.prevent_close();
                             let _ = window_for_close.hide();
@@ -95,7 +95,7 @@ pub fn run() {
                 .start_hidden;
             let hidden_by_arg = std::env::args().any(|arg| arg == "--hidden");
             let show_on_startup = !hidden_by_arg && (tauri::is_dev() || !start_hidden);
-            if let Some(window) = app.get_window("main") {
+            if let Some(window) = app.get_webview_window("main") {
                 if show_on_startup {
                     let _ = window.show();
                 }

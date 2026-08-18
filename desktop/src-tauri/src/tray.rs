@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::commands::{mutate_config, AppState};
 use crate::model::{AppConfig, Backend, ServerStatus};
@@ -83,7 +83,7 @@ impl TrayItemKind {
 /// Build a deterministic menu plan from the current config and statuses.
 ///
 /// Order: one icon item per server, then open-active, manage, reconnect,
-/// autostart and quit, separated by a divider.
+/// autostart and quit.
 pub fn build_menu_plan(
     config: &AppConfig,
     statuses: &HashMap<String, ServerStatus>,
@@ -102,8 +102,6 @@ pub fn build_menu_plan(
             connected,
         });
     }
-
-    plan.push(TrayItemKind::Separator);
 
     let active_enabled = config
         .active_id
@@ -207,7 +205,7 @@ impl<R: Runtime> TrayController<R> {
                     connected,
                 } => {
                     let icon = server_icon(backend, connected);
-                    builder.icon(&format!("server:{id}"), name, icon)
+                    builder.icon(format!("server:{id}"), name, icon)
                 }
                 TrayItemKind::OpenActive { enabled } => {
                     let label = TrayItemKind::OpenActive { enabled }.text(&config, &statuses);
@@ -221,8 +219,7 @@ impl<R: Runtime> TrayController<R> {
                     builder.text("manage", label)
                 }
                 TrayItemKind::Reconnect { running_count } => {
-                    let label =
-                        TrayItemKind::Reconnect { running_count }.text(&config, &statuses);
+                    let label = TrayItemKind::Reconnect { running_count }.text(&config, &statuses);
                     builder.text("reconnect", label)
                 }
                 TrayItemKind::Autostart { checked } => {
@@ -236,7 +233,7 @@ impl<R: Runtime> TrayController<R> {
             };
         }
 
-        Ok(builder.build()?)
+        builder.build()
     }
 }
 
@@ -302,7 +299,6 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, state: &Arc<AppState>, id: 
             let _ = show_main_window(app);
         }
         "reconnect" => {
-            let app = app.clone();
             let state = Arc::clone(state);
             tauri::async_runtime::spawn(async move {
                 let mut monitors = state.monitors.lock().await;
@@ -365,7 +361,7 @@ fn handle_tray_icon_event<R: Runtime>(
 }
 
 fn show_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), tauri::Error> {
-    if let Some(window) = app.get_window("main") {
+    if let Some(window) = app.get_webview_window("main") {
         window.show()?;
         window.unminimize()?;
         window.set_focus()?;
@@ -413,9 +409,14 @@ mod tests {
     #[test]
     fn offline_server_uses_gray_icon_and_running_count_changes_label() {
         let mut config = AppConfig::default();
-        config
-            .servers
-            .push(ServerConfig::new("s1", "Work", "host", 3080, "t", Backend::Kimi));
+        config.servers.push(ServerConfig::new(
+            "s1",
+            "Work",
+            "host",
+            3080,
+            "t",
+            Backend::Kimi,
+        ));
 
         let mut statuses = HashMap::new();
         statuses.insert(

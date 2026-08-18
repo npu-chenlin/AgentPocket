@@ -395,12 +395,13 @@ fn get_server_for_edit_inner(state: &AppState, id: &str) -> Result<ServerForEdit
         .ok_or(CommandError::ServerNotFound)
 }
 
-pub(crate) async fn mutate_config<F>(
+pub(crate) async fn mutate_config<R, F>(
     state: &Arc<AppState>,
-    app: &AppHandle,
+    app: &AppHandle<R>,
     mutate: F,
 ) -> Result<AppView, CommandError>
 where
+    R: tauri::Runtime,
     F: FnOnce(&mut AppConfig),
 {
     let old_config = {
@@ -460,7 +461,10 @@ fn validate_config(config: &AppConfig) -> Result<(), CommandError> {
     Ok(())
 }
 
-async fn update_autostart(app: &AppHandle, enabled: bool) -> Result<(), CommandError> {
+async fn update_autostart<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    enabled: bool,
+) -> Result<(), CommandError> {
     use tauri_plugin_autostart::ManagerExt;
 
     let autolaunch = app.autolaunch();
