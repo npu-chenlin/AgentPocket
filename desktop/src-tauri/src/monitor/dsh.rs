@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use chrono::Utc;
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -125,6 +125,10 @@ async fn read_loop(
     state: &mut ProtocolState,
     token: &CancellationToken,
 ) -> Result<(), MonitorError> {
+    // 定期主动发送 ping，避免服务端/中间设备因空闲断开连接。
+    let mut keepalive = tokio::time::interval(Duration::from_secs(20));
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
         tokio::select! {
             msg = ws_stream.next() => {
@@ -151,6 +155,15 @@ async fn read_loop(
                     }
                     Some(Ok(Message::Frame(_))) => {}
                     Some(Err(e)) => return Err(MonitorError::Ws(e.to_string())),
+                }
+            }
+            _ = keepalive.tick() => {
+                if ws_stream
+                    .send(Message::Ping(Vec::<u8>::new().into()))
+                    .await
+                    .is_err()
+                {
+                    return Err(MonitorError::Ws("keepalive ping failed".to_string()));
                 }
             }
             () = token.cancelled() => {
