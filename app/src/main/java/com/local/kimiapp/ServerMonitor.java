@@ -65,6 +65,7 @@ public abstract class ServerMonitor {
     public boolean isConnected() { return connected; }
     public int getActiveCount() { return activeCount; }
     public String serverId() { return server.id; }
+    public String serverName() { return server.name; }
 
     /** 当前忙碌会话的标题列表，用于常驻摘要通知。默认无。 */
     public List<String> busySessionTitles() { return Collections.emptyList(); }

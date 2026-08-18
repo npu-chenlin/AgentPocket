@@ -171,10 +171,14 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
     private synchronized void updateSummary() {
         int connected = 0, active = 0;
         List<String> busyTitles = new ArrayList<>();
+        boolean multi = monitors.size() > 1;
         for (ServerMonitor m : monitors) {
             if (m.isConnected()) connected++;
             active += m.getActiveCount();
-            busyTitles.addAll(m.busySessionTitles());
+            String prefix = multi ? "[" + m.serverName() + "] " : "";
+            for (String title : m.busySessionTitles()) {
+                busyTitles.add(prefix + title);
+            }
         }
         String text = "已连接 " + connected + "/" + monitors.size()
                 + " 台，监听 " + active + " 个会话";
