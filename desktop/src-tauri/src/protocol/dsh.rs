@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::model::{AgentEvent, AgentEventKind};
-use crate::protocol::{build_event, ProtocolError, ProtocolState};
+use crate::protocol::{build_event, or_uuid, ProtocolError, ProtocolState};
 
 pub fn parse_session_list(body: &str, state: &mut ProtocolState) -> Result<(), ProtocolError> {
     let value: Value = serde_json::from_str(body).map_err(ProtocolError::Json)?;
@@ -109,32 +110,24 @@ pub fn parse_frame(
         }
 
         "approval/requested" => {
-            let key = payload
-                .get("approvalId")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let approval_id = or_uuid(payload.get("approvalId").and_then(|v| v.as_str()));
             Ok(vec![build_event(
                 server_id,
                 session_id,
                 AgentEventKind::ApprovalRequired,
-                key,
+                format!("approval:{}", approval_id),
                 now,
                 state,
             )])
         }
 
         "question/requested" => {
-            let key = msg
-                .get("rpcId")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let rpc_id = or_uuid(msg.get("rpcId").and_then(|v| v.as_str()));
             Ok(vec![build_event(
                 server_id,
                 session_id,
                 AgentEventKind::QuestionRequired,
-                key,
+                format!("question:{}", rpc_id),
                 now,
                 state,
             )])
@@ -181,7 +174,7 @@ fn handle_session_event(
             let key = if seq >= 0 {
                 format!("turn-end:{}", seq)
             } else {
-                "turn-end:unknown".to_string()
+                format!("turn-end:{}", Uuid::new_v4())
             };
 
             let kind = match kind {

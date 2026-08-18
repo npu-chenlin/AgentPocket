@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::model::{AgentEvent, AgentEventKind};
-use crate::protocol::{build_event, ProtocolError, ProtocolState};
+use crate::protocol::{build_event, or_uuid, ProtocolError, ProtocolState};
 
 pub fn parse_frame(
     server_id: &str,
@@ -162,9 +162,9 @@ fn handle_protocol_event(
                         .get("meta")
                         .and_then(|m| m.get("title"))
                         .and_then(|v| v.as_str())
-                        .unwrap_or("Fixture Session");
+                        .unwrap_or("New Session");
                     let title = if title.is_empty() || title == "null" {
-                        "Fixture Session"
+                        "New Session"
                     } else {
                         title
                     };
@@ -222,7 +222,11 @@ fn handle_agent_event(
 }
 
 fn event_key(msg: &Value, prefix: &str) -> String {
-    let epoch = msg.get("epoch").and_then(|v| v.as_str()).unwrap_or("");
+    let epoch = msg
+        .get("epoch")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
     if let Some(seq) = msg.get("seq").and_then(|v| v.as_i64()) {
         if seq >= 0 {
             return format!("{}:{}:{}", prefix, epoch, seq);
@@ -231,7 +235,7 @@ fn event_key(msg: &Value, prefix: &str) -> String {
     format!(
         "{}:{}",
         prefix,
-        msg.get("id").and_then(|v| v.as_str()).unwrap_or("")
+        or_uuid(msg.get("id").and_then(|v| v.as_str()))
     )
 }
 
