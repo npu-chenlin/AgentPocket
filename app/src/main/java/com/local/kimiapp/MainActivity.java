@@ -557,6 +557,10 @@ public class MainActivity extends Activity {
     }
 
     private void showServerList() {
+        showServerList(false);
+    }
+
+    private void showServerList(boolean openSessions) {
         List<ServerStore.Server> servers = ServerStore.load(this);
         String active = ServerStore.activeId(this);
         SharedPreferences health = getSharedPreferences(KeepAliveService.HEALTH_PREFS, MODE_PRIVATE);
@@ -566,13 +570,36 @@ public class MainActivity extends Activity {
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("服务器")
                 .setView(list).setNegativeButton("关闭", null).create();
 
+        LinearLayout tabBar = new LinearLayout(this);
+        tabBar.setOrientation(LinearLayout.HORIZONTAL);
+        Button tabServers = new Button(this);
+        tabServers.setText("服务器");
+        Button tabSessions = new Button(this);
+        tabSessions.setText("活跃会话");
+        for (Button tab : new Button[]{ tabServers, tabSessions }) {
+            tab.setTextSize(14);
+            tab.setAllCaps(false);
+            tab.setElevation(0);
+            tab.setStateListAnimator(null);
+        }
+        tabBar.addView(tabServers, new LinearLayout.LayoutParams(0, dp(46), 1));
+        LinearLayout.LayoutParams tabSessionsParams = new LinearLayout.LayoutParams(0, dp(46), 1);
+        tabSessionsParams.setMargins(dp(8), 0, 0, 0);
+        tabBar.addView(tabSessions, tabSessionsParams);
+        LinearLayout.LayoutParams tabBarParams = new LinearLayout.LayoutParams(-1, dp(46));
+        tabBarParams.setMargins(0, 0, 0, dp(10));
+        list.addView(tabBar, tabBarParams);
+
+        LinearLayout serverPage = new LinearLayout(this);
+        serverPage.setOrientation(LinearLayout.VERTICAL);
+
         RecyclerView recyclerView = new RecyclerView(this);
         recyclerView.setHasFixedSize(true);
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
         List<ServerStore.Server> mutableServers = new ArrayList<>(servers);
         ServerListAdapter adapter = new ServerListAdapter(dialog, mutableServers, active, health);
         recyclerView.setAdapter(adapter);
-        list.addView(recyclerView, new LinearLayout.LayoutParams(-1, -2));
+        serverPage.addView(recyclerView, new LinearLayout.LayoutParams(-1, -2));
 
         ItemTouchHelper.Callback callback = new ItemTouchHelper.SimpleCallback(
                 ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0) {
@@ -643,31 +670,140 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(0, dp(50), 1);
         addParams.setMargins(dp(5), 0, 0, 0);
         actions.addView(add, addParams);
-        Button sessions = new Button(this);
-        sessions.setText("运行中的会话");
-        sessions.setTextSize(14);
-        sessions.setTextColor(Color.rgb(78, 88, 105));
-        sessions.setAllCaps(false);
-        sessions.setElevation(0);
-        sessions.setStateListAnimator(null);
-        GradientDrawable sessionsBackground = new GradientDrawable();
-        sessionsBackground.setColor(Color.rgb(245, 247, 250));
-        sessionsBackground.setCornerRadius(dp(14));
-        sessionsBackground.setStroke(dp(1), Color.rgb(217, 222, 231));
-        sessions.setBackground(new RippleDrawable(
-                ColorStateList.valueOf(Color.argb(30, 78, 88, 105)), sessionsBackground, null));
-        LinearLayout.LayoutParams sessionsParams = new LinearLayout.LayoutParams(-1, dp(50));
-        sessionsParams.setMargins(0, 0, 0, dp(8));
-        list.addView(sessions, sessionsParams);
-        sessions.setOnClickListener(v -> { dialog.dismiss(); showBusySessions(); });
-        list.addView(actions, new LinearLayout.LayoutParams(-1, dp(50)));
+        serverPage.addView(actions, new LinearLayout.LayoutParams(-1, dp(50)));
         refresh.setOnClickListener(v -> {
             dialog.dismiss();
             if (webView != null) webView.reload();
         });
         copy.setOnClickListener(v -> { dialog.dismiss(); copyServerConfig(); });
         add.setOnClickListener(v -> { dialog.dismiss(); showConfig(false, null, true); });
+
+        LinearLayout sessionsPage = buildSessionsPage(dialog);
+
+        list.addView(serverPage, new LinearLayout.LayoutParams(-1, -2));
+        list.addView(sessionsPage, new LinearLayout.LayoutParams(-1, -2));
+
+        Runnable selectServers = () -> {
+            styleTab(tabServers, true);
+            styleTab(tabSessions, false);
+            serverPage.setVisibility(View.VISIBLE);
+            sessionsPage.setVisibility(View.GONE);
+        };
+        Runnable selectSessions = () -> {
+            styleTab(tabServers, false);
+            styleTab(tabSessions, true);
+            serverPage.setVisibility(View.GONE);
+            sessionsPage.setVisibility(View.VISIBLE);
+        };
+        tabServers.setOnClickListener(v -> selectServers.run());
+        tabSessions.setOnClickListener(v -> selectSessions.run());
+        if (openSessions) selectSessions.run(); else selectServers.run();
+
         showModernDialog(dialog, null);
+    }
+
+    private void styleTab(Button tab, boolean selected) {
+        GradientDrawable background = new GradientDrawable();
+        background.setCornerRadius(dp(14));
+        if (selected) {
+            background.setColor(Color.rgb(238, 245, 255));
+            background.setStroke(dp(1), Color.rgb(143, 187, 248));
+            tab.setTextColor(Color.rgb(25, 112, 238));
+        } else {
+            background.setColor(Color.rgb(245, 247, 250));
+            background.setStroke(dp(1), Color.rgb(217, 222, 231));
+            tab.setTextColor(Color.rgb(78, 88, 105));
+        }
+        tab.setBackground(new RippleDrawable(
+                ColorStateList.valueOf(Color.argb(30, 25, 112, 238)), background, null));
+    }
+
+    /** 活跃会话页：与服务器卡片同款样式，点击跳转到对应会话。 */
+    private LinearLayout buildSessionsPage(AlertDialog dialog) {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        JSONArray sessions;
+        try {
+            sessions = new JSONArray(getSharedPreferences(KeepAliveService.HEALTH_PREFS, MODE_PRIVATE)
+                    .getString("busy_sessions", "[]"));
+        } catch (Exception e) {
+            sessions = new JSONArray();
+        }
+        List<ServerStore.Server> servers = ServerStore.load(this);
+        boolean multi = servers.size() > 1;
+
+        if (sessions.length() == 0) {
+            TextView empty = new TextView(this);
+            empty.setText("暂无运行中的会话");
+            empty.setTextSize(14);
+            empty.setTextColor(Color.rgb(112, 120, 135));
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(0, dp(24), 0, dp(24));
+            page.addView(empty, new LinearLayout.LayoutParams(-1, -2));
+            return page;
+        }
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout cards = new LinearLayout(this);
+        cards.setOrientation(LinearLayout.VERTICAL);
+        for (int i = 0; i < sessions.length(); i++) {
+            JSONObject o = sessions.optJSONObject(i);
+            if (o == null) continue;
+            String serverId = o.optString("serverId");
+            String sessionId = o.optString("sessionId");
+            String title = o.optString("title", "");
+            String serverName = o.optString("serverName", "");
+            ServerStore.Server server = null;
+            for (ServerStore.Server s : servers) {
+                if (s.id.equals(serverId)) { server = s; break; }
+            }
+
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.HORIZONTAL);
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setPadding(dp(9), dp(12), dp(14), dp(12));
+            GradientDrawable cardBackground = new GradientDrawable();
+            cardBackground.setColor(Color.rgb(248, 249, 252));
+            cardBackground.setCornerRadius(dp(15));
+            cardBackground.setStroke(dp(1), Color.rgb(226, 229, 236));
+            card.setBackground(new RippleDrawable(
+                    ColorStateList.valueOf(Color.argb(28, 25, 112, 238)), cardBackground, null));
+
+            ImageView icon = backendIconView(server != null ? server.backend : ServerStore.Server.BACKEND_KIMI);
+            LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(26), dp(26));
+            logoParams.setMargins(0, 0, dp(8), 0);
+            card.addView(icon, logoParams);
+
+            LinearLayout text = new LinearLayout(this);
+            text.setOrientation(LinearLayout.VERTICAL);
+            TextView titleView = new TextView(this);
+            titleView.setText(title.isEmpty() ? "会话" : title);
+            titleView.setTextSize(16);
+            titleView.setTextColor(Color.rgb(28, 34, 45));
+            TextView sub = new TextView(this);
+            String subText = server != null ? server.host + ":" + server.port : "";
+            if (multi && !serverName.isEmpty()) {
+                subText = serverName + (subText.isEmpty() ? "" : " · " + subText);
+            }
+            sub.setText(subText);
+            sub.setTextSize(13);
+            sub.setTextColor(Color.rgb(112, 120, 135));
+            sub.setPadding(0, dp(3), 0, 0);
+            text.addView(titleView);
+            text.addView(sub);
+            card.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
+
+            final String targetServerId = serverId;
+            final String targetSessionId = sessionId;
+            card.setOnClickListener(v -> { dialog.dismiss(); openSession(targetServerId, targetSessionId); });
+
+            LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, dp(72));
+            cardParams.setMargins(0, 0, 0, dp(10));
+            cards.addView(card, cardParams);
+        }
+        scroll.addView(cards, new ViewGroup.LayoutParams(-1, -2));
+        page.addView(scroll, new LinearLayout.LayoutParams(-1, -2));
+        return page;
     }
 
     private class ServerListAdapter extends RecyclerView.Adapter<ServerListAdapter.ViewHolder> {
@@ -845,36 +981,9 @@ public class MainActivity extends Activity {
         loadConfiguredUrl();
     }
 
-    /** 运行中会话选择：数据来自后台监听写入的 busy_sessions。 */
+    /** 运行中会话入口：直接打开服务器列表的"活跃会话"页签。 */
     private void showBusySessions() {
-        SharedPreferences health = getSharedPreferences(KeepAliveService.HEALTH_PREFS, MODE_PRIVATE);
-        JSONArray parsed;
-        try {
-            parsed = new JSONArray(health.getString("busy_sessions", "[]"));
-        } catch (Exception e) {
-            parsed = new JSONArray();
-        }
-        final JSONArray sessions = parsed;
-        if (sessions.length() == 0) {
-            showServerList();
-            return;
-        }
-        boolean multi = ServerStore.load(this).size() > 1;
-        String[] labels = new String[sessions.length()];
-        for (int i = 0; i < sessions.length(); i++) {
-            JSONObject o = sessions.optJSONObject(i);
-            String title = o != null ? o.optString("title", "") : "";
-            String serverName = o != null ? o.optString("serverName", "") : "";
-            String label = title.isEmpty() ? "会话" : title;
-            labels[i] = (multi && !serverName.isEmpty() ? "[" + serverName + "] " : "") + label;
-        }
-        new AlertDialog.Builder(this).setTitle("运行中的会话")
-                .setItems(labels, (d, which) -> {
-                    JSONObject o = sessions.optJSONObject(which);
-                    if (o != null) openSession(o.optString("serverId"), o.optString("sessionId"));
-                })
-                .setNegativeButton("关闭", null)
-                .show();
+        showServerList(true);
     }
 
     private void openSession(String serverId, String sessionId) {
