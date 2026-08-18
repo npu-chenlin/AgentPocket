@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
@@ -126,6 +127,34 @@ impl From<&ServerConfig> for ServerSummary {
             backend: server.backend,
         }
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerStatus {
+    pub connected: bool,
+    pub active_count: u32,
+    pub last_checked_at: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentEventKind {
+    Completed,
+    Failed,
+    ApprovalRequired,
+    QuestionRequired,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentEvent {
+    pub server_id: String,
+    pub session_id: Option<String>,
+    pub session_title: Option<String>,
+    pub kind: AgentEventKind,
+    pub event_key: String,
+    pub body: Option<String>,
+    pub occurred_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Error)]

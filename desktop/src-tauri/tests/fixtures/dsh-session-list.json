@@ -1,0 +1,27 @@
+{
+  "result": {
+    "ok": true,
+    "value": {
+      "items": [
+        {
+          "sessionId": "sess-a1",
+          "running": true,
+          "projections": {
+            "values": {
+              "title": "Fixture Title A"
+            }
+          }
+        },
+        {
+          "sessionId": "sess-a2",
+          "running": false,
+          "projections": {
+            "values": {
+              "title": "Fixture Title B"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

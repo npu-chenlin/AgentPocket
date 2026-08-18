@@ -1,0 +1,9 @@
+{"type":"server_hello"}
+{"type":"event.session.status_changed","session_id":"sess-k1","payload":{"previous_status":"running","status":"idle"},"epoch":"1","seq":0}
+{"type":"event.session.status_changed","session_id":"sess-k1","payload":{"previous_status":"idle","status":"awaiting_approval"},"epoch":"1","seq":1}
+{"type":"event.session.work_changed","session_id":"sess-k2","payload":{"busy":true,"pending_interaction":"approval"},"epoch":"2","seq":0}
+{"type":"event.session.created","payload":{"session":{"id":"sess-k3","meta":{"title":"Fixture Title K3"}}}}
+{"type":"prompt.completed","session_id":"sess-k1","payload":{"promptId":"prompt-001"}}
+{"type":"prompt.aborted","session_id":"sess-k1","payload":{"promptId":"prompt-002"}}
+{"type":"event.session.status_changed","session_id":"sess-k1","payload":{"previous_status":"running","status":"idle"},"epoch":"1","seq":0}
+{"type":"event.session.work_changed","session_id":"sess-k2","payload":{"busy":false,"pending_interaction":"none"},"epoch":"2","seq":1}
