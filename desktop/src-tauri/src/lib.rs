@@ -112,7 +112,6 @@ pub fn run() {
             commands::probe_backend,
             commands::reconnect_all,
             commands::open_server,
-            commands::preview_import,
             commands::preview_import_text,
             commands::apply_import,
             commands::export_config,

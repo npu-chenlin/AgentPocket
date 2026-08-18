@@ -281,21 +281,11 @@ pub fn open_server(
 }
 
 #[tauri::command]
-pub async fn preview_import(
-    state: State<'_, Arc<AppState>>,
-    path: String,
-) -> Result<ImportPreview, CommandError> {
-    preview_import_inner(&state, Path::new(&path)).await
-}
-
-#[tauri::command]
-pub async fn preview_import_text(
+pub fn preview_import_text(
     state: State<'_, Arc<AppState>>,
     content: String,
 ) -> Result<ImportPreview, CommandError> {
-    let data = state.store.preview_import_text(&content)?;
-    let (source_kind, invalid) = analyze_import_content(&content)?;
-    Ok(cache_preview(&state, data, source_kind, invalid))
+    preview_from_content(&state, &content)
 }
 
 #[tauri::command]
@@ -515,13 +505,12 @@ fn request_tray_rebuild<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _ = app.emit("tray-rebuild-requested", ());
 }
 
-async fn preview_import_inner(
+fn preview_from_content(
     state: &Arc<AppState>,
-    path: &Path,
+    content: &str,
 ) -> Result<ImportPreview, CommandError> {
-    let data = state.store.preview_import(path)?;
-    let content = std::fs::read_to_string(path).map_err(ConfigError::Io)?;
-    let (source_kind, invalid) = analyze_import_content(&content)?;
+    let data = state.store.preview_import_text(content)?;
+    let (source_kind, invalid) = analyze_import_content(content)?;
     Ok(cache_preview(state, data, source_kind, invalid))
 }
 
@@ -695,7 +684,6 @@ pub async fn run_monitor_coordinator(
 mod tests {
     use super::*;
     use crate::model::Backend;
-    use std::fs;
     use tempfile::tempdir;
 
     fn sample_state() -> Arc<AppState> {
@@ -774,14 +762,9 @@ mod tests {
             MonitorManager::new(tx),
         ));
 
-        let import_path = dir.path().join("import.json");
-        fs::write(
-            &import_path,
-            r#"[{"id":"a","name":"A","host":"host","port":3080,"token":"top-secret","backend":"dsh"},{"name":"Bad","host":"http://host","port":0,"backend":"dsh"}]"#,
-        )
-        .unwrap();
+        let content = r#"[{"id":"a","name":"A","host":"host","port":3080,"token":"top-secret","backend":"dsh"},{"name":"Bad","host":"http://host","port":0,"backend":"dsh"}]"#;
 
-        let preview = preview_import_inner(&state, &import_path).await.unwrap();
+        let preview = preview_from_content(&state, content).unwrap();
         assert_eq!(preview.valid_count, 1);
         assert_eq!(preview.invalid.len(), 1);
         assert_eq!(preview.source_kind, ImportSourceKind::Android);
@@ -812,14 +795,9 @@ mod tests {
             MonitorManager::new(tx),
         ));
 
-        let import_path = dir.path().join("import.json");
-        fs::write(
-            &import_path,
-            r#"[{"id":"a","name":"A","host":"host","port":3080,"token":"top-secret","backend":"dsh"}]"#,
-        )
-        .unwrap();
+        let content = r#"[{"id":"a","name":"A","host":"host","port":3080,"token":"top-secret","backend":"dsh"}]"#;
 
-        let preview = preview_import_inner(&state, &import_path).await.unwrap();
+        let preview = preview_from_content(&state, content).unwrap();
         let import_id = preview.import_id;
 
         // apply_import needs an AppHandle; we cannot create one in a unit test,

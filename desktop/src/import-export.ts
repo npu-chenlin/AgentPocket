@@ -1,4 +1,4 @@
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { save } from "@tauri-apps/plugin-dialog";
 import type { ExportFormat, ImportPreview } from "./model";
 
 export const CREDENTIAL_WARNING = "文件包含服务器访问凭据，请勿公开分享";
@@ -11,16 +11,6 @@ export function importPreviewText(preview: ImportPreview): string {
 
 export function importIssueText(preview: ImportPreview): string[] {
   return preview.invalid.map((issue) => `第 ${issue.index + 1} 条：${issue.reason}`);
-}
-
-export async function chooseImportPath(): Promise<string | null> {
-  const selected = await open({
-    title: "导入服务器配置",
-    multiple: false,
-    directory: false,
-    filters: [{ name: "JSON 配置", extensions: ["json"] }],
-  });
-  return typeof selected === "string" ? selected : null;
 }
 
 export async function chooseExportPath(format: ExportFormat): Promise<string | null> {

@@ -3,7 +3,6 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   CREDENTIAL_WARNING,
   chooseExportPath,
-  chooseImportPath,
   copyTextToClipboard,
   importIssueText,
   importPreviewText,
@@ -45,7 +44,6 @@ app.innerHTML = `
           </div>
           <div class="panel-toolbar" aria-label="服务器操作">
             <button id="add-server" class="primary-button" type="button">添加服务器</button>
-            <button id="import-config" class="secondary-button" type="button">导入 JSON 文件</button>
             <button id="paste-import" class="secondary-button" type="button">粘贴导入</button>
             <button class="secondary-button" type="button" data-export-format="android">导出服务器列表</button>
             <button id="reconnect-all" class="secondary-button" type="button">全部重连</button>
@@ -368,18 +366,6 @@ requiredElement<HTMLButtonElement>("#reconnect-all").addEventListener("click", a
     setMessage(`重连失败：${errorMessage(error)}`, "error");
   } finally {
     button.disabled = false;
-  }
-});
-
-requiredElement<HTMLButtonElement>("#import-config").addEventListener("click", async () => {
-  setMessage("");
-  try {
-    const path = await chooseImportPath();
-    if (!path) return;
-    pendingImport = await invoke<ImportPreview>(commands.previewImport, { path });
-    openImportConfirmation();
-  } catch (error) {
-    setMessage(`读取导入文件失败：${errorMessage(error)}`, "error");
   }
 });
 
