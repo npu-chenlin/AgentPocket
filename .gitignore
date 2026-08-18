@@ -8,3 +8,8 @@
 /kimi-original-favicon.png
 
 .worktrees/
+/.superpowers/
+/desktop/node_modules/
+/desktop/dist/
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/

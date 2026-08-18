@@ -82,6 +82,45 @@
 
 - 手机端**不支持新建工作区**：请在电脑浏览器中创建，手机端可正常使用已有会话与工作区。
 
+## Desktop（Linux）
+
+`desktop/` 提供基于 Tauri 2 的轻量托盘控制中心。它可以同时监听多台 Kimi/dsh 服务器，在任务完成、失败或中断、等待审批、等待回答时发送系统通知，并通过系统浏览器打开服务器。设置窗口关闭后，监听仍会在托盘中继续运行。
+
+### 开发与构建
+
+需要 Node.js 22、Rust stable，以及 Tauri 在 Linux 上所需的 WebKitGTK、AppIndicator、OpenSSL 和构建工具。Ubuntu 22.04 可安装：
+
+```shell
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+安装依赖并启动开发版：
+
+```shell
+cd desktop
+npm ci
+npm run tauri dev
+```
+
+构建 AppImage 与 `.deb`：
+
+```shell
+npm run tauri build -- --bundles appimage,deb
+```
+
+产物分别位于：
+
+- `desktop/src-tauri/target/release/bundle/appimage/`
+- `desktop/src-tauri/target/release/bundle/deb/`
+
+### 使用说明
+
+- 在设置窗口中添加服务器时，主机地址只填写域名或 IP，不包含 `http://`、端口或路径。
+- 可以导入完整桌面配置或 Android 导出的服务器 JSON；导出时可选择完整配置或 Android 兼容列表。
+- **导出文件包含服务器访问凭据，请勿公开分享。**
+- 服务器监听地址、可信网络、端口转发和防火墙仍需由用户自行配置。
+- Windows 与 macOS 尚未进行正式发布验证。
+
 ## 说明
 
 本项目是非官方客户端，与 Moonshot AI/Kimi、DeepSeek 官方无隶属关系。请仅在可信网络中使用。

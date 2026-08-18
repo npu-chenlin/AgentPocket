@@ -1,0 +1,9 @@
+{"type":"server-request","method":"approval/requested","rpcId":"rpc-001","payload":{"sessionId":"sess-a1","approvalId":"appr-001","toolName":""}}
+{"type":"server-request","method":"question/requested","rpcId":"rpc-002","payload":{"sessionId":"sess-a1"}}
+{"type":"server-request","method":"session/event","rpcId":"rpc-003","payload":{"sessionId":"sess-a1","event":{"type":"turn/end","seq":10,"data":{"reason":{"kind":"completed"}}}}}
+{"type":"server-request","method":"session/event","rpcId":"rpc-004","payload":{"sessionId":"sess-a1","event":{"type":"turn/end","seq":11,"data":{"reason":{"kind":"error"}}}}}
+{"type":"server-request","method":"tool/call","rpcId":"rpc-005","payload":{"sessionId":"sess-a1"}}
+{"type":"server-request","method":"assistant/chunk","rpcId":"rpc-006","payload":{"sessionId":"sess-a1"}}
+{"type":"server-request","method":"session/queue","rpcId":"rpc-007","payload":{"sessionId":"sess-a1"}}
+{"type":"server-request","method":"unknown/method","rpcId":"rpc-008","payload":{"sessionId":"sess-a1"}}
+{"type":"server-response","rpcId":"rpc-009","payload":{"sessionId":"sess-a1"}}
