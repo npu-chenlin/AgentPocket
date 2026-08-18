@@ -174,6 +174,7 @@ pub enum ValidationError {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppView {
+    pub revision: u64,
     pub settings: DesktopSettings,
     pub servers: Vec<ServerSummary>,
     pub active_id: Option<String>,

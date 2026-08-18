@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -35,6 +35,7 @@ pub struct AppState {
     pub monitors: tokio::sync::Mutex<MonitorManager>,
     pub import_previews: Mutex<HashMap<Uuid, PendingImport>>,
     pub explicit_exit: AtomicBool,
+    pub revision: AtomicU64,
 }
 
 impl AppState {
@@ -46,6 +47,7 @@ impl AppState {
             monitors: tokio::sync::Mutex::new(monitors),
             import_previews: Mutex::new(HashMap::new()),
             explicit_exit: AtomicBool::new(false),
+            revision: AtomicU64::new(0),
         }
     }
 }
@@ -335,6 +337,7 @@ pub async fn apply_import(
 
     sync_monitors(&state).await?;
 
+    state.revision.fetch_add(1, Ordering::SeqCst);
     let view = build_app_view(&state);
     emit_app_state_changed(&app, &view);
     request_tray_rebuild(&app);
@@ -371,6 +374,7 @@ pub fn build_app_view(state: &AppState) -> AppView {
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     AppView {
+        revision: state.revision.load(Ordering::SeqCst),
         settings: config.settings.clone(),
         servers: config.servers.iter().map(ServerSummary::from).collect(),
         active_id: config.active_id.clone(),
@@ -432,6 +436,7 @@ where
     sync_monitors(state).await?;
 
     // Step 7: emit redacted app-state-changed.
+    state.revision.fetch_add(1, Ordering::SeqCst);
     let view = build_app_view(state);
     emit_app_state_changed(app, &view);
 
@@ -614,6 +619,7 @@ pub async fn run_monitor_coordinator(
                 if let Ok(mut statuses) = state.statuses.write() {
                     statuses.insert(server_id, status);
                 }
+                state.revision.fetch_add(1, Ordering::SeqCst);
                 let view = build_app_view(&state);
                 emit_app_state_changed(&app, &view);
                 request_tray_rebuild(&app);
@@ -696,10 +702,21 @@ mod tests {
         let view = build_app_view(&state);
         let json = serde_json::to_string(&view).unwrap();
 
+        assert_eq!(view.revision, 0);
         assert!(!json.contains("secret-token"));
         assert!(!json.contains("other-token"));
         assert!(json.contains("100.64.0.2"));
         assert!(json.contains("Work"));
+    }
+
+    #[test]
+    fn app_view_revision_is_monotonic() {
+        let state = sample_state();
+        let first = build_app_view(&state);
+        state.revision.fetch_add(1, Ordering::SeqCst);
+        let second = build_app_view(&state);
+
+        assert!(second.revision > first.revision);
     }
 
     #[test]
