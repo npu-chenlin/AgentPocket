@@ -56,7 +56,7 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
     @Override public void onCreate() {
         super.onCreate();
         createChannels();
-        startForeground(SERVICE_ID, serviceNotification("正在连接服务器…"));
+        startForeground(SERVICE_ID, serviceNotification("正在连接服务器…", null));
         acquireWakeLock();
 
         client = new OkHttpClient.Builder()
@@ -112,7 +112,7 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
                 "AgentPocket 应用更新", NotificationManager.IMPORTANCE_DEFAULT));
     }
 
-    private Notification serviceNotification(String text) {
+    private Notification serviceNotification(String text, List<String> sessions) {
         PendingIntent open = PendingIntent.getActivity(this, 1,
                 new Intent(this, MainActivity.class),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
@@ -121,15 +121,27 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
                         .putExtra(MainActivity.EXTRA_SHOW_CONFIG, true)
                         .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        return new Notification.Builder(this, SERVICE_CHANNEL)
+        Notification.Builder builder = new Notification.Builder(this, SERVICE_CHANNEL)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.mipmap.ic_launcher))
                 .setContentTitle("AgentPocket 后台监听").setContentText(text).setOngoing(true)
                 .setContentIntent(open)
                 .addAction(new Notification.Action.Builder(
                         Icon.createWithResource(this, R.mipmap.ic_launcher),
-                        "服务器", settings).build())
-                .build();
+                        "服务器", settings).build());
+        if (sessions != null && !sessions.isEmpty()) {
+            Notification.InboxStyle style = new Notification.InboxStyle()
+                    .setBigContentTitle(text);
+            int shown = Math.min(sessions.size(), 6);
+            for (int i = 0; i < shown; i++) {
+                style.addLine(sessions.get(i));
+            }
+            if (sessions.size() > shown) {
+                style.addLine("… 其余 " + (sessions.size() - shown) + " 个会话");
+            }
+            builder.setStyle(style);
+        }
+        return builder.build();
     }
 
     // ------------------------------------------------------------------
@@ -158,14 +170,16 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
 
     private synchronized void updateSummary() {
         int connected = 0, active = 0;
+        List<String> busyTitles = new ArrayList<>();
         for (ServerMonitor m : monitors) {
             if (m.isConnected()) connected++;
             active += m.getActiveCount();
+            busyTitles.addAll(m.busySessionTitles());
         }
         String text = "已连接 " + connected + "/" + monitors.size()
                 + " 台，监听 " + active + " 个会话";
         getSystemService(NotificationManager.class).notify(SERVICE_ID,
-                serviceNotification(text));
+                serviceNotification(text, busyTitles));
         getSharedPreferences(HEALTH_PREFS, MODE_PRIVATE).edit()
                 .putInt("active_count", active).apply();
     }

@@ -44,6 +44,16 @@ public class KimiServerMonitor extends ServerMonitor {
         super(host, server, client);
     }
 
+    @Override public List<String> busySessionTitles() {
+        List<String> titles = new ArrayList<>();
+        synchronized (busyBySession) {
+            for (Map.Entry<String, Boolean> entry : busyBySession.entrySet()) {
+                if (Boolean.TRUE.equals(entry.getValue())) titles.add(getTitle(entry.getKey()));
+            }
+        }
+        return titles;
+    }
+
     /** 忙碌会话数：与桌面端一致，按忙碌集合大小去重统计。 */
     private int busyCount() {
         int count = 0;

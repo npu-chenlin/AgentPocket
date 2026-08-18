@@ -9,6 +9,7 @@ import org.json.JSONObject;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -64,6 +65,9 @@ public abstract class ServerMonitor {
     public boolean isConnected() { return connected; }
     public int getActiveCount() { return activeCount; }
     public String serverId() { return server.id; }
+
+    /** 当前忙碌会话的标题列表，用于常驻摘要通知。默认无。 */
+    public List<String> busySessionTitles() { return Collections.emptyList(); }
 
     /** 启动连接流程：由子类实现（拉列表 → 连 WebSocket → 解析事件）。 */
     public abstract void start();

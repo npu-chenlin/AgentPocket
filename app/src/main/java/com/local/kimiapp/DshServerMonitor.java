@@ -7,8 +7,10 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -260,6 +262,16 @@ public class DshServerMonitor extends ServerMonitor {
         if (prev != null && prev == busy) return;
         activeCount = busyCount();
         notifySummary();
+    }
+
+    @Override public List<String> busySessionTitles() {
+        List<String> titles = new ArrayList<>();
+        synchronized (busyBySession) {
+            for (Map.Entry<String, Boolean> entry : busyBySession.entrySet()) {
+                if (Boolean.TRUE.equals(entry.getValue())) titles.add(getTitle(entry.getKey()));
+            }
+        }
+        return titles;
     }
 
     /** 忙碌会话数：与桌面端一致，按忙碌集合大小去重统计。 */
