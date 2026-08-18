@@ -54,6 +54,9 @@ import android.widget.Toast;
 import android.widget.Button;
 
 import androidx.core.view.WindowInsetsControllerCompat;
+import androidx.recyclerview.widget.ItemTouchHelper;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import com.petterp.floatingx.assist.FxAdsorbDirection;
 import com.petterp.floatingx.assist.FxGravity;
@@ -555,57 +558,34 @@ public class MainActivity extends Activity {
         list.setPadding(dp(20), dp(4), dp(20), dp(8));
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("服务器")
                 .setView(list).setNegativeButton("关闭", null).create();
-        for (ServerStore.Server server : servers) {
-            boolean selected = server.id.equals(active);
-            LinearLayout card = new LinearLayout(this);
-            card.setGravity(Gravity.CENTER_VERTICAL);
-            card.setPadding(dp(9), dp(12), dp(14), dp(12));
-            GradientDrawable cardBackground = new GradientDrawable();
-            cardBackground.setColor(selected ? Color.rgb(238, 245, 255) : Color.rgb(248, 249, 252));
-            cardBackground.setCornerRadius(dp(15));
-            cardBackground.setStroke(dp(1), selected ? Color.rgb(143, 187, 248) : Color.rgb(226, 229, 236));
-            card.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(28, 25, 112, 238)), cardBackground, null));
 
-            // 后端类型 logo：在线保持品牌色，离线/未知显示灰色
-            ImageView backendIcon = backendIconView(server.backend);
-            boolean known = health.contains("checked_" + server.id);
-            boolean online = health.getBoolean("online_" + server.id, false);
-            if (!known || !online) {
-                backendIcon.setColorFilter(Color.rgb(156, 163, 175));
+        RecyclerView recyclerView = new RecyclerView(this);
+        recyclerView.setHasFixedSize(true);
+        recyclerView.setLayoutManager(new LinearLayoutManager(this));
+        List<ServerStore.Server> mutableServers = new ArrayList<>(servers);
+        ServerListAdapter adapter = new ServerListAdapter(dialog, mutableServers, active, health);
+        recyclerView.setAdapter(adapter);
+        list.addView(recyclerView, new LinearLayout.LayoutParams(-1, -2));
+
+        ItemTouchHelper.Callback callback = new ItemTouchHelper.SimpleCallback(
+                ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0) {
+            @Override
+            public boolean onMove(RecyclerView recyclerView,
+                                  RecyclerView.ViewHolder viewHolder,
+                                  RecyclerView.ViewHolder target) {
+                int from = viewHolder.getBindingAdapterPosition();
+                int to = target.getBindingAdapterPosition();
+                if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) return false;
+                adapter.moveItem(from, to);
+                ServerStore.save(MainActivity.this, adapter.getServers(), active);
+                return true;
             }
-            LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(26), dp(26));
-            logoParams.setMargins(0, 0, dp(8), 0);
-            card.addView(backendIcon, logoParams);
 
-            LinearLayout text = new LinearLayout(this);
-            text.setOrientation(LinearLayout.VERTICAL);
-            TextView title = new TextView(this);
-            title.setText(server.name);
-            title.setTextSize(16);
-            title.setTextColor(Color.rgb(28, 34, 45));
-            TextView address = new TextView(this);
-            address.setText(server.host + ":" + server.port);
-            address.setTextSize(13);
-            address.setTextColor(Color.rgb(112, 120, 135));
-            address.setPadding(0, dp(3), 0, 0);
-            text.addView(title); text.addView(address);
-            card.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
+            @Override
+            public void onSwiped(RecyclerView.ViewHolder viewHolder, int direction) {}
+        };
+        new ItemTouchHelper(callback).attachToRecyclerView(recyclerView);
 
-            if (selected) card.addView(serverBadge("当前", Color.rgb(25, 112, 238), Color.rgb(220, 235, 255)),
-                    new LinearLayout.LayoutParams(dp(44), dp(28)));
-            ImageButton edit = serverIcon(R.drawable.ic_edit, "编辑 " + server.name, false);
-            ImageButton delete = serverIcon(R.drawable.ic_delete, "删除 " + server.name, true);
-            LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(38), dp(42));
-            iconParams.setMargins(dp(3), 0, 0, 0);
-            card.addView(edit, iconParams);
-            card.addView(delete, iconParams);
-            LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, dp(72));
-            cardParams.setMargins(0, 0, 0, dp(10));
-            list.addView(card, cardParams);
-            card.setOnClickListener(v -> { dialog.dismiss(); switchServer(server.id); });
-            edit.setOnClickListener(v -> { dialog.dismiss(); showConfig(false, server, true); });
-            delete.setOnClickListener(v -> { dialog.dismiss(); deleteServer(server); });
-        }
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
 
@@ -664,6 +644,125 @@ public class MainActivity extends Activity {
         copy.setOnClickListener(v -> { dialog.dismiss(); copyServerConfig(); });
         add.setOnClickListener(v -> { dialog.dismiss(); showConfig(false, null, true); });
         showModernDialog(dialog, null);
+    }
+
+    private class ServerListAdapter extends RecyclerView.Adapter<ServerListAdapter.ViewHolder> {
+        private final AlertDialog dialog;
+        private final List<ServerStore.Server> servers;
+        private final String activeId;
+        private final SharedPreferences health;
+
+        ServerListAdapter(AlertDialog dialog, List<ServerStore.Server> servers,
+                          String activeId, SharedPreferences health) {
+            this.dialog = dialog;
+            this.servers = servers;
+            this.activeId = activeId;
+            this.health = health;
+        }
+
+        @Override public int getItemCount() { return servers.size(); }
+
+        List<ServerStore.Server> getServers() { return servers; }
+
+        void moveItem(int from, int to) {
+            if (from == to) return;
+            ServerStore.Server item = servers.remove(from);
+            servers.add(to, item);
+            notifyItemMoved(from, to);
+        }
+
+        @Override public ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            Context context = parent.getContext();
+            LinearLayout card = new LinearLayout(context);
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setPadding(dp(9), dp(12), dp(14), dp(12));
+            RecyclerView.LayoutParams cardParams = new RecyclerView.LayoutParams(-1, dp(72));
+            cardParams.setMargins(0, 0, 0, dp(10));
+            card.setLayoutParams(cardParams);
+
+            ImageView backendIcon = backendIconView(ServerStore.Server.BACKEND_KIMI);
+            LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(26), dp(26));
+            logoParams.setMargins(0, 0, dp(8), 0);
+            card.addView(backendIcon, logoParams);
+
+            LinearLayout text = new LinearLayout(context);
+            text.setOrientation(LinearLayout.VERTICAL);
+            TextView title = new TextView(context);
+            title.setTextSize(16);
+            title.setTextColor(Color.rgb(28, 34, 45));
+            TextView address = new TextView(context);
+            address.setTextSize(13);
+            address.setTextColor(Color.rgb(112, 120, 135));
+            address.setPadding(0, dp(3), 0, 0);
+            text.addView(title);
+            text.addView(address);
+            card.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
+
+            TextView badge = serverBadge("当前", Color.rgb(25, 112, 238), Color.rgb(220, 235, 255));
+            badge.setVisibility(View.GONE);
+            LinearLayout.LayoutParams badgeParams = new LinearLayout.LayoutParams(dp(44), dp(28));
+            card.addView(badge, badgeParams);
+
+            ImageButton edit = serverIcon(R.drawable.ic_edit, "", false);
+            ImageButton delete = serverIcon(R.drawable.ic_delete, "", true);
+            LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(38), dp(42));
+            iconParams.setMargins(dp(3), 0, 0, 0);
+            card.addView(edit, iconParams);
+            card.addView(delete, iconParams);
+
+            return new ViewHolder(card, backendIcon, title, address, badge, edit, delete);
+        }
+
+        @Override public void onBindViewHolder(ViewHolder holder, int position) {
+            ServerStore.Server server = servers.get(position);
+            boolean selected = server.id.equals(activeId);
+
+            GradientDrawable cardBackground = new GradientDrawable();
+            cardBackground.setColor(selected ? Color.rgb(238, 245, 255) : Color.rgb(248, 249, 252));
+            cardBackground.setCornerRadius(dp(15));
+            cardBackground.setStroke(dp(1), selected ? Color.rgb(143, 187, 248) : Color.rgb(226, 229, 236));
+            holder.card.setBackground(new RippleDrawable(
+                    ColorStateList.valueOf(Color.argb(28, 25, 112, 238)), cardBackground, null));
+
+            holder.backendIcon.setImageResource(ServerStore.Server.BACKEND_DSH.equals(server.backend)
+                    ? R.drawable.ic_backend_dsh : R.drawable.ic_backend_kimi);
+            holder.backendIcon.clearColorFilter();
+            boolean known = health.contains("checked_" + server.id);
+            boolean online = health.getBoolean("online_" + server.id, false);
+            if (!known || !online) {
+                holder.backendIcon.setColorFilter(Color.rgb(156, 163, 175));
+            }
+
+            holder.title.setText(server.name);
+            holder.address.setText(server.host + ":" + server.port);
+            holder.badge.setVisibility(selected ? View.VISIBLE : View.GONE);
+
+            holder.edit.setContentDescription("编辑 " + server.name);
+            holder.delete.setContentDescription("删除 " + server.name);
+
+            holder.card.setOnClickListener(v -> { dialog.dismiss(); switchServer(server.id); });
+            holder.edit.setOnClickListener(v -> { dialog.dismiss(); showConfig(false, server, true); });
+            holder.delete.setOnClickListener(v -> { dialog.dismiss(); deleteServer(server); });
+        }
+
+        class ViewHolder extends RecyclerView.ViewHolder {
+            final LinearLayout card;
+            final ImageView backendIcon;
+            final TextView title, address, badge;
+            final ImageButton edit, delete;
+
+            ViewHolder(LinearLayout card, ImageView backendIcon, TextView title, TextView address,
+                       TextView badge, ImageButton edit, ImageButton delete) {
+                super(card);
+                this.card = card;
+                this.backendIcon = backendIcon;
+                this.title = title;
+                this.address = address;
+                this.badge = badge;
+                this.edit = edit;
+                this.delete = delete;
+            }
+        }
     }
 
     /** 把全部服务器配置序列化为 JSON 数组并复制到系统剪贴板（格式与 ServerStore 存储一致，桌面端可直接导入）。 */
