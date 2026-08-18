@@ -555,7 +555,7 @@ public class MainActivity extends Activity {
             boolean selected = server.id.equals(active);
             LinearLayout card = new LinearLayout(this);
             card.setGravity(Gravity.CENTER_VERTICAL);
-            card.setPadding(dp(15), dp(12), dp(14), dp(12));
+            card.setPadding(dp(9), dp(12), dp(14), dp(12));
             GradientDrawable cardBackground = new GradientDrawable();
             cardBackground.setColor(selected ? Color.rgb(238, 245, 255) : Color.rgb(248, 249, 252));
             cardBackground.setCornerRadius(dp(15));
@@ -569,7 +569,9 @@ public class MainActivity extends Activity {
             if (!known || !online) {
                 backendIcon.setColorFilter(Color.rgb(156, 163, 175));
             }
-            card.addView(backendIcon, new LinearLayout.LayoutParams(dp(26), dp(26)));
+            LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(26), dp(26));
+            logoParams.setMargins(0, 0, dp(8), 0);
+            card.addView(backendIcon, logoParams);
 
             LinearLayout text = new LinearLayout(this);
             text.setOrientation(LinearLayout.VERTICAL);
