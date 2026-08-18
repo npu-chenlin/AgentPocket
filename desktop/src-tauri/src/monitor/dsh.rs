@@ -11,7 +11,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::model::ServerConfig;
 use crate::monitor::{
-    cancellable_sleep, emit_events, send_status, MonitorUpdate, ReconnectBackoff,
+    cancellable_request, cancellable_sleep, emit_events, send_status, MonitorUpdate,
+    ReconnectBackoff,
 };
 use crate::protocol::dsh::{parse_frame, parse_session_list};
 use crate::protocol::ProtocolState;
@@ -21,6 +22,23 @@ pub async fn run(
     update_tx: mpsc::Sender<MonitorUpdate>,
     token: CancellationToken,
 ) {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            send_status(
+                &update_tx,
+                &server.id,
+                false,
+                &ProtocolState::default(),
+                Some(e.to_string()),
+            );
+            return;
+        }
+    };
+
     let mut backoff = ReconnectBackoff::default();
     let mut state = ProtocolState::default();
 
@@ -29,7 +47,7 @@ pub async fn run(
             break;
         }
 
-        match run_once(&server, &update_tx, &mut state, &token).await {
+        match run_once(&client, &server, &update_tx, &mut state, &token).await {
             Ok(()) => {
                 backoff.reset();
             }
@@ -49,6 +67,7 @@ pub async fn run(
 }
 
 async fn run_once(
+    client: &reqwest::Client,
     server: &ServerConfig,
     update_tx: &mpsc::Sender<MonitorUpdate>,
     state: &mut ProtocolState,
@@ -58,10 +77,6 @@ async fn run_once(
 
     // 1. Fetch session list via HTTP RPC.
     let list_url = base.join("/api/session.list").map_err(MonitorError::Url)?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| MonitorError::Http(e.to_string()))?;
     let body = json!({
         "type": "client-request",
         "rpcId": uuid::Uuid::new_v4().to_string(),
@@ -69,12 +84,19 @@ async fn run_once(
         "payload": {},
     });
 
-    let resp = client
-        .post(list_url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| MonitorError::Http(e.to_string()))?;
+    let resp = cancellable_request(
+        async {
+            client
+                .post(list_url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())
+        },
+        token,
+    )
+    .await
+    .map_err(MonitorError::Http)?;
     let status = resp.status();
     let text = resp
         .text()

@@ -5,16 +5,14 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{
-    connect_async_with_config,
-    tungstenite::protocol::{Message, WebSocketConfig},
-};
+use tokio_tungstenite::tungstenite::protocol::{Message, WebSocketConfig};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tokio_util::sync::CancellationToken;
 
 use crate::model::{AgentEvent, ServerConfig};
 use crate::monitor::{
-    cancellable_sleep, emit_events, send_status, MonitorUpdate, ReconnectBackoff,
+    cancellable_request, cancellable_sleep, emit_events, send_status, MonitorUpdate,
+    ReconnectBackoff,
 };
 use crate::protocol::kimi::parse_frame;
 use crate::protocol::ProtocolState;
@@ -24,6 +22,23 @@ pub async fn run(
     update_tx: mpsc::Sender<MonitorUpdate>,
     token: CancellationToken,
 ) {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            send_status(
+                &update_tx,
+                &server.id,
+                false,
+                &ProtocolState::default(),
+                Some(e.to_string()),
+            );
+            return;
+        }
+    };
+
     let mut backoff = ReconnectBackoff::default();
     let mut state = ProtocolState::default();
 
@@ -32,7 +47,7 @@ pub async fn run(
             break;
         }
 
-        match run_once(&server, &update_tx, &mut state, &token).await {
+        match run_once(&client, &server, &update_tx, &mut state, &token).await {
             Ok(()) => {
                 backoff.reset();
             }
@@ -52,6 +67,7 @@ pub async fn run(
 }
 
 async fn run_once(
+    client: &reqwest::Client,
     server: &ServerConfig,
     update_tx: &mpsc::Sender<MonitorUpdate>,
     state: &mut ProtocolState,
@@ -60,24 +76,12 @@ async fn run_once(
     let base = server.base_url().map_err(MonitorError::Config)?;
 
     // 1. Fetch baseline session list.
-    fetch_baseline(server, base.clone(), state).await?;
+    fetch_baseline(client, server, base.clone(), state, token).await?;
     send_status(update_tx, &server.id, false, state, None);
 
     // 2. Connect WebSocket with optional subprotocol header.
     let ws_url = ws_url(server)?;
-    let mut request = http::Request::builder().uri(ws_url.to_string());
-    if !server.token.is_empty() {
-        request = request.header(
-            "Sec-WebSocket-Protocol",
-            format!("kimi-code.bearer.{}", server.token),
-        );
-    }
-    let request = request
-        .body(())
-        .map_err(|e| MonitorError::Http(format!("request build: {}", e)))?;
-
-    let config = WebSocketConfig::default();
-    let (mut ws_stream, response) = connect_async_with_config(request, Some(config), false)
+    let (mut ws_stream, response) = connect_ws(&ws_url, server)
         .await
         .map_err(|e| MonitorError::Ws(e.to_string()))?;
 
@@ -99,28 +103,25 @@ async fn run_once(
         .await
         .map_err(|e| MonitorError::Ws(e.to_string()))?;
 
-    read_loop(ws_stream, server, update_tx, state, token).await
+    read_loop(client, ws_stream, server, update_tx, state, token).await
 }
 
 async fn fetch_baseline(
+    client: &reqwest::Client,
     server: &ServerConfig,
     base: url::Url,
     state: &mut ProtocolState,
+    token: &CancellationToken,
 ) -> Result<(), MonitorError> {
     let list_url = build_sessions_url(base)?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| MonitorError::Http(e.to_string()))?;
     let mut req = client.get(list_url);
     if !server.token.is_empty() {
         req = req.header("Authorization", format!("Bearer {}", server.token));
     }
 
-    let resp = req
-        .send()
+    let resp = cancellable_request(async { req.send().await.map_err(|e| e.to_string()) }, token)
         .await
-        .map_err(|e| MonitorError::Http(e.to_string()))?;
+        .map_err(MonitorError::Http)?;
     let status = resp.status();
     let text = resp
         .text()
@@ -181,6 +182,7 @@ fn build_sessions_url(base: url::Url) -> Result<url::Url, MonitorError> {
 }
 
 async fn read_loop(
+    client: &reqwest::Client,
     mut ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
     server: &ServerConfig,
     update_tx: &mpsc::Sender<MonitorUpdate>,
@@ -192,7 +194,7 @@ async fn read_loop(
             msg = ws_stream.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        match handle_message(&text, server, update_tx, state, &mut ws_stream).await {
+                        match handle_message(&text, client, server, state, &mut ws_stream, token).await {
                             Ok(events) => {
                                 emit_events(update_tx, events).await;
                             }
@@ -222,10 +224,11 @@ async fn read_loop(
 
 async fn handle_message(
     text: &str,
+    client: &reqwest::Client,
     server: &ServerConfig,
-    _update_tx: &mpsc::Sender<MonitorUpdate>,
     state: &mut ProtocolState,
     ws_stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    token: &CancellationToken,
 ) -> Result<Vec<AgentEvent>, MonitorError> {
     let msg: Value = serde_json::from_str(text)
         .map_err(|e| MonitorError::Protocol(format!("invalid JSON: {}", e)))?;
@@ -249,20 +252,62 @@ async fn handle_message(
             Ok(Vec::new())
         }
         "resync_required" => {
-            if let Ok(base) = server.base_url() {
-                let _ = fetch_baseline(server, base, state).await;
-                let ids: Vec<String> = state.titles.keys().cloned().collect();
-                let sub = subscribe(&ids);
-                ws_stream
-                    .send(Message::Text(sub.to_string().into()))
-                    .await
-                    .map_err(|e| MonitorError::Ws(e.to_string()))?;
-            }
+            let base = server.base_url().map_err(MonitorError::Config)?;
+            fetch_baseline(client, server, base, state, token)
+                .await
+                .map_err(|e| MonitorError::Protocol(e.to_string()))?;
+            let ids: Vec<String> = state.titles.keys().cloned().collect();
+            let sub = subscribe(&ids);
+            ws_stream
+                .send(Message::Text(sub.to_string().into()))
+                .await
+                .map_err(|e| MonitorError::Ws(e.to_string()))?;
             Ok(Vec::new())
         }
         _ => parse_frame(&server.id, text, Utc::now(), state)
             .map_err(|e| MonitorError::Protocol(e.to_string())),
     }
+}
+
+async fn connect_ws(
+    ws_url: &url::Url,
+    server: &ServerConfig,
+) -> Result<
+    (
+        WebSocketStream<MaybeTlsStream<TcpStream>>,
+        http::Response<Option<Vec<u8>>>,
+    ),
+    tokio_tungstenite::tungstenite::Error,
+> {
+    use base64::Engine;
+
+    let host = ws_url.host_str().unwrap_or("localhost");
+    let port = ws_url
+        .port_or_known_default()
+        .unwrap_or(if ws_url.scheme() == "wss" { 443 } else { 80 });
+
+    let stream = TcpStream::connect((host, port)).await?;
+    let stream = MaybeTlsStream::Plain(stream);
+
+    let key = base64::engine::general_purpose::STANDARD.encode(uuid::Uuid::new_v4().as_bytes());
+    let mut request = http::Request::builder()
+        .method("GET")
+        .uri(ws_url.as_str())
+        .header("Host", format!("{}:{}", host, port))
+        .header("Upgrade", "websocket")
+        .header("Connection", "Upgrade")
+        .header("Sec-WebSocket-Key", key)
+        .header("Sec-WebSocket-Version", "13");
+    if !server.token.is_empty() {
+        request = request.header(
+            "Sec-WebSocket-Protocol",
+            format!("kimi-code.bearer.{}", server.token),
+        );
+    }
+    let request = request.body(()).expect("valid request");
+
+    let config = WebSocketConfig::default();
+    tokio_tungstenite::client_async_with_config(request, stream, Some(config)).await
 }
 
 fn ws_url(server: &ServerConfig) -> Result<url::Url, MonitorError> {
