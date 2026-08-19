@@ -480,7 +480,7 @@ p {
   display: grid;
   gap: 2px;
   margin: 0;
-  padding: 7px 12px 9px 69px;
+  padding: 7px 12px 9px 30px;
   border-top: 1px solid var(--border);
   list-style: none;
 }
