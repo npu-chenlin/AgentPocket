@@ -1,10 +1,21 @@
+use percent_encoding::{percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use url::Url;
+
+/// 保留 RFC 3986 unreserved 字符（字母数字与 - . _ ~），与 Android 端
+/// `Uri.encode` 的行为一致。
+const TOKEN_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
 
 use crate::model::{AppConfig, Backend, ServerConfig, ValidationError};
 
 /// Build a URL that points to a saved server, mirroring the Android
-/// `MainActivity.loadConfiguredUrl` route construction. Tokens are never
-/// included in the resulting URL.
+/// `MainActivity.loadConfiguredUrl` route construction. Kimi servers carry
+/// their access token as a `#token=` fragment so the browser session
+/// authenticates automatically (the fragment is consumed by the frontend and
+/// never sent to the server over the wire); dsh has no token auth.
 pub fn build_server_url(
     server: &ServerConfig,
     session_id: Option<&str>,
@@ -21,6 +32,10 @@ pub fn build_server_url(
                 url.set_path(&format!("/sessions/{}", id));
             } else {
                 url.set_path("/");
+            }
+            if !server.token.is_empty() {
+                let encoded = percent_encode(server.token.as_bytes(), TOKEN_ENCODE_SET);
+                url.set_fragment(Some(&format!("token={encoded}")));
             }
         }
     }
@@ -94,21 +109,21 @@ mod tests {
 
     #[test]
     fn kimi_root_url_has_trailing_slash() {
-        let server = ServerConfig::new("s1", "Work", "100.64.0.2", 3080, "secret", Backend::Kimi);
+        let server = ServerConfig::new("s1", "Work", "100.64.0.2", 3080, "", Backend::Kimi);
         let url = build_server_url(&server, None).unwrap();
         assert_eq!(url.as_str(), "http://100.64.0.2:3080/");
     }
 
     #[test]
     fn kimi_session_url_includes_session_path() {
-        let server = ServerConfig::new("s1", "Work", "100.64.0.2", 3080, "secret", Backend::Kimi);
+        let server = ServerConfig::new("s1", "Work", "100.64.0.2", 3080, "", Backend::Kimi);
         let url = build_server_url(&server, Some("sess-123")).unwrap();
         assert_eq!(url.as_str(), "http://100.64.0.2:3080/sessions/sess-123");
     }
 
     #[test]
     fn kimi_empty_session_id_opens_root() {
-        let server = ServerConfig::new("s1", "Work", "100.64.0.2", 3080, "secret", Backend::Kimi);
+        let server = ServerConfig::new("s1", "Work", "100.64.0.2", 3080, "", Backend::Kimi);
         let url = build_server_url(&server, Some("")).unwrap();
         assert_eq!(url.as_str(), "http://100.64.0.2:3080/");
     }
@@ -123,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn server_url_never_exposes_token() {
+    fn kimi_url_carries_token_fragment() {
         let server = ServerConfig::new(
             "s1",
             "Work",
@@ -133,8 +148,22 @@ mod tests {
             Backend::Kimi,
         );
         let url = build_server_url(&server, Some("sess")).unwrap();
-        assert!(!url.as_str().contains("super-secret"));
-        assert!(!url.as_str().contains("token"));
+        assert_eq!(
+            url.as_str(),
+            "http://100.64.0.2:3080/sessions/sess#token=super-secret"
+        );
+
+        // 特殊字符按百分号编码处理，与 Android 的 Uri.encode 行为一致。
+        let special = ServerConfig::new("s1", "Work", "100.64.0.2", 3080, "a b+c/d", Backend::Kimi);
+        let url = build_server_url(&special, None).unwrap();
+        assert_eq!(url.as_str(), "http://100.64.0.2:3080/#token=a%20b%2Bc%2Fd");
+    }
+
+    #[test]
+    fn dsh_url_never_carries_token() {
+        let server = ServerConfig::new("s1", "Work", "100.64.0.2", 3080, "secret", Backend::Dsh);
+        let url = build_server_url(&server, None).unwrap();
+        assert_eq!(url.as_str(), "http://100.64.0.2:3080/");
     }
 
     #[test]
@@ -167,7 +196,7 @@ mod tests {
         let resolved = config.servers.iter().find(|s| s.id == "s1").unwrap();
         assert_eq!(
             build_server_url(resolved, Some("sess")).unwrap().as_str(),
-            "http://100.64.0.2:3080/sessions/sess"
+            "http://100.64.0.2:3080/sessions/sess#token=secret"
         );
         assert!(config.servers.iter().find(|s| s.id == "missing").is_none());
     }

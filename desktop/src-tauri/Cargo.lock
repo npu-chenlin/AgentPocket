@@ -17,6 +17,7 @@ dependencies = [
  "futures-util",
  "http",
  "if-addrs",
+ "percent-encoding",
  "qrcode",
  "reqwest 0.12.28",
  "rustls-native-certs",

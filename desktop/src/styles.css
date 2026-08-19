@@ -282,6 +282,7 @@ p {
 
 .server-card {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   min-width: 0;
@@ -431,6 +432,80 @@ p {
 .server-card:hover .server-open-hint,
 .server-card:focus-within .server-open-hint {
   display: none;
+}
+
+/* ---------- 运行中会话下拉面板 ---------- */
+
+.server-sessions {
+  flex: 1 0 100%;
+  border-top: 1px solid var(--border);
+  padding: 6px 12px 8px;
+}
+
+.sessions-toggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.sessions-toggle:hover {
+  color: var(--accent-hover);
+}
+
+.session-list {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.session-row:hover {
+  background: var(--surface-dim);
+}
+
+.session-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: session-spin 0.9s linear infinite;
+}
+
+@keyframes session-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ---------- 空状态 ---------- */

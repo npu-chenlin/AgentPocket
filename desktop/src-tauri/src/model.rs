@@ -131,11 +131,21 @@ impl From<&ServerConfig> for ServerSummary {
     }
 }
 
+/// 正在运行的会话摘要（仅忙碌会话；标题缺失时用占位文案）。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSummary {
+    pub id: String,
+    pub title: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerStatus {
     pub connected: bool,
     pub active_count: u32,
+    /// 正在运行的会话列表，按标题排序以保证稳定。
+    pub sessions: Vec<SessionSummary>,
     pub last_checked_at: Option<DateTime<Utc>>,
     pub error: Option<String>,
 }

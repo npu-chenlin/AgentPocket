@@ -11,7 +11,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
-use crate::model::{AgentEvent, Backend, ServerConfig, ServerStatus};
+use crate::model::{AgentEvent, Backend, ServerConfig, ServerStatus, SessionSummary};
 use crate::protocol::ProtocolState;
 
 pub enum MonitorUpdate {
@@ -187,9 +187,25 @@ pub(crate) fn send_status(
     state: &ProtocolState,
     error: Option<String>,
 ) {
+    let mut sessions: Vec<SessionSummary> = state
+        .busy
+        .iter()
+        .map(|id| SessionSummary {
+            id: id.clone(),
+            title: state
+                .titles
+                .get(id)
+                .filter(|title| !title.is_empty())
+                .cloned()
+                .unwrap_or_else(|| "会话".to_string()),
+        })
+        .collect();
+    // HashSet 遍历顺序不稳定，排序后状态比较才不会因顺序抖动误触发重绘。
+    sessions.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id)));
     let status = ServerStatus {
         connected,
         active_count: state.busy.len() as u32,
+        sessions,
         last_checked_at: Some(Utc::now()),
         error,
     };

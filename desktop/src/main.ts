@@ -210,6 +210,8 @@ const syncStatus = requiredElement<HTMLElement>("#sync-status");
 
 let currentView: AppView | null = null;
 let latestRevision = -1;
+/** 展开运行中会话面板的服务器 id；重绘时保持展开状态。 */
+const expandedServers = new Set<string>();
 let pendingImport: ImportPreview | null = null;
 let pendingExportFormat: ExportFormat = "full";
 let unlistenState: UnlistenFn | undefined;
@@ -245,7 +247,7 @@ function applyView(view: AppView): void {
   if (view.revision <= latestRevision) return;
   latestRevision = view.revision;
   currentView = view;
-  serverList.innerHTML = renderServerList(view);
+  serverList.innerHTML = renderServerList(view, expandedServers);
   for (const control of document.querySelectorAll<HTMLInputElement>("[data-setting]")) {
     const key = control.dataset.setting as keyof AppView["settings"];
     control.checked = view.settings[key];
@@ -329,6 +331,21 @@ serverList.addEventListener("click", async (event) => {
     await editServer(id);
   } else if (id && action === "delete") {
     await deleteServer(id);
+  } else if (id && action === "toggle-sessions") {
+    if (expandedServers.has(id)) {
+      expandedServers.delete(id);
+    } else {
+      expandedServers.add(id);
+    }
+    if (currentView) {
+      serverList.innerHTML = renderServerList(currentView, expandedServers);
+    }
+  } else if (id && action === "open-session") {
+    try {
+      await invoke(commands.openServer, { id, sessionId: button.dataset.sessionId ?? null });
+    } catch (error) {
+      setMessage(`打开失败：${errorMessage(error)}`, "error");
+    }
   } else if (id && action === "open") {
     try {
       await invoke(commands.openServer, { id, sessionId: null });

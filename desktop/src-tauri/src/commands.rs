@@ -608,7 +608,10 @@ fn expire_old_previews(previews: &mut HashMap<Uuid, PendingImport>) {
 
 /// 比较两次服务器状态是否“实质相同”，忽略仅时间戳刷新的差异。
 fn same_status(a: &ServerStatus, b: &ServerStatus) -> bool {
-    a.connected == b.connected && a.active_count == b.active_count && a.error == b.error
+    a.connected == b.connected
+        && a.active_count == b.active_count
+        && a.sessions == b.sessions
+        && a.error == b.error
 }
 
 // ------------------------------------------------------------------
@@ -847,6 +850,7 @@ mod tests {
         let base = ServerStatus {
             connected: true,
             active_count: 2,
+            sessions: Vec::new(),
             last_checked_at: Some(Utc::now()),
             error: None,
         };
@@ -863,9 +867,18 @@ mod tests {
         };
         assert!(!same_status(&base, &busier));
 
+        let with_session = ServerStatus {
+            sessions: vec![crate::model::SessionSummary {
+                id: "s1".to_string(),
+                title: "会话".to_string(),
+            }],
+            ..base.clone()
+        };
+        assert!(!same_status(&base, &with_session));
+
         let errored = ServerStatus {
             error: Some("boom".to_string()),
-            ..base
+            ..base.clone()
         };
         assert!(!same_status(&base, &errored));
     }

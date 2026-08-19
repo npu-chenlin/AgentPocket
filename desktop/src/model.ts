@@ -14,9 +14,16 @@ export interface ServerSummary {
   backend: Backend;
 }
 
+export interface SessionSummary {
+  id: string;
+  title: string;
+}
+
 export interface ServerStatus {
   connected: boolean;
   activeCount: number;
+  /** 正在运行的会话列表（仅忙碌会话）。 */
+  sessions: SessionSummary[];
   lastCheckedAt: string | null;
   error: string | null;
 }

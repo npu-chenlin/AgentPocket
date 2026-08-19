@@ -33,7 +33,45 @@ function statusLabel(status: ServerStatus | undefined): string {
   return "在线";
 }
 
-function renderServerCard(server: ServerSummary, status: ServerStatus | undefined): string {
+/** 运行中会话下拉面板：仅在线且存在忙碌会话时渲染。 */
+function renderSessionsPanel(
+  server: ServerSummary,
+  status: ServerStatus | undefined,
+  expanded: boolean,
+): string {
+  const sessions = status?.sessions ?? [];
+  if (status?.connected !== true || sessions.length === 0) return "";
+  const id = escapeHtml(server.id);
+  const rows = expanded
+    ? `<ul class="session-list">${sessions
+        .map(
+          (session) => `
+        <li>
+          <button class="session-row" type="button" data-action="open-session"
+            data-id="${id}" data-session-id="${escapeHtml(session.id)}"
+            aria-label="打开会话 ${escapeHtml(session.title)}">
+            <span class="session-spinner" aria-hidden="true"></span>
+            <span class="session-title">${escapeHtml(session.title)}</span>
+          </button>
+        </li>`,
+        )
+        .join("")}</ul>`
+    : "";
+  return `
+    <div class="server-sessions">
+      <button class="sessions-toggle" type="button" data-action="toggle-sessions" data-id="${id}"
+        aria-expanded="${expanded}">
+        ${sessions.length} 个运行中会话 ${expanded ? "▴" : "▾"}
+      </button>
+      ${rows}
+    </div>`;
+}
+
+function renderServerCard(
+  server: ServerSummary,
+  status: ServerStatus | undefined,
+  expanded: boolean,
+): string {
   const connected = status?.connected === true;
   const id = escapeHtml(server.id);
   const name = escapeHtml(server.name);
@@ -54,6 +92,7 @@ function renderServerCard(server: ServerSummary, status: ServerStatus | undefine
           </span>
         </span>
       </button>
+      ${renderSessionsPanel(server, status, expanded)}
       <div class="server-actions" aria-label="${name} 操作">
         <button class="icon-button" type="button" data-action="edit" data-id="${id}" aria-label="编辑 ${name}">编辑</button>
         <button class="icon-button icon-button--danger" type="button" data-action="delete" data-id="${id}" aria-label="删除 ${name}">删除</button>
@@ -62,7 +101,7 @@ function renderServerCard(server: ServerSummary, status: ServerStatus | undefine
     </article>`;
 }
 
-export function renderServerList(view: AppView): string {
+export function renderServerList(view: AppView, expanded: ReadonlySet<string> = new Set()): string {
   if (view.servers.length === 0) {
     return `
       <div class="empty-state">
@@ -73,5 +112,7 @@ export function renderServerList(view: AppView): string {
       </div>`;
   }
 
-  return view.servers.map((server) => renderServerCard(server, view.statuses[server.id])).join("");
+  return view.servers
+    .map((server) => renderServerCard(server, view.statuses[server.id], expanded.has(server.id)))
+    .join("");
 }
