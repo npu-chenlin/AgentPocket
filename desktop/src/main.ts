@@ -43,12 +43,14 @@ app.innerHTML = `
         </div>
       </div>
       <nav class="header-actions" aria-label="全局操作">
-        <button id="pin-window" class="ghost-button" type="button" aria-pressed="false">置顶</button>
         <button id="paste-import" class="ghost-button" type="button">导入</button>
         <button id="open-export" class="ghost-button" type="button">导出</button>
         <button id="open-sync" class="ghost-button" type="button">同步</button>
         <button id="open-settings" class="ghost-button" type="button">设置</button>
       </nav>
+      <button id="pin-window" class="pin-toggle" type="button" aria-pressed="false" aria-label="窗口置顶" title="窗口置顶">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z" fill="currentColor"/></svg>
+      </button>
     </header>
 
     <main class="content">

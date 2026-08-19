@@ -199,8 +199,26 @@ p {
   background: var(--accent-soft);
 }
 
-.ghost-button[aria-pressed="true"] {
+.pin-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 7px;
+  color: var(--text-dim);
+  background: transparent;
+  cursor: pointer;
+}
+
+.pin-toggle:hover {
   color: var(--text);
+  background: var(--accent-soft);
+}
+
+.pin-toggle[aria-pressed="true"] {
+  color: var(--accent);
   background: var(--accent-soft);
 }
 
