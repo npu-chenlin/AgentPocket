@@ -281,10 +281,6 @@ p {
 }
 
 .server-card {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -303,16 +299,60 @@ p {
   background: var(--surface-dim);
 }
 
+/* 卡片第一行：徽标 + 名称 + 操作 + 打开提示 */
+.server-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .server-open {
   display: flex;
   flex: 1;
   align-items: center;
   min-width: 0;
-  padding: 11px 4px 11px 12px;
+  padding: 11px 4px 11px 2px;
   border: 0;
   color: inherit;
   background: transparent;
   text-align: left;
+}
+
+/* 左侧下拉开关槽位：无会话时留空，保持各卡片图标列对齐 */
+.expander-slot {
+  display: flex;
+  flex: 0 0 22px;
+  justify-content: center;
+  margin-left: 6px;
+}
+
+.session-expander {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  place-items: center;
+  color: var(--text-faint);
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.68rem;
+}
+
+.session-expander:hover {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.status-chevron {
+  display: inline-block;
+  transition: transform 140ms ease;
+}
+
+.session-expander[aria-expanded="true"] .status-chevron {
+  transform: rotate(180deg);
 }
 
 .server-badge {
@@ -392,6 +432,11 @@ p {
   white-space: nowrap;
 }
 
+.server-meta-sep {
+  flex: none;
+  color: var(--text-faint);
+}
+
 .server-status {
   flex: none;
   color: var(--text-faint);
@@ -431,32 +476,12 @@ p {
 
 /* ---------- 运行中会话下拉面板 ---------- */
 
-/* 状态行即下拉开关：在线且有运行中会话时渲染为按钮 */
-.server-status-toggle {
-  flex: none;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  font-size: 0.72rem;
-  white-space: nowrap;
-}
-
-.server-status-toggle:hover {
-  background: var(--surface-dim);
-}
-
-.server-sessions {
-  flex: 1 0 100%;
-  border-top: 1px solid var(--border);
-  padding: 6px 12px 8px;
-}
-
 .session-list {
   display: grid;
   gap: 2px;
-  margin: 2px 0 0;
-  padding: 0;
+  margin: 0;
+  padding: 7px 12px 9px 69px;
+  border-top: 1px solid var(--border);
   list-style: none;
 }
 
@@ -465,7 +490,7 @@ p {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 8px;
+  padding: 5px 8px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -474,22 +499,22 @@ p {
 }
 
 .session-row:hover {
-  background: var(--surface-dim);
+  background: var(--accent-soft);
 }
 
 .session-title {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .session-spinner {
   flex: none;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border: 2px solid var(--border-strong);
   border-top-color: var(--accent);
   border-radius: 50%;
