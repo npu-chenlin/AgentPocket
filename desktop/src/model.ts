@@ -83,7 +83,7 @@ export const commands = {
   probeBackend: "probe_backend",
   reconnectAll: "reconnect_all",
   openServer: "open_server",
-  toggleAlwaysOnTop: "toggle_always_on_top",
+  setAlwaysOnTop: "set_always_on_top",
   previewImportText: "preview_import_text",
   applyImport: "apply_import",
   exportConfig: "export_config",

@@ -366,9 +366,10 @@ requiredElement<HTMLButtonElement>("#open-settings").addEventListener("click", (
 
 const pinButton = requiredElement<HTMLButtonElement>("#pin-window");
 pinButton.addEventListener("click", async () => {
+  const next = pinButton.getAttribute("aria-pressed") !== "true";
   try {
-    const pinned = await invoke<boolean>(commands.toggleAlwaysOnTop);
-    pinButton.setAttribute("aria-pressed", String(pinned));
+    await invoke(commands.setAlwaysOnTop, { pinned: next });
+    pinButton.setAttribute("aria-pressed", String(next));
   } catch (error) {
     setMessage(`置顶失败：${errorMessage(error)}`, "error");
   }

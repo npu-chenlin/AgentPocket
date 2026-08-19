@@ -261,19 +261,16 @@ pub fn open_server(
 }
 
 #[tauri::command]
-pub fn toggle_always_on_top(app: AppHandle) -> Result<bool, CommandError> {
+pub fn set_always_on_top(app: AppHandle, pinned: bool) -> Result<(), CommandError> {
     use tauri::Manager;
 
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| CommandError::Window("main window not found".to_string()))?;
-    let pinned = !window
-        .is_always_on_top()
-        .map_err(|e| CommandError::Window(e.to_string()))?;
     window
         .set_always_on_top(pinned)
         .map_err(|e| CommandError::Window(e.to_string()))?;
-    Ok(pinned)
+    Ok(())
 }
 
 #[tauri::command]

@@ -129,7 +129,7 @@ pub fn run() {
             commands::probe_backend,
             commands::reconnect_all,
             commands::open_server,
-            commands::toggle_always_on_top,
+            commands::set_always_on_top,
             commands::preview_import_text,
             commands::apply_import,
             commands::export_config,
