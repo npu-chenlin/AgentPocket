@@ -309,6 +309,10 @@ pub fn start_sync_server(
     let handle = start_server(
         Arc::clone(&state),
         Box::new(move || {
+            if let Some(window) = app_for_fetched.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
             let _ = app_for_fetched.emit("phone-config-fetched", ());
         }),
         Box::new(move |preview| {

@@ -980,7 +980,7 @@ public class MainActivity extends ComponentActivity {
     private void fetchDesktopConfig(SyncClient.SyncLink link) {
         SyncClient.fetch(probeClient, this, link, new SyncClient.FetchCallback() {
             @Override public void onMerged(int count) {
-                Toast.makeText(MainActivity.this, "已同步 " + count + " 台服务器", Toast.LENGTH_LONG).show();
+                showSyncResult("同步成功", "已从电脑同步 " + count + " 台服务器。");
                 restartListener();
                 applyBaseFaceState();
                 if (webView != null && webView.getUrl() == null) loadConfiguredUrl();
@@ -992,14 +992,25 @@ public class MainActivity extends ComponentActivity {
     }
 
     private void uploadPhoneConfig(SyncClient.SyncLink link) {
+        int count = ServerStore.load(this).size();
         SyncClient.upload(probeClient, this, link, new SyncClient.UploadCallback() {
             @Override public void onSent() {
-                Toast.makeText(MainActivity.this, "已发送，请在电脑上确认导入", Toast.LENGTH_LONG).show();
+                showSyncResult("上传成功", "已上传 " + count + " 台服务器，请在电脑上确认导入。");
             }
             @Override public void onError(String message) {
                 Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
             }
         });
+    }
+
+    /** 同步成功提示框。 */
+    private void showSyncResult(String title, String message) {
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("好", null)
+                .create();
+        showModernDialog(dialog, null);
     }
 
     /** 服务器后端类型图标：dsh 用鲸鱼 logo，Kimi 用官方 logo。 */
