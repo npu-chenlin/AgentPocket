@@ -89,6 +89,11 @@ function renderServerCard(
   const id = escapeHtml(server.id);
   const name = escapeHtml(server.name);
   const address = escapeHtml(`${server.host}:${server.port}`);
+  const version = status?.serverVersion
+    ? `
+              <span class="server-meta-sep" aria-hidden="true">·</span>
+              <span class="server-version">v${escapeHtml(status.serverVersion)}</span>`
+    : "";
 
   return `
     <article class="server-card${connected ? "" : " server-card--offline"}" data-server-id="${id}">
@@ -101,7 +106,7 @@ function renderServerCard(
               <strong>${name}</strong>
             </span>
             <span class="server-meta">
-              <span class="server-address">${address}</span>
+              <span class="server-address">${address}</span>${version}
               <span class="server-meta-sep" aria-hidden="true">·</span>
               <span class="server-status${connected ? " server-status--online" : ""}">${statusLabel(status)}</span>
             </span>

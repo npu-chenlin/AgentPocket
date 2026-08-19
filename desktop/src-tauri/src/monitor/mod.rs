@@ -206,6 +206,7 @@ pub(crate) fn send_status(
         connected,
         active_count: state.busy.len() as u32,
         sessions,
+        server_version: state.server_version.clone(),
         last_checked_at: Some(Utc::now()),
         error,
     };

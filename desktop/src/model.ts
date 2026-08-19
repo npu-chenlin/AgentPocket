@@ -24,6 +24,8 @@ export interface ServerStatus {
   activeCount: number;
   /** 正在运行的会话列表（仅忙碌会话）。 */
   sessions: SessionSummary[];
+  /** 服务端版本号（kimi 提供；dsh 为 null）。 */
+  serverVersion: string | null;
   lastCheckedAt: string | null;
   error: string | null;
 }

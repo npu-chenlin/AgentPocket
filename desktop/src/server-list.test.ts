@@ -19,6 +19,7 @@ function viewFixture(): AppView {
           { id: "sess-a", title: "重构登录模块" },
           { id: "sess-b", title: "修复 <b> 注入" },
         ],
+        serverVersion: null,
         lastCheckedAt: null,
         error: null,
       },
@@ -26,6 +27,7 @@ function viewFixture(): AppView {
         connected: false,
         activeCount: 0,
         sessions: [],
+        serverVersion: null,
         lastCheckedAt: null,
         error: "secret-token",
       },
@@ -101,10 +103,30 @@ describe("renderServerList", () => {
       connected: false,
       activeCount: 1,
       sessions: [{ id: "s", title: "离线会话" }],
+      serverVersion: null,
       lastCheckedAt: null,
       error: null,
     };
     const html = renderServerList(view, new Set(["kimi-1"]));
     expect(html).not.toContain("离线会话");
+  });
+
+  it("shows the kimi server version when reported", () => {
+    const view = viewFixture();
+    view.statuses["kimi-1"] = {
+      connected: true,
+      activeCount: 0,
+      sessions: [],
+      serverVersion: "0.36.0",
+      lastCheckedAt: null,
+      error: null,
+    };
+    const html = renderServerList(view);
+    expect(html).toContain("v0.36.0");
+  });
+
+  it("omits the version segment when the server reports none", () => {
+    const html = renderServerList(viewFixture());
+    expect(html).not.toContain("server-version");
   });
 });

@@ -14,6 +14,8 @@ pub struct ProtocolState {
     pub titles: HashMap<String, String>,
     pub busy: HashSet<String>,
     pub baseline_complete: bool,
+    /// 服务端版本号（kimi 从 meta 接口获取；dsh 暂无此信息）。
+    pub server_version: Option<String>,
 }
 
 #[derive(Debug, Error)]

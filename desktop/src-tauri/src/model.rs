@@ -146,6 +146,8 @@ pub struct ServerStatus {
     pub active_count: u32,
     /// 正在运行的会话列表，按标题排序以保证稳定。
     pub sessions: Vec<SessionSummary>,
+    /// 服务端版本号（kimi 从 meta 接口获取；dsh 暂无此信息）。
+    pub server_version: Option<String>,
     pub last_checked_at: Option<DateTime<Utc>>,
     pub error: Option<String>,
 }

@@ -611,6 +611,7 @@ fn same_status(a: &ServerStatus, b: &ServerStatus) -> bool {
     a.connected == b.connected
         && a.active_count == b.active_count
         && a.sessions == b.sessions
+        && a.server_version == b.server_version
         && a.error == b.error
 }
 
@@ -851,6 +852,7 @@ mod tests {
             connected: true,
             active_count: 2,
             sessions: Vec::new(),
+            server_version: None,
             last_checked_at: Some(Utc::now()),
             error: None,
         };
@@ -881,5 +883,11 @@ mod tests {
             ..base.clone()
         };
         assert!(!same_status(&base, &errored));
+
+        let upgraded = ServerStatus {
+            server_version: Some("0.36.0".to_string()),
+            ..base.clone()
+        };
+        assert!(!same_status(&base, &upgraded));
     }
 }

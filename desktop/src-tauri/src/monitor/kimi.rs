@@ -75,6 +75,9 @@ async fn run_once(
 ) -> Result<(), MonitorError> {
     let base = server.base_url().map_err(MonitorError::Config)?;
 
+    // 0. Fetch server version from meta (best-effort, never fatal).
+    fetch_version(client, server, base.clone(), state, token).await;
+
     // 1. Fetch baseline session list.
     fetch_baseline(client, server, base.clone(), state, token).await?;
     send_status(update_tx, &server.id, false, state, None);
@@ -104,6 +107,45 @@ async fn run_once(
         .map_err(|e| MonitorError::Ws(e.to_string()))?;
 
     read_loop(client, ws_stream, server, update_tx, state, token).await
+}
+
+async fn fetch_version(
+    client: &reqwest::Client,
+    server: &ServerConfig,
+    base: url::Url,
+    state: &mut ProtocolState,
+    token: &CancellationToken,
+) {
+    let Ok(meta_url) = base.join("/api/v1/meta") else {
+        return;
+    };
+    let mut req = client.get(meta_url);
+    if !server.token.is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", server.token));
+    }
+    let Ok(resp) = cancellable_request(async { req.send().await.map_err(|e| e.to_string()) }, token)
+        .await
+    else {
+        return;
+    };
+    if !resp.status().is_success() {
+        return;
+    }
+    let Ok(text) = resp.text().await else {
+        return;
+    };
+    let version: Option<String> = serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|v| {
+            v.get("data")
+                .and_then(|d| d.get("server_version"))
+                .and_then(|s| s.as_str())
+                .map(String::from)
+        })
+        .filter(|v| !v.is_empty());
+    if version.is_some() {
+        state.server_version = version;
+    }
 }
 
 async fn fetch_baseline(
