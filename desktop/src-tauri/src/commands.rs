@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::config::{ConfigError, ConfigStore, ExportFormat, ImportMode, ImportPreviewData};
+use crate::config::{ConfigError, ConfigStore, ImportMode, ImportPreviewData};
 use crate::model::{
     AppConfig, AppView, Backend, DesktopSettings, ServerConfig, ServerForEdit, ServerStatus,
     ServerSummary, ValidationError,
@@ -89,8 +89,6 @@ pub enum CommandError {
     Autostart(String),
     #[error("invalid import mode")]
     InvalidImportMode,
-    #[error("invalid export format")]
-    InvalidExportFormat,
     #[error("invalid import id")]
     InvalidImportId,
     #[error("window error: {0}")]
@@ -142,29 +140,6 @@ impl From<ImportModeArg> for ImportMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ExportFormatArg {
-    Full,
-    Android,
-}
-
-impl From<ExportFormatArg> for ExportFormat {
-    fn from(arg: ExportFormatArg) -> Self {
-        match arg {
-            ExportFormatArg::Full => ExportFormat::Full,
-            ExportFormatArg::Android => ExportFormat::Android,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ImportSourceKind {
-    Full,
-    Android,
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportIssue {
@@ -179,7 +154,6 @@ pub struct ImportPreview {
     pub import_id: Uuid,
     pub valid_count: usize,
     pub invalid: Vec<ImportIssue>,
-    pub source_kind: ImportSourceKind,
 }
 
 // ------------------------------------------------------------------
@@ -353,31 +327,22 @@ pub async fn apply_import(
 }
 
 #[tauri::command]
-pub fn export_config(
-    state: State<'_, Arc<AppState>>,
-    path: String,
-    format: ExportFormatArg,
-) -> Result<(), CommandError> {
+pub fn export_config(state: State<'_, Arc<AppState>>, path: String) -> Result<(), CommandError> {
     let config = state
         .config
         .read()
         .map_err(|_| CommandError::Config("config lock poisoned".to_string()))?;
-    state
-        .store
-        .export(&config, Path::new(&path), format.into())?;
+    state.store.export(&config, Path::new(&path))?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn export_config_text(
-    state: State<'_, Arc<AppState>>,
-    format: ExportFormatArg,
-) -> Result<String, CommandError> {
+pub fn export_config_text(state: State<'_, Arc<AppState>>) -> Result<String, CommandError> {
     let config = state
         .config
         .read()
         .map_err(|_| CommandError::Config("config lock poisoned".to_string()))?;
-    Ok(state.store.export_text(&config, format.into())?)
+    Ok(state.store.export_text(&config)?)
 }
 
 // ------------------------------------------------------------------
@@ -532,14 +497,13 @@ pub(crate) fn preview_from_content(
     content: &str,
 ) -> Result<ImportPreview, CommandError> {
     let data = state.store.preview_import_text(content)?;
-    let (source_kind, invalid) = analyze_import_content(content)?;
-    Ok(cache_preview(state, data, source_kind, invalid))
+    let invalid = analyze_import_content(content)?;
+    Ok(cache_preview(state, data, invalid))
 }
 
 fn cache_preview(
     state: &Arc<AppState>,
     data: ImportPreviewData,
-    source_kind: ImportSourceKind,
     invalid: Vec<ImportIssue>,
 ) -> ImportPreview {
     let import_id = Uuid::new_v4();
@@ -562,27 +526,18 @@ fn cache_preview(
         import_id,
         valid_count,
         invalid,
-        source_kind,
     }
 }
 
-fn analyze_import_content(
-    content: &str,
-) -> Result<(ImportSourceKind, Vec<ImportIssue>), CommandError> {
+fn analyze_import_content(content: &str) -> Result<Vec<ImportIssue>, CommandError> {
     let value: Value = serde_json::from_str(content).map_err(ConfigError::Json)?;
 
-    match value {
-        Value::Array(values) => Ok((ImportSourceKind::Android, collect_issues(values))),
-        Value::Object(_) => {
-            let servers = value
-                .get("servers")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            Ok((ImportSourceKind::Full, collect_issues(servers)))
-        }
-        _ => Err(ConfigError::UnsupportedFormat.into()),
-    }
+    let servers = value
+        .get("servers")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or(ConfigError::UnsupportedFormat)?;
+    Ok(collect_issues(servers))
 }
 
 fn collect_issues(values: Vec<Value>) -> Vec<ImportIssue> {
@@ -788,12 +743,11 @@ mod tests {
             MonitorManager::new(tx),
         ));
 
-        let content = r#"[{"id":"a","name":"A","host":"host","port":3080,"token":"top-secret","backend":"dsh"},{"name":"Bad","host":"http://host","port":0,"backend":"dsh"}]"#;
+        let content = r#"{"schema":1,"servers":[{"id":"a","name":"A","host":"host","port":3080,"token":"top-secret","backend":"dsh"},{"name":"Bad","host":"http://host","port":0,"backend":"dsh"}]}"#;
 
         let preview = preview_from_content(&state, content).unwrap();
         assert_eq!(preview.valid_count, 1);
         assert_eq!(preview.invalid.len(), 1);
-        assert_eq!(preview.source_kind, ImportSourceKind::Android);
 
         // Response JSON must not contain the token.
         let json = serde_json::to_string(&preview).unwrap();
@@ -821,7 +775,7 @@ mod tests {
             MonitorManager::new(tx),
         ));
 
-        let content = r#"[{"id":"a","name":"A","host":"host","port":3080,"token":"top-secret","backend":"dsh"}]"#;
+        let content = r#"{"schema":1,"servers":[{"id":"a","name":"A","host":"host","port":3080,"token":"top-secret","backend":"dsh"}]}"#;
 
         let preview = preview_from_content(&state, content).unwrap();
         let import_id = preview.import_id;

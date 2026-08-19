@@ -11,7 +11,6 @@ import {
   commands,
   emptyServerDraft,
   type AppView,
-  type ExportFormat,
   type ImportMode,
   type ImportPreview,
   type ServerDraft,
@@ -46,7 +45,7 @@ app.innerHTML = `
       <nav class="header-actions" aria-label="全局操作">
         <button id="pin-window" class="ghost-button" type="button" aria-pressed="false">置顶</button>
         <button id="paste-import" class="ghost-button" type="button">导入</button>
-        <button class="ghost-button" type="button" data-export-format="android">导出</button>
+        <button id="open-export" class="ghost-button" type="button">导出</button>
         <button id="open-sync" class="ghost-button" type="button">同步</button>
         <button id="open-settings" class="ghost-button" type="button">设置</button>
       </nav>
@@ -140,7 +139,7 @@ app.innerHTML = `
         <h2>粘贴导入</h2>
         <button class="modal__close" type="button" data-close-dialog="paste-dialog" aria-label="关闭">×</button>
       </div>
-      <p class="modal__summary">把复制好的 JSON 配置粘贴到下方（Android 服务器数组或完整桌面配置均可）。</p>
+      <p class="modal__summary">把复制好的 JSON 配置粘贴到下方。</p>
       <textarea id="paste-content" class="code-area" rows="10" spellcheck="false" placeholder='[{"name":"工作站","host":"100.64.0.2","port":3080,"backend":"dsh"}]'></textarea>
       <div id="paste-error" class="inline-error" role="alert"></div>
       <div class="modal__actions">
@@ -214,7 +213,6 @@ let latestRevision = -1;
 /** 展开运行中会话面板的服务器 id；重绘时保持展开状态。 */
 const expandedServers = new Set<string>();
 let pendingImport: ImportPreview | null = null;
-let pendingExportFormat: ExportFormat = "full";
 let unlistenState: UnlistenFn | undefined;
 let unlistenPhoneReceived: UnlistenFn | undefined;
 let unlistenPhoneFetched: UnlistenFn | undefined;
@@ -515,23 +513,19 @@ importForm.addEventListener("submit", async (event) => {
   }
 });
 
-for (const button of document.querySelectorAll<HTMLButtonElement>("[data-export-format]")) {
-  button.addEventListener("click", async () => {
-    pendingExportFormat = button.dataset.exportFormat as ExportFormat;
-    exportText.value = "";
-    button.disabled = true;
-    try {
-      exportText.value = await invoke<string>(commands.exportConfigText, {
-        format: pendingExportFormat,
-      });
-      exportDialog.showModal();
-    } catch (error) {
-      setMessage(`导出失败：${errorMessage(error)}`, "error");
-    } finally {
-      button.disabled = false;
-    }
-  });
-}
+requiredElement<HTMLButtonElement>("#open-export").addEventListener("click", async (event) => {
+  const button = event.currentTarget as HTMLButtonElement;
+  exportText.value = "";
+  button.disabled = true;
+  try {
+    exportText.value = await invoke<string>(commands.exportConfigText);
+    exportDialog.showModal();
+  } catch (error) {
+    setMessage(`导出失败：${errorMessage(error)}`, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
 
 copyExport.addEventListener("click", async () => {
   if (!exportText.value) return;
@@ -551,9 +545,9 @@ requiredElement<HTMLButtonElement>("#confirm-export").addEventListener("click", 
   const button = event.currentTarget as HTMLButtonElement;
   button.disabled = true;
   try {
-    const path = await chooseExportPath(pendingExportFormat);
+    const path = await chooseExportPath();
     if (!path) return;
-    await invoke(commands.exportConfig, { path, format: pendingExportFormat });
+    await invoke(commands.exportConfig, { path });
     exportDialog.close();
     setMessage("配置已导出", "success");
   } catch (error) {

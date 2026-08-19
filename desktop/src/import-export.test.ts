@@ -7,9 +7,8 @@ describe("import/export presentation", () => {
       importId: "opaque-id",
       validCount: 2,
       invalid: [{ index: 2, reason: "invalid host" }],
-      sourceKind: "android" as const,
     };
-    expect(importPreviewText(preview)).toBe("Android 服务器列表：2 条有效，1 条无效");
+    expect(importPreviewText(preview)).toBe("2 条有效，1 条无效");
     expect(importIssueText(preview)).toEqual(["第 3 条：invalid host"]);
     expect(JSON.stringify({ text: importPreviewText(preview) })).not.toContain("token");
   });

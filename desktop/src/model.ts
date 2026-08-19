@@ -58,11 +58,9 @@ export interface ImportPreview {
   importId: string;
   validCount: number;
   invalid: ImportIssue[];
-  sourceKind: "full" | "android";
 }
 
 export type ImportMode = "merge" | "replace";
-export type ExportFormat = "full" | "android";
 
 export interface SyncOption {
   address: string;

@@ -11,7 +11,7 @@ use tiny_http::{Method, Request, Response, Server, StatusCode};
 use uuid::Uuid;
 
 use crate::commands::{preview_from_content, AppState, CommandError, ImportPreview};
-use crate::config::ExportFormat;
+
 
 /// 同步服务器自动停止时限：二维码过期后不再接受手机请求。
 const SYNC_SERVER_TTL: Duration = Duration::from_secs(10 * 60);
@@ -173,7 +173,7 @@ fn handle_request(
                 .config
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match state.store.export_text(&config, ExportFormat::Android) {
+            match state.store.export_text(&config) {
                 Ok(text) => {
                     let header = tiny_http::Header::from_bytes(
                         "Content-Type",
@@ -411,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn get_returns_android_array_and_invokes_on_fetched() {
+    fn get_returns_unified_config_and_invokes_on_fetched() {
         let state = sample_state();
         let fetched = Arc::new(Mutex::new(0_usize));
         let fetched_for_callback = Arc::clone(&fetched);
@@ -431,8 +431,11 @@ mod tests {
         );
 
         assert_eq!(status, 200);
-        let servers: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let array = servers.as_array().expect("body is a JSON array");
+        let payload: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(payload["schema"], 1);
+        let array = payload["servers"]
+            .as_array()
+            .expect("servers is a JSON array");
         assert_eq!(array.len(), 1);
         assert_eq!(array[0]["name"], "Work");
         assert_eq!(array[0]["host"], "100.64.0.2");
@@ -458,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn post_valid_array_triggers_on_received_with_preview() {
+    fn post_valid_config_triggers_on_received_with_preview() {
         let state = sample_state();
         let received = Arc::new(Mutex::new(None));
         let received_for_callback = Arc::clone(&received);
@@ -472,7 +475,7 @@ mod tests {
         .unwrap();
         let token = token_from_url(handle.url());
 
-        let body = r#"[{"id":"p1","name":"Phone","host":"100.64.0.9","port":3080,"token":"t","backend":"kimi"},{"name":"Bad","host":"http://host","port":0,"backend":"dsh"}]"#;
+        let body = r#"{"schema":1,"servers":[{"id":"p1","name":"Phone","host":"100.64.0.9","port":3080,"token":"t","backend":"kimi"},{"name":"Bad","host":"http://host","port":0,"backend":"dsh"}]}"#;
         let (status, _) = raw_request(
             handle.port(),
             &format!(

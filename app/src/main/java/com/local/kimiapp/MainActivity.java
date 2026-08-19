@@ -925,15 +925,21 @@ public class MainActivity extends ComponentActivity {
         }
     }
 
-    /** 把全部服务器配置序列化为 JSON 数组并复制到系统剪贴板（格式与 ServerStore 存储一致，桌面端可直接导入）。 */
+    /** 把全部服务器配置序列化为统一交换格式并复制到系统剪贴板（与桌面端格式一致，可互相导入）。 */
     private void copyServerConfig() {
         List<ServerStore.Server> servers = ServerStore.load(this);
         JSONArray items = new JSONArray();
         for (ServerStore.Server server : servers) try {
             items.put(server.json());
         } catch (Exception ignored) {}
+        JSONObject doc = new JSONObject();
+        try {
+            doc.put("schema", 1)
+                    .put("activeId", ServerStore.activeId(this))
+                    .put("servers", items);
+        } catch (Exception ignored) {}
         ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        clipboard.setPrimaryClip(ClipData.newPlainText("服务器配置", items.toString()));
+        clipboard.setPrimaryClip(ClipData.newPlainText("服务器配置", doc.toString()));
         Toast.makeText(this, "配置已复制到剪贴板（含 API 凭据，注意安全）", Toast.LENGTH_LONG).show();
     }
 

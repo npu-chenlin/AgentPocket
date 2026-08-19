@@ -108,7 +108,9 @@ public final class SyncClient {
                     String body = res.body() == null ? "" : res.body().string();
                     JSONArray items;
                     try {
-                        items = new JSONArray(body);
+                        JSONObject doc = new JSONObject(body);
+                        items = doc.optJSONArray("servers");
+                        if (items == null) throw new Exception("missing servers");
                     } catch (Exception e) {
                         postError(callback, "电脑配置格式无法识别");
                         return;
@@ -135,10 +137,16 @@ public final class SyncClient {
         }
         JSONArray items = new JSONArray();
         for (ServerStore.Server server : servers) try { items.put(server.json()); } catch (Exception ignored) {}
+        JSONObject doc = new JSONObject();
+        try {
+            doc.put("schema", 1)
+                    .put("activeId", ServerStore.activeId(context))
+                    .put("servers", items);
+        } catch (Exception ignored) {}
         Request request = new Request.Builder()
                 .url(link.baseUrl() + "/config")
                 .header("X-Sync-Token", link.token)
-                .post(RequestBody.create(items.toString(), JSON))
+                .post(RequestBody.create(doc.toString(), JSON))
                 .build();
         client.newCall(request).enqueue(new Callback() {
             @Override public void onFailure(Call call, IOException e) {

@@ -10,9 +10,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * 服务器配置存储。采用与桌面端共享的统一交换格式
+ * {"schema":1,"activeId":"...","servers":[...]}；
+ * 加载时兼容旧纯数组格式，下次保存自动迁移。
+ */
 public final class ServerStore {
     private static final String PREFS = "kimi_servers";
-    private static final String LEGACY = "kimi_connection";
+    private static final int SCHEMA = 1;
 
     public static final class Server {
         public static final String BACKEND_KIMI = "kimi";
@@ -36,42 +41,26 @@ public final class ServerStore {
     private ServerStore() {}
 
     public static synchronized List<Server> load(Context context) {
-        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        String raw = prefs.getString("items", "");
-        List<Server> result = new ArrayList<>();
-        if (!raw.isEmpty()) try {
-            JSONArray items = new JSONArray(raw);
-            for (int i = 0; i < items.length(); i++) {
-                JSONObject item = items.getJSONObject(i);
-                result.add(new Server(item.getString("id"), item.optString("name", "Kimi"),
-                        item.getString("host"), item.getInt("port"), item.optString("token", ""),
-                        item.optString("backend", Server.BACKEND_KIMI)));
-            }
-        } catch (Exception ignored) {}
-        if (result.isEmpty()) {
-            SharedPreferences legacy = context.getSharedPreferences(LEGACY, Context.MODE_PRIVATE);
-            if (legacy.contains("ip")) {
-                result.add(new Server(UUID.randomUUID().toString(), "默认服务器",
-                        legacy.getString("ip", "100.95.189.73"), legacy.getInt("port", 58627),
-                        legacy.getString("token", "")));
-                save(context, result, result.get(0).id);
-            }
-        }
-        return result;
+        return readState(context).servers;
     }
 
     public static synchronized void save(Context context, List<Server> servers, String activeId) {
         JSONArray items = new JSONArray();
         for (Server server : servers) try { items.put(server.json()); } catch (Exception ignored) {}
+        JSONObject doc = new JSONObject();
+        try {
+            doc.put("schema", SCHEMA)
+                    .put("activeId", activeId == null ? "" : activeId)
+                    .put("servers", items);
+        } catch (Exception ignored) {}
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putString("items", items.toString()).putString("active", activeId).apply();
+                .putString("items", doc.toString()).apply();
     }
 
     public static String activeId(Context context) {
-        List<Server> servers = load(context);
-        String id = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("active", "");
-        for (Server server : servers) if (server.id.equals(id)) return id;
-        return servers.isEmpty() ? "" : servers.get(0).id;
+        State state = readState(context);
+        for (Server server : state.servers) if (server.id.equals(state.activeId)) return state.activeId;
+        return state.servers.isEmpty() ? "" : state.servers.get(0).id;
     }
 
     public static Server active(Context context) {
@@ -81,4 +70,41 @@ public final class ServerStore {
     }
 
     public static String newId() { return UUID.randomUUID().toString(); }
+
+    private static final class State {
+        final List<Server> servers;
+        final String activeId;
+        State(List<Server> servers, String activeId) { this.servers = servers; this.activeId = activeId; }
+    }
+
+    /** 解析存储内容：先按统一对象格式，失败回退旧纯数组格式（迁移期兼容）。 */
+    private static State readState(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String raw = prefs.getString("items", "");
+        List<Server> servers = new ArrayList<>();
+        String activeId = "";
+        if (!raw.isEmpty()) try {
+            JSONObject doc = new JSONObject(raw);
+            activeId = doc.optString("activeId", "");
+            JSONArray items = doc.optJSONArray("servers");
+            if (items != null) servers = parseItems(items);
+        } catch (Exception objectFailed) {
+            try {
+                servers = parseItems(new JSONArray(raw));
+                activeId = prefs.getString("active", "");
+            } catch (Exception ignored) {}
+        }
+        return new State(servers, activeId);
+    }
+
+    private static List<Server> parseItems(JSONArray items) {
+        List<Server> result = new ArrayList<>();
+        for (int i = 0; i < items.length(); i++) try {
+            JSONObject item = items.getJSONObject(i);
+            result.add(new Server(item.getString("id"), item.optString("name", "Kimi"),
+                    item.getString("host"), item.getInt("port"), item.optString("token", ""),
+                    item.optString("backend", Server.BACKEND_KIMI)));
+        } catch (Exception ignored) {}
+        return result;
+    }
 }
