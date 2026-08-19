@@ -33,17 +33,40 @@ function statusLabel(status: ServerStatus | undefined): string {
   return "在线";
 }
 
-/** 运行中会话下拉面板：仅在线且存在忙碌会话时渲染。 */
-function renderSessionsPanel(
+/**
+ * 状态行本身即下拉开关：在线且有运行中会话时可点击展开会话列表，
+ * 其余情况只是普通状态文本，不额外增加行。
+ */
+function renderStatusControl(
+  server: ServerSummary,
+  status: ServerStatus | undefined,
+  expanded: boolean,
+): string {
+  const label = statusLabel(status);
+  const sessions = status?.sessions ?? [];
+  if (status?.connected !== true || sessions.length === 0) {
+    return `<span class="server-status${status?.connected ? " server-status--online" : ""}">${label}</span>`;
+  }
+  const id = escapeHtml(server.id);
+  return `
+    <button class="server-status-toggle server-status--online" type="button"
+      data-action="toggle-sessions" data-id="${id}" aria-expanded="${expanded}">
+      ${label} ${expanded ? "▴" : "▾"}
+    </button>`;
+}
+
+/** 展开后的运行中会话列表。 */
+function renderSessionRows(
   server: ServerSummary,
   status: ServerStatus | undefined,
   expanded: boolean,
 ): string {
   const sessions = status?.sessions ?? [];
-  if (status?.connected !== true || sessions.length === 0) return "";
+  if (!expanded || status?.connected !== true || sessions.length === 0) return "";
   const id = escapeHtml(server.id);
-  const rows = expanded
-    ? `<ul class="session-list">${sessions
+  return `
+    <div class="server-sessions">
+      <ul class="session-list">${sessions
         .map(
           (session) => `
         <li>
@@ -55,15 +78,7 @@ function renderSessionsPanel(
           </button>
         </li>`,
         )
-        .join("")}</ul>`
-    : "";
-  return `
-    <div class="server-sessions">
-      <button class="sessions-toggle" type="button" data-action="toggle-sessions" data-id="${id}"
-        aria-expanded="${expanded}">
-        ${sessions.length} 个运行中会话 ${expanded ? "▴" : "▾"}
-      </button>
-      ${rows}
+        .join("")}</ul>
     </div>`;
 }
 
@@ -87,12 +102,11 @@ function renderServerCard(
           </span>
           <span class="server-meta">
             <span class="server-address">${address}</span>
-            <span class="server-meta-sep" aria-hidden="true">·</span>
-            <span class="server-status${connected ? " server-status--online" : ""}">${statusLabel(status)}</span>
           </span>
         </span>
       </button>
-      ${renderSessionsPanel(server, status, expanded)}
+      ${renderStatusControl(server, status, expanded)}
+      ${renderSessionRows(server, status, expanded)}
       <div class="server-actions" aria-label="${name} 操作">
         <button class="icon-button" type="button" data-action="edit" data-id="${id}" aria-label="编辑 ${name}">编辑</button>
         <button class="icon-button icon-button--danger" type="button" data-action="delete" data-id="${id}" aria-label="删除 ${name}">删除</button>

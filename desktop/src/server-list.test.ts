@@ -75,10 +75,9 @@ describe("renderServerList", () => {
     expect(html).toContain("&lt;img");
   });
 
-  it("shows collapsed sessions toggle for online servers with busy sessions", () => {
+  it("makes the status row a sessions toggle when busy, collapsed by default", () => {
     const html = renderServerList(viewFixture());
-    expect(html).toContain("toggle-sessions");
-    expect(html).toContain("2 个运行中会话");
+    expect(html).toContain('data-action="toggle-sessions"');
     expect(html).not.toContain("session-row");
     expect(html).not.toContain("重构登录模块");
   });

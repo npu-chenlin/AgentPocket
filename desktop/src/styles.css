@@ -392,11 +392,6 @@ p {
   white-space: nowrap;
 }
 
-.server-meta-sep {
-  flex: none;
-  color: var(--text-faint);
-}
-
 .server-status {
   flex: none;
   color: var(--text-faint);
@@ -436,26 +431,25 @@ p {
 
 /* ---------- 运行中会话下拉面板 ---------- */
 
+/* 状态行即下拉开关：在线且有运行中会话时渲染为按钮 */
+.server-status-toggle {
+  flex: none;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.server-status-toggle:hover {
+  background: var(--surface-dim);
+}
+
 .server-sessions {
   flex: 1 0 100%;
   border-top: 1px solid var(--border);
   padding: 6px 12px 8px;
-}
-
-.sessions-toggle {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font-size: 0.85rem;
-  text-align: left;
-}
-
-.sessions-toggle:hover {
-  color: var(--accent-hover);
 }
 
 .session-list {
