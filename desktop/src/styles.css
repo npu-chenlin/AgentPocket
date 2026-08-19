@@ -199,6 +199,11 @@ p {
   background: var(--accent-soft);
 }
 
+.ghost-button[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
 .text-button,
 .icon-button {
   padding: 6px 8px;

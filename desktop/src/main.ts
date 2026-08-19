@@ -44,6 +44,7 @@ app.innerHTML = `
         </div>
       </div>
       <nav class="header-actions" aria-label="全局操作">
+        <button id="pin-window" class="ghost-button" type="button" aria-pressed="false">置顶</button>
         <button id="paste-import" class="ghost-button" type="button">导入</button>
         <button class="ghost-button" type="button" data-export-format="android">导出</button>
         <button id="open-sync" class="ghost-button" type="button">同步</button>
@@ -361,6 +362,16 @@ requiredElement<HTMLButtonElement>("#add-server").addEventListener("click", () =
 
 requiredElement<HTMLButtonElement>("#open-settings").addEventListener("click", () => {
   settingsDialog.showModal();
+});
+
+const pinButton = requiredElement<HTMLButtonElement>("#pin-window");
+pinButton.addEventListener("click", async () => {
+  try {
+    const pinned = await invoke<boolean>(commands.toggleAlwaysOnTop);
+    pinButton.setAttribute("aria-pressed", String(pinned));
+  } catch (error) {
+    setMessage(`置顶失败：${errorMessage(error)}`, "error");
+  }
 });
 
 serverForm.addEventListener("submit", async (event) => {

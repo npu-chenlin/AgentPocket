@@ -93,6 +93,8 @@ pub enum CommandError {
     InvalidExportFormat,
     #[error("invalid import id")]
     InvalidImportId,
+    #[error("window error: {0}")]
+    Window(String),
     #[error("sync error: {0}")]
     Sync(String),
 }
@@ -282,6 +284,22 @@ pub fn open_server(
         .map_err(|_| CommandError::Config("config lock poisoned".to_string()))?;
     open_saved_server(&app, &config, &id, session_id.as_deref())?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn toggle_always_on_top(app: AppHandle) -> Result<bool, CommandError> {
+    use tauri::Manager;
+
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| CommandError::Window("main window not found".to_string()))?;
+    let pinned = !window
+        .is_always_on_top()
+        .map_err(|e| CommandError::Window(e.to_string()))?;
+    window
+        .set_always_on_top(pinned)
+        .map_err(|e| CommandError::Window(e.to_string()))?;
+    Ok(pinned)
 }
 
 #[tauri::command]
