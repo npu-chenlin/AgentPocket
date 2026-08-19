@@ -34,28 +34,28 @@ function statusLabel(status: ServerStatus | undefined): string {
 }
 
 /**
- * 状态行本身即下拉开关：在线且有运行中会话时可点击展开会话列表，
- * 其余情况只是普通状态文本，不额外增加行。
+ * 左侧下拉开关：有运行中会话时可点击展开会话列表；
+ * 无会话时留占位槽，保证各卡片图标列对齐。
  */
-function renderStatusControl(
+function renderExpander(
   server: ServerSummary,
   status: ServerStatus | undefined,
   expanded: boolean,
 ): string {
-  const label = statusLabel(status);
   const sessions = status?.sessions ?? [];
   if (status?.connected !== true || sessions.length === 0) {
-    return `<span class="server-status${status?.connected ? " server-status--online" : ""}">${label}</span>`;
+    return `<span class="expander-slot" aria-hidden="true"></span>`;
   }
   const id = escapeHtml(server.id);
+  const name = escapeHtml(server.name);
   return `
-    <button class="server-status-toggle server-status--online" type="button"
-      data-action="toggle-sessions" data-id="${id}" aria-expanded="${expanded}">
-      ${label} ${expanded ? "▴" : "▾"}
-    </button>`;
+    <span class="expander-slot">
+      <button class="session-expander" type="button" data-action="toggle-sessions" data-id="${id}"
+        aria-expanded="${expanded}" aria-label="展开 ${name} 的运行中会话"><span class="status-chevron" aria-hidden="true">▾</span></button>
+    </span>`;
 }
 
-/** 展开后的运行中会话列表。 */
+/** 展开后的运行中会话列表，整行铺在卡片底部。 */
 function renderSessionRows(
   server: ServerSummary,
   status: ServerStatus | undefined,
@@ -65,21 +65,19 @@ function renderSessionRows(
   if (!expanded || status?.connected !== true || sessions.length === 0) return "";
   const id = escapeHtml(server.id);
   return `
-    <div class="server-sessions">
-      <ul class="session-list">${sessions
-        .map(
-          (session) => `
-        <li>
-          <button class="session-row" type="button" data-action="open-session"
-            data-id="${id}" data-session-id="${escapeHtml(session.id)}"
-            aria-label="打开会话 ${escapeHtml(session.title)}">
-            <span class="session-spinner" aria-hidden="true"></span>
-            <span class="session-title">${escapeHtml(session.title)}</span>
-          </button>
-        </li>`,
-        )
-        .join("")}</ul>
-    </div>`;
+    <ul class="session-list">${sessions
+      .map(
+        (session) => `
+      <li>
+        <button class="session-row" type="button" data-action="open-session"
+          data-id="${id}" data-session-id="${escapeHtml(session.id)}"
+          aria-label="打开会话 ${escapeHtml(session.title)}">
+          <span class="session-spinner" aria-hidden="true"></span>
+          <span class="session-title">${escapeHtml(session.title)}</span>
+        </button>
+      </li>`,
+      )
+      .join("")}</ul>`;
 }
 
 function renderServerCard(
@@ -94,24 +92,28 @@ function renderServerCard(
 
   return `
     <article class="server-card${connected ? "" : " server-card--offline"}" data-server-id="${id}">
-      <button class="server-open" type="button" data-action="open" data-id="${id}" aria-label="在浏览器中打开 ${name}">
-        ${backendMark(server.backend, connected)}
-        <span class="server-copy">
-          <span class="server-title-row">
-            <strong>${name}</strong>
+      <div class="server-row">
+        ${renderExpander(server, status, expanded)}
+        <button class="server-open" type="button" data-action="open" data-id="${id}" aria-label="在浏览器中打开 ${name}">
+          ${backendMark(server.backend, connected)}
+          <span class="server-copy">
+            <span class="server-title-row">
+              <strong>${name}</strong>
+            </span>
+            <span class="server-meta">
+              <span class="server-address">${address}</span>
+              <span class="server-meta-sep" aria-hidden="true">·</span>
+              <span class="server-status${connected ? " server-status--online" : ""}">${statusLabel(status)}</span>
+            </span>
           </span>
-          <span class="server-meta">
-            <span class="server-address">${address}</span>
-          </span>
-        </span>
-      </button>
-      ${renderStatusControl(server, status, expanded)}
-      ${renderSessionRows(server, status, expanded)}
-      <div class="server-actions" aria-label="${name} 操作">
-        <button class="icon-button" type="button" data-action="edit" data-id="${id}" aria-label="编辑 ${name}">编辑</button>
-        <button class="icon-button icon-button--danger" type="button" data-action="delete" data-id="${id}" aria-label="删除 ${name}">删除</button>
+        </button>
+        <div class="server-actions" aria-label="${name} 操作">
+          <button class="icon-button" type="button" data-action="edit" data-id="${id}" aria-label="编辑 ${name}">编辑</button>
+          <button class="icon-button icon-button--danger" type="button" data-action="delete" data-id="${id}" aria-label="删除 ${name}">删除</button>
+        </div>
+        <span class="server-open-hint" aria-hidden="true">↗</span>
       </div>
-      <span class="server-open-hint" aria-hidden="true">↗</span>
+      ${renderSessionRows(server, status, expanded)}
     </article>`;
 }
 
