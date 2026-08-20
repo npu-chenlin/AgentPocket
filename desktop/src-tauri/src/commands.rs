@@ -95,7 +95,8 @@ pub enum CommandError {
     Window(String),
     #[error("sync error: {0}")]
     Sync(String),
-    #[error("mesh 操作失败：{0}")]
+    // 前端 toast 已带“拉取失败：/推送失败：”前缀，此处不再叠加第二层。
+    #[error("{0}")]
     Mesh(String),
 }
 

@@ -39,15 +39,16 @@ pub struct PushCounts {
     pub updated: u64,
 }
 
+// 三条命令均为 async：网络 IO 跑在 Tauri 线程池，避免阻塞 UI 主线程。
 #[tauri::command]
-pub fn discover_mesh_peers(
+pub async fn discover_mesh_peers(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<MeshPeerView>, CommandError> {
     Ok(discover_peers(&state))
 }
 
 #[tauri::command]
-pub fn mesh_pull(
+pub async fn mesh_pull(
     state: State<'_, Arc<AppState>>,
     host: String,
 ) -> Result<ImportPreview, CommandError> {
@@ -55,7 +56,7 @@ pub fn mesh_pull(
 }
 
 #[tauri::command]
-pub fn mesh_push(
+pub async fn mesh_push(
     state: State<'_, Arc<AppState>>,
     host: String,
 ) -> Result<PushCounts, CommandError> {
