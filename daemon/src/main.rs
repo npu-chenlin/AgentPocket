@@ -3,6 +3,7 @@ mod discovery;
 mod mesh;
 mod ops;
 mod paths;
+mod update;
 
 use std::time::Duration;
 
@@ -35,6 +36,8 @@ enum Command {
     Push { host: String },
     /// 发现并列出 mesh peer
     Peers,
+    /// 手动检查并更新
+    Update,
 }
 
 fn main() {
@@ -53,6 +56,7 @@ fn main() {
                         mesh::MESH_PORT,
                         paths::default_config_dir().display()
                     );
+                    update::spawn_update_loop();
                     handle.wait();
                 }
                 Err(e) => {
@@ -107,6 +111,15 @@ fn main() {
                     peer.host,
                     peer.version.as_deref().unwrap_or("-")
                 );
+            }
+        }
+        Command::Update => {
+            match update::check_and_apply("https://api.github.com", Duration::from_secs(60)) {
+                Ok(message) => println!("{message}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
             }
         }
     }
