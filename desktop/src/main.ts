@@ -508,9 +508,21 @@ meshPeers.addEventListener("click", async (event) => {
       const counts = await invoke<PushCounts>(commands.meshPush, { host });
       const name = meshPeerViews.find((peer) => peer.host === host)?.name ?? host;
       setMessage(`已推送到 ${name}：新增 ${counts.added} / 更新 ${counts.updated}`, "success");
+    } else if (action === "remove") {
+      // 删除手动 peer：全量写回过滤后的列表，再刷新发现结果。
+      const settings = currentView?.settings;
+      if (!settings) return;
+      applyView(
+        await invoke<AppView>(commands.updateSettings, {
+          settings: { ...settings, meshPeers: settings.meshPeers.filter((peer) => peer.host !== host) },
+        }),
+      );
+      setMessage("已删除 peer", "success");
+      await refreshMeshPeers();
     }
   } catch (error) {
-    setMessage(action === "pull" ? `拉取失败：${errorMessage(error)}` : `推送失败：${errorMessage(error)}`, "error");
+    const prefix = action === "pull" ? "拉取失败" : action === "push" ? "推送失败" : "删除失败";
+    setMessage(`${prefix}：${errorMessage(error)}`, "error");
   } finally {
     button.disabled = false;
   }
@@ -522,6 +534,11 @@ meshAdd.addEventListener("click", async () => {
   const settings = currentView?.settings;
   if (!host) {
     setMessage("请填写节点地址", "error");
+    return;
+  }
+  // 基础校验：禁止空白字符与 //（防 URL 注入式误填），不合法直接不落库。
+  if (/\s/.test(host) || host.includes("//")) {
+    setMessage("节点地址不合法：请勿包含空白或 //", "error");
     return;
   }
   if (!settings) return;

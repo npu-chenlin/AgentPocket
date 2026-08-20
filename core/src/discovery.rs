@@ -249,7 +249,8 @@ mod tests {
                 ));
             }
         });
-        let peer = probe_peer("127.0.0.1", port, "live-host", Duration::from_secs(3));
+        // fallback 名与 mock /info 报名不同：断言命中 mock 名，证明 /info 优先。
+        let peer = probe_peer("127.0.0.1", port, "fallback-name", Duration::from_secs(3));
         let peer = peer.expect("probe succeeds");
         assert_eq!(peer.name, "live-host");
         assert_eq!(peer.version.as_deref(), Some("9.9.9"));

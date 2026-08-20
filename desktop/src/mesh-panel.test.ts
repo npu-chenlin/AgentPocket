@@ -42,6 +42,17 @@ describe("renderMeshPeerList", () => {
     expect(html).not.toContain("mesh-dot--online");
   });
 
+  it("renders the remove button only on manual rows", () => {
+    const manual = renderMeshPeerList({
+      peers: [peerFixture({ manual: true })],
+      loading: false,
+    });
+    expect(manual).toContain('data-mesh-action="remove"');
+    expect(manual).toContain('data-mesh-host="100.64.0.7"');
+    const discovered = renderMeshPeerList({ peers: [peerFixture()], loading: false });
+    expect(discovered).not.toContain('data-mesh-action="remove"');
+  });
+
   it("shows a discovering placeholder while loading", () => {
     const html = renderMeshPeerList({ peers: [], loading: true });
     expect(html).toContain("发现中…");

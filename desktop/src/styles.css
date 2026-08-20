@@ -757,6 +757,29 @@ input[role="switch"]:checked::after {
   gap: 2px;
 }
 
+/* 手动 peer 行尾的 ✕：沿用次级色惯例，24px 命中区，不加新变量。 */
+.mesh-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-faint);
+  background: transparent;
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mesh-remove:hover {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
 .mesh-toolbar {
   display: flex;
   gap: 6px;

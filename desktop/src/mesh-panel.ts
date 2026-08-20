@@ -30,6 +30,11 @@ function renderMeshPeerRow(peer: MeshPeerView): string {
     : `
         <span class="server-meta-sep" aria-hidden="true">·</span>
         <span class="mesh-peer-offline">离线</span>`;
+  // 手动登记的 peer 才允许删除；发现得到的 tailscale 节点不显示 ✕。
+  const remove = peer.manual
+    ? `
+        <button class="mesh-remove" type="button" data-mesh-action="remove" data-mesh-host="${host}" title="删除该 peer">×</button>`
+    : "";
 
   return `
     <div class="mesh-peer">
@@ -43,6 +48,6 @@ function renderMeshPeerRow(peer: MeshPeerView): string {
       <span class="mesh-peer-actions">
         <button class="text-button" type="button" data-mesh-action="pull" data-mesh-host="${host}" aria-label="从 ${name} 拉取配置">拉取</button>
         <button class="text-button" type="button" data-mesh-action="push" data-mesh-host="${host}" aria-label="推送配置到 ${name}">推送</button>
-      </span>
+      </span>${remove}
     </div>`;
 }
