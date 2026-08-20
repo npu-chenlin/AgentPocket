@@ -49,6 +49,7 @@ pub fn is_peer_allowed(addr: &SocketAddr) -> bool {
     }
 }
 
+#[derive(Debug)]
 pub struct MeshHandle {
     /// 测试与后续 CLI 命令读取实际绑定端口。
     #[allow(dead_code)]
@@ -383,5 +384,18 @@ mod tests {
             .load().unwrap();
         assert_eq!(outcome.config.servers.len(), 1);
         handle.stop();
+    }
+
+    #[test]
+    fn start_on_occupied_port_returns_bind_error() {
+        let listener = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dir = tempfile::tempdir().unwrap();
+
+        let error = start(ctx(dir.path()), port).unwrap_err();
+
+        assert!(matches!(error, MeshError::Bind(_)));
+        assert!(error.to_string().contains("端口被占用"));
+        drop(listener);
     }
 }
