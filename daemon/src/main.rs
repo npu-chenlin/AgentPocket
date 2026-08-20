@@ -1,7 +1,10 @@
 mod client;
+mod discovery;
 mod mesh;
 mod ops;
 mod paths;
+
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 
@@ -30,6 +33,8 @@ enum Command {
     },
     /// 把本地配置推送给 peer
     Push { host: String },
+    /// 发现并列出 mesh peer
+    Peers,
 }
 
 fn main() {
@@ -80,6 +85,28 @@ fn main() {
                     eprintln!("{e}");
                     std::process::exit(1);
                 }
+            }
+        }
+        Command::Peers => {
+            let tailscale = discovery::find_tailscale_binary();
+            if tailscale.is_none() {
+                eprintln!("未找到 tailscale CLI，仅探测手动 peer");
+            }
+            let peers = discovery::discover(
+                &paths::default_config_dir(),
+                tailscale.as_deref(),
+                Duration::from_secs(3),
+            );
+            if peers.is_empty() {
+                println!("未发现 AgentPocket peer");
+            }
+            for peer in peers {
+                println!(
+                    "{}  {}  {}",
+                    peer.name,
+                    peer.host,
+                    peer.version.as_deref().unwrap_or("-")
+                );
             }
         }
     }
