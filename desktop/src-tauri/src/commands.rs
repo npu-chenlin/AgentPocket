@@ -95,6 +95,8 @@ pub enum CommandError {
     Window(String),
     #[error("sync error: {0}")]
     Sync(String),
+    #[error("mesh 操作失败：{0}")]
+    Mesh(String),
 }
 
 impl From<ConfigError> for CommandError {
@@ -121,6 +123,12 @@ impl From<ProbeError> for CommandError {
             dsh: error.dsh,
             kimi: error.kimi,
         }
+    }
+}
+
+impl From<agentpocket_core::mesh_client::ClientError> for CommandError {
+    fn from(error: agentpocket_core::mesh_client::ClientError) -> Self {
+        CommandError::Mesh(error.to_string())
     }
 }
 

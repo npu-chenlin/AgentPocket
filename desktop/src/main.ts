@@ -244,13 +244,16 @@ function errorMessage(error: unknown): string {
   }
 }
 
+/** data-setting 开关只覆盖布尔型设置项（meshPeers 等非布尔项不渲染开关）。 */
+type BooleanSettingKey = "startHidden" | "autostart" | "notifications";
+
 function applyView(view: AppView): void {
   if (view.revision <= latestRevision) return;
   latestRevision = view.revision;
   currentView = view;
   serverList.innerHTML = renderServerList(view, expandedServers);
   for (const control of document.querySelectorAll<HTMLInputElement>("[data-setting]")) {
-    const key = control.dataset.setting as keyof AppView["settings"];
+    const key = control.dataset.setting as BooleanSettingKey;
     control.checked = view.settings[key];
   }
 }
@@ -420,7 +423,7 @@ requiredElement<HTMLButtonElement>("#probe-backend").addEventListener("click", a
 for (const control of document.querySelectorAll<HTMLInputElement>("[data-setting]")) {
   control.addEventListener("change", async () => {
     if (!currentView) return;
-    const key = control.dataset.setting as keyof AppView["settings"];
+    const key = control.dataset.setting as BooleanSettingKey;
     const previous = currentView.settings[key];
     const settings = { ...currentView.settings, [key]: control.checked };
     control.disabled = true;

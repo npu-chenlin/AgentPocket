@@ -1,9 +1,29 @@
 export type Backend = "kimi" | "dsh";
 
+export interface MeshPeerEntry {
+  name: string;
+  host: string;
+}
+
 export interface DesktopSettings {
   startHidden: boolean;
   autostart: boolean;
   notifications: boolean;
+  /** 手动登记的 mesh peer 列表。 */
+  meshPeers: MeshPeerEntry[];
+}
+
+export interface MeshPeerView {
+  name: string;
+  host: string;
+  version: string | null;
+  online: boolean;
+  manual: boolean;
+}
+
+export interface PushCounts {
+  added: number;
+  updated: number;
 }
 
 export interface ServerSummary {
@@ -92,6 +112,9 @@ export const commands = {
   exportConfigText: "export_config_text",
   startSyncServer: "start_sync_server",
   stopSyncServer: "stop_sync_server",
+  discoverMeshPeers: "discover_mesh_peers",
+  meshPull: "mesh_pull",
+  meshPush: "mesh_push",
 } as const;
 
 export function emptyServerDraft(): ServerDraft {

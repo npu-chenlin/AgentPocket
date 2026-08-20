@@ -6,7 +6,7 @@ function viewFixture(): AppView {
   return {
     revision: 3,
     activeId: "dsh-1",
-    settings: { autostart: false, startHidden: true, notifications: true },
+    settings: { autostart: false, startHidden: true, notifications: true, meshPeers: [] },
     servers: [
       { id: "dsh-1", name: "Work", host: "100.64.0.2", port: 3080, backend: "dsh" },
       { id: "kimi-1", name: "Home", host: "kimi.local", port: 8080, backend: "kimi" },

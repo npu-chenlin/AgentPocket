@@ -13,6 +13,7 @@ use crate::tray::TrayController;
 
 pub mod commands;
 pub mod config;
+pub mod mesh;
 pub mod model;
 pub mod monitor;
 pub mod notification;
@@ -136,6 +137,9 @@ pub fn run() {
             commands::export_config_text,
             sync::start_sync_server,
             sync::stop_sync_server,
+            mesh::discover_mesh_peers,
+            mesh::mesh_pull,
+            mesh::mesh_push,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgentPocket Desktop");

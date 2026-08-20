@@ -65,12 +65,23 @@ impl ServerConfig {
     }
 }
 
+/// 手动登记的 mesh peer（存于 DesktopSettings，GUI 侧维护）。
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeshPeerEntry {
+    pub name: String,
+    pub host: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSettings {
     pub start_hidden: bool,
     pub autostart: bool,
     pub notifications: bool,
+    /// 手动 peer 列表；旧配置无此字段时反序列化为空（字段级 serde default）。
+    #[serde(default)]
+    pub mesh_peers: Vec<MeshPeerEntry>,
 }
 
 impl Default for DesktopSettings {
@@ -79,6 +90,7 @@ impl Default for DesktopSettings {
             start_hidden: true,
             autostart: false,
             notifications: true,
+            mesh_peers: Vec::new(),
         }
     }
 }
