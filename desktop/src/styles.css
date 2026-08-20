@@ -667,6 +667,119 @@ input[role="switch"]:checked::after {
   transform: translateX(14px);
 }
 
+/* ---------- 设置：Mesh 同步区块 ---------- */
+
+.mesh-section {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+}
+
+.mesh-section__title {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.mesh-peers {
+  display: grid;
+}
+
+.mesh-placeholder {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 0.76rem;
+}
+
+.mesh-peer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 5px 0;
+}
+
+.mesh-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #b6bdb9;
+}
+
+.mesh-dot--online {
+  background: #2f9e7b;
+}
+
+.mesh-peer-copy {
+  display: grid;
+  flex: 1;
+  gap: 1px;
+  min-width: 0;
+}
+
+.mesh-peer-name {
+  overflow: hidden;
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-peer-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  font-size: 0.7rem;
+}
+
+.mesh-peer-host {
+  overflow: hidden;
+  color: var(--text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-peer-version {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.mesh-peer-offline {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.mesh-peer-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+
+.mesh-toolbar {
+  display: flex;
+  gap: 6px;
+}
+
+.mesh-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  outline: none;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.mesh-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(26, 106, 92, 0.13);
+}
+
 /* ---------- 弹窗 ---------- */
 
 .modal {

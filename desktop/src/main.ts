@@ -13,11 +13,14 @@ import {
   type AppView,
   type ImportMode,
   type ImportPreview,
+  type MeshPeerView,
+  type PushCounts,
   type ServerDraft,
   type ServerForEdit,
   type SyncInfo,
   type SyncOption,
 } from "./model";
+import { renderMeshPeerList } from "./mesh-panel";
 import { renderServerList } from "./server-list";
 import {
   hasValidationErrors,
@@ -84,6 +87,16 @@ app.innerHTML = `
         <span><strong>系统通知</strong><small>仅通知完成、失败、审批和提问</small></span>
         <input type="checkbox" role="switch" data-setting="notifications" />
       </label>
+      <div class="mesh-section">
+        <h3 class="mesh-section__title">Mesh 同步</h3>
+        <div id="mesh-peers" class="mesh-peers" aria-live="polite"></div>
+        <div class="mesh-toolbar">
+          <input id="mesh-add-host" class="mesh-input" autocomplete="off" placeholder="100.x.x.x 或 MagicDNS 名" />
+          <input id="mesh-add-name" class="mesh-input" autocomplete="off" placeholder="备注名（可选）" />
+          <button id="mesh-add" class="secondary-button" type="button">添加</button>
+          <button id="mesh-refresh" class="text-button" type="button">刷新</button>
+        </div>
+      </div>
     </div>
     <div class="modal__actions">
       <button id="reconnect-all" class="secondary-button" type="button">重新连接所有服务器</button>
@@ -209,6 +222,11 @@ const syncAddress = requiredElement<HTMLSelectElement>("#sync-address");
 const syncQr = requiredElement<HTMLElement>("#sync-qr");
 const syncUrl = requiredElement<HTMLElement>("#sync-url");
 const syncStatus = requiredElement<HTMLElement>("#sync-status");
+const meshPeers = requiredElement<HTMLElement>("#mesh-peers");
+const meshRefresh = requiredElement<HTMLButtonElement>("#mesh-refresh");
+const meshAdd = requiredElement<HTMLButtonElement>("#mesh-add");
+const meshAddHost = requiredElement<HTMLInputElement>("#mesh-add-host");
+const meshAddName = requiredElement<HTMLInputElement>("#mesh-add-name");
 
 let currentView: AppView | null = null;
 let latestRevision = -1;
@@ -365,6 +383,7 @@ requiredElement<HTMLButtonElement>("#add-server").addEventListener("click", () =
 
 requiredElement<HTMLButtonElement>("#open-settings").addEventListener("click", () => {
   settingsDialog.showModal();
+  void refreshMeshPeers();
 });
 
 const pinButton = requiredElement<HTMLButtonElement>("#pin-window");
@@ -449,6 +468,79 @@ requiredElement<HTMLButtonElement>("#reconnect-all").addEventListener("click", a
     setMessage(`重连失败：${errorMessage(error)}`, "error");
   } finally {
     button.disabled = false;
+  }
+});
+
+/** 最近一次发现的 mesh peer，推送成功提示需要按 host 回查名称。 */
+let meshPeerViews: MeshPeerView[] = [];
+
+async function refreshMeshPeers(): Promise<void> {
+  meshPeers.innerHTML = renderMeshPeerList({ peers: [], loading: true });
+  meshRefresh.disabled = true;
+  try {
+    meshPeerViews = await invoke<MeshPeerView[]>(commands.discoverMeshPeers);
+    meshPeers.innerHTML = renderMeshPeerList({ peers: meshPeerViews, loading: false });
+  } catch (error) {
+    meshPeerViews = [];
+    meshPeers.innerHTML = renderMeshPeerList({ peers: [], loading: false });
+    setMessage(`发现 mesh 节点失败：${errorMessage(error)}`, "error");
+  } finally {
+    meshRefresh.disabled = false;
+  }
+}
+
+meshRefresh.addEventListener("click", () => {
+  void refreshMeshPeers();
+});
+
+meshPeers.addEventListener("click", async (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>("button[data-mesh-action]");
+  if (!button) return;
+  const host = button.dataset.meshHost;
+  if (!host) return;
+  const action = button.dataset.meshAction;
+  button.disabled = true;
+  try {
+    if (action === "pull") {
+      pendingImport = await invoke<ImportPreview>(commands.meshPull, { host });
+      openImportConfirmation();
+    } else if (action === "push") {
+      const counts = await invoke<PushCounts>(commands.meshPush, { host });
+      const name = meshPeerViews.find((peer) => peer.host === host)?.name ?? host;
+      setMessage(`已推送到 ${name}：新增 ${counts.added} / 更新 ${counts.updated}`, "success");
+    }
+  } catch (error) {
+    setMessage(action === "pull" ? `拉取失败：${errorMessage(error)}` : `推送失败：${errorMessage(error)}`, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+
+meshAdd.addEventListener("click", async () => {
+  const host = meshAddHost.value.trim();
+  const name = meshAddName.value.trim();
+  const settings = currentView?.settings;
+  if (!host) {
+    setMessage("请填写节点地址", "error");
+    return;
+  }
+  if (!settings) return;
+  const meshPeerEntries = [...settings.meshPeers.filter((peer) => peer.host !== host), { name: name || host, host }];
+  meshAdd.disabled = true;
+  try {
+    applyView(
+      await invoke<AppView>(commands.updateSettings, {
+        settings: { ...settings, meshPeers: meshPeerEntries },
+      }),
+    );
+    meshAddHost.value = "";
+    meshAddName.value = "";
+    setMessage(`已添加“${name || host}”`, "success");
+    await refreshMeshPeers();
+  } catch (error) {
+    setMessage(`添加失败：${errorMessage(error)}`, "error");
+  } finally {
+    meshAdd.disabled = false;
   }
 });
 
