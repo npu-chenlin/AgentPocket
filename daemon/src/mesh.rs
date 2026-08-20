@@ -105,7 +105,10 @@ pub fn start(ctx: MeshContext, port: u16) -> Result<MeshHandle, MeshError> {
             match server.recv_timeout(POLL_INTERVAL) {
                 Ok(Some(request)) => handle_request(request, &ctx),
                 Ok(None) => continue,
-                Err(_) => break,
+                Err(e) => {
+                    eprintln!("[mesh] 接收错误：{e}");
+                    std::process::exit(1);
+                }
             }
         }
     });
