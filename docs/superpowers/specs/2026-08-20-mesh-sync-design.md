@@ -1,137 +1,149 @@
-# AgentPocket Mesh 同步设计
+# AgentPocket Mesh 守护进程设计（Phase 1）
 
-- 日期：2026-08-20
+- 日期：2026-08-20（v3 修订：聚焦独立守护进程 + 自动更新；GUI/手机端延后）
 - 状态：已批准
-- 涉及端：桌面端（Linux 优先，代码保持可移植）+ Android
-- 技术栈：沿用现状（Tauri 2 + tiny_http + Rust；Android Java）
+- 产物：`agentpocket` 无头二进制（Linux x86_64 musl 静态）+ 一键安装脚本
+- 原则：**GUI 与 Android 本阶段一行不改**
 
 ## 1. 背景与目标
 
-桌面端已有一套**一次性扫码同步**：随机端口 + UUID token + 10 分钟 TTL 的临时 HTTP 服务器，手机扫码后 GET/POST `/config`。它的定位是"两台设备之间的临时握手"，无法支撑多设备之间的常态配置流动。
+AgentPocket 的配置（kimi/dsh 服务器列表）目前只在 GUI 桌面端与手机之间通过一次性扫码同步流动。目标（Phase 1）：交付一个**独立守护进程**，让任意机器（无头服务器、或与 GUI 共存的桌面机）成为 mesh 节点，配置可发现、可拉取、可推送，并支持**自动更新**与一键安装自启动。
 
-目标：把配置同步升级为 **mesh 模式**——信任网络内的每个桌面端都是对等节点，可被发现、可被拉取（load）、可被推送（push）。手机端保持纯客户端。
+核心原则（承继已批准决策）：
 
-核心原则：
-
-- **无鉴权**：信任网络本身，不设 token、不设配对。
-- **网络边界即权限边界**：mesh 端点只接受来自 Tailscale 网段（及本机回环）的请求。tailnet 之内人人可信，之外一律 403。
-- **无开关**：不设"Server 模式"设置项。桌面端启动即成为 mesh 节点，暴露面由网络边界约束，不需要用户管理。
-- **数据流动由人触发**：不做自动 gossip/后台同步，所有 load/push 都是用户点按钮。
+- 无鉴权：信任 tailnet。
+- 网络边界即权限边界：mesh 端点只放行回环 + `100.64.0.0/10`。
+- 无开关：daemon 启动即 mesh 节点。
+- 数据流动由人触发（pull/push 命令），无自动 gossip。
+- 同一 tailnet 内桌面/手机本可直连所有 kimi/dsh，监控通知仍由 GUI/手机承担——daemon 不做监控、不做通知、不写事件日志（journal 流方案已否决）。
 
 ## 2. 范围
 
-### 2.1 包含
+### 2.1 Phase 1 包含
 
-- 桌面端常驻 mesh HTTP 端点（固定端口 48720），tailnet 网段访问控制
-- 桌面端 peer 发现：`tailscale status --json` + 端口探测；手动添加 peer
-- 拉取（pull）：从 peer 拉配置 → 现有导入预览流程（合并/替换二选一）
-- 推送（push）：把本机配置推给 peer → 对方**自动合并** + 系统通知
-- 手机端 peer 管理：扫码/手动添加、保存 peer、拉取/推送
-- 删除旧的一次性扫码同步服务器（随机端口 + token + TTL 那套）
+- `core` 共享 crate 抽取：`model.rs` + `config.rs`（配置模型/存取/导入导出/备份），GUI 以 `pub use` 转发引用，行为零变化
+- `daemon` crate：mesh HTTP 端点（48720）、tailscale 发现、pull/push 客户端、自动更新
+- 命令面：`serve` / `peers` / `pull` / `push` / `status` / `update` / `version`
+- 一键安装脚本 `scripts/install.sh`：下载 + systemd 安装 + 自启动
+- 与 GUI 同机共存：共享 `~/.local/share/AgentPocket/config.json`，端口无冲突
 
-### 2.2 不包含（non-goals）
+### 2.2 Phase 2（延后，设计保留）
 
-- mDNS / 局域网自动发现（用户环境以 Tailscale 为中心；将来真有需求再加）
-- 任何形式的鉴权、配对、确认弹窗（信任网假设，见 §8）
-- 自动 gossip 同步、配置变更自动传播
-- 手机作为服务端（Android 后台保不住监听服务；需要前台服务 + 常驻通知，代价不成比例）
-- 桌面主动推送到手机（手机配置是从桌面同步来的副本，无人需要往手机推）
-- IPv6 tailnet 地址支持（端点只监听 IPv4；所有已知流程均使用 100.x IPv4）
-- peer 列表本身跨设备同步（发现机制会重新找到它们）
+- GUI 的 Mesh 同步面板（peer 列表、拉取/推送按钮、扫码引导二维码）
+- Android peer 管理（扫码/手动添加、拉取/推送、`agentpocket://peer` scheme）
+- 删除 GUI 旧一次性扫码同步服务器
 
-## 3. 桌面端 mesh 端点
+### 2.3 不包含（non-goals）
 
-### 3.1 监听与访问控制
+- 单一万能二进制（Tauri 链接 webkit2gtk，无头机器无法运行；两产物一核心）
+- mDNS / 局域网发现；IPv6 tailnet（只监听 IPv4）
+- 鉴权、配对、确认弹窗；自动 gossip 同步
+- daemon 侧监控、事件流、通知（webhook/ntfy/journal）
+- GUI 附加远程 daemon 的 attach 模式（Clash dashboard 形态；将来需要时给 daemon 加控制 API 即可，本设计不留实现但也不堵路）
+- Windows/macOS 无头产物
+- 手机作为服务端
 
-- `tiny_http` 常驻监听 `0.0.0.0:48720`（IPv4），随应用启动，随应用退出。
-- 每个请求先过 `is_peer_allowed(remote_addr)`：
-  - 允许：`127.0.0.0/8`（本机调试）、`100.64.0.0/10`（Tailscale CGNAT IPv4）
-  - 其余：403，不读 body
-- 端口被占（其他进程）：端点启动失败，**不阻塞应用启动**，同步面板显示错误状态。
-- 效果：mesh 端点在 tailnet 内全员可达；在咖啡店 WiFi 等不可信网络上端口虽开但拿不到任何数据，配置中的 token 永不出 tailnet。
+## 3. 架构
 
-### 3.2 端点定义
+```text
+repo/
+├── core/            # 共享 crate（无 GUI 依赖）：model、config
+├── daemon/          # agentpocket 二进制
+│   ├── mesh.rs          # HTTP 端点 + is_peer_allowed（tiny_http）
+│   ├── discovery.rs     # tailscale status --json 解析 + 并发探测
+│   ├── client.rs        # mesh HTTP 客户端（std TcpStream，无 TLS）
+│   ├── update.rs        # 自动更新（ureq + rustls，仅此模块用 HTTPS）
+│   └── main.rs          # 命令行入口
+├── desktop/         # GUI（仅 src-tauri/{model,config}.rs 改为 pub use core 转发）
+├── app/             # Android（不动）
+└── scripts/install.sh
+```
+
+- **core 抽取最小化**：只抽 `model.rs`/`config.rs`（纯 std+serde，无 tauri 依赖）。`desktop/src-tauri` 加 path 依赖并留转发 shim，现有测试与行为不变。daemon 与 GUI 必须共享同一套配置格式与合并逻辑，杜绝复制分叉。
+- **mesh 客户端无 TLS**：tailnet 内全部是 100.x 上的明文 HTTP，`std::net::TcpStream` 手写最小 HTTP 即可，musl 静态零系统依赖。仅自动更新走 GitHub API 需 HTTPS，用 `ureq`（rustls，musl 友好）。
+- **配置路径**：daemon 与 GUI 同为 Linux XDG `~/.local/share/AgentPocket/`；同机同用户共存时读同一份 `config.json`。
+- 无 workspace 改造：`daemon/`、`core/`、`desktop/src-tauri/` 各自独立 crate，path 依赖互联。
+
+## 4. mesh 端点（daemon::mesh）
+
+- `tiny_http` 常驻监听 `0.0.0.0:48720`（IPv4），随 `serve` 进程生命周期。
+- 每请求先过 `is_peer_allowed(remote_addr)`：允许 `127.0.0.0/8`、`100.64.0.0/10`；其余 403，不读 body。
+- 端口被占：启动失败给出明确报错（"48720 已被占用"），进程退出；不与 GUI 冲突（GUI 旧同步用随机端口）。
 
 | 方法 | 路径 | 行为 |
 |---|---|---|
-| GET | `/info` | 200，`{"app":"agentpocket","version":"2.8.0","name":"<主机名>"}`。探测握手用。 |
-| GET | `/config` | 200，统一交换格式（现有 `export_text`：schema + activeId + servers）。 |
-| POST | `/config` | body 为交换格式。自动合并后持久化，返回 200 `{"added":K,"updated":M}`。 |
+| GET | `/info` | 200，`{"app":"agentpocket","version":"…","name":"<主机名>"}` |
+| GET | `/config` | 200，统一交换格式（`export_text`） |
+| POST | `/config` | 自动合并后持久化，200 `{"added":K,"updated":M}` |
 | * | 其他 | 404 |
 
-POST 语义（自动合并，即现有 `ImportMode::Merge`）：
+POST 语义（自动合并 = `ImportMode::Merge`）：同 ID 覆盖、新 ID 追加、`activeId` 不变；写前走 5 份备份轮换；来源取 `X-AgentPocket-Source` 头（推送方主机名，纯标注），合并结果写一行 stdout 日志（供 journal 排查，不做通知）；body 非法 → 400 不落盘。
 
-- 同 ID 服务器覆盖，新 ID 追加，`activeId` 不变。
-- 写入前走现有备份机制（`backup_primary`，5 份轮换）——误推可回滚。
-- 成功后发系统通知：`AgentPocket：从 <来源> 收到配置（新增 K / 更新 M 台服务器）`。
-- 来源取请求头 `X-AgentPocket-Source`（推送方主机名，纯标注无鉴权），缺失时回退显示远端 IP。
-- body 非法（解析失败 / 0 台有效服务器）→ 400，不落盘、不通知。
+## 5. 发现（daemon::discovery）
 
-### 3.3 删除项
+1. `tailscale status --json` 解析 `Self`/`Peer`；过滤 `Online == true`，排除 `Self`。
+2. 并发探测各 peer IPv4 `48720/info`：连接超时 400ms，总预算 ~1.5s。
+3. `app == "agentpocket"` 即 mesh 节点，其余自然过滤。
 
-旧 `sync.rs` 的一次性同步服务器整体删除：`start_sync_server` / `stop_sync_server` 命令、TTL、token 校验、`SyncInfo`/`SyncOption` 结构。**保留并复用** `enumerate_candidates()`（IP 候选枚举）与 `render_qr_svg()`（peer 二维码渲染）。
+CLI 查找顺序：`PATH` → Linux `/usr/bin/tailscale`、`/usr/local/bin/tailscale`（首版仅 Linux）。找不到时 `peers` 输出警告并只列手动 peer。
 
-## 4. 桌面端发现
+手动 peer：`~/.local/share/AgentPocket/peers.json`，格式 `{"peers":[{"name":"…","host":"…"}]}`（host 为 100.x IP 或 MagicDNS 名），与发现列表按 host 去重。
 
-### 4.1 tailscale status 发现
+## 6. 命令面
 
-1. 执行 `tailscale status --json`，解析 `Self` 与 `Peer`。
-2. 过滤：`Online == true`，排除 `Self`。
-3. 并发探测各 peer 的 IPv4 `48720/info`：TCP 连接超时 400ms，整体预算约 1.5s，线程并发。
-4. `app == "agentpocket"` 的即为本 mesh 节点；其余（手机、普通机器）自然被过滤。
+| 命令 | 行为 |
+|---|---|
+| `agentpocket serve` | 前台守护：mesh 端点 + 自动更新循环。systemd unit 拉起此命令。 |
+| `agentpocket peers` | 发现并列出 peer（名称/host/版本/在线）。 |
+| `agentpocket pull <host>` | 拉取并应用：默认合并；`--replace` 替换；`--dry-run` 只打印预览。 |
+| `agentpocket push <host>` | 推送本机配置（带 `X-AgentPocket-Source`）。 |
+| `agentpocket status` | 一次性探测已配置服务器：在线/版本/忙碌会话数（依赖 protocol 模块抽取的可行性，见 §12 备注）。 |
+| `agentpocket update` | 手动触发更新检查并自更新。 |
+| `agentpocket version` | 打印版本。 |
 
-CLI 查找顺序：`PATH` 中的 `tailscale` → macOS `/Applications/Tailscale.app/Contents/MacOS/Tailscale` → Windows `C:\Program Files\Tailscale\tailscale.exe` → Linux `/usr/bin/tailscale`、`/usr/local/bin/tailscale`。找不到时发现列表只含手动 peer，面板提示"未找到 tailscale CLI"。
+- pull/push 的 host 可用 100.x IP 或 MagicDNS 名；端口恒 48720。
 
-### 4.2 手动 peer
+## 7. 自动更新（daemon::update）
 
-- 存于桌面本地设置（`DesktopSettings`，不进交换格式）：`meshPeers: [{name, host}]`，端口恒为 48720 不存储。
-- host 可以是 100.x IP 或 MagicDNS 主机名。
-- 与发现的 peer 按 host 去重，合并显示。
+- 检查时机：`serve` 启动后 + 每 24h 一次；`update` 命令手动触发。
+- 流程：`GET https://api.github.com/repos/npu-chenlin/AgentPocket/releases/latest` → `tag_name` 解析 semver → 比当前新则下载资产 `agentpocket-<arch>-linux-musl`（arch 映射 x86_64/aarch64）→ 写同目录临时文件 + fsync + chmod 755 → 原子 rename 覆盖自身路径 → systemd 环境下 `systemctl restart agentpocket`，非 systemd 打印"请手动重启"。
+- 失败处理：任何失败（网络/校验/权限，如手动以非 root 运行无权覆盖 /usr/local/bin）仅记日志，下一周期重试；绝不让更新逻辑拖垮 mesh 服务。
+- 无配置项：默认开启（需求本身即"支持自动更新"），不做开关。
+- 版本比较：semver 严格大于才更新（防降级）。
 
-### 4.3 触发时机
+## 8. 一键安装（scripts/install.sh）
 
-同步面板打开时发现一次；面板可见期间每 30s 轮询刷新；面板内有手动刷新按钮。
+用法：`curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/scripts/install.sh | sudo bash`
 
-## 5. 桌面端 UI
+- 依赖：curl + POSIX sh；探测架构（x86_64/aarch64）。
+- 从 GitHub latest release 下载对应 musl 二进制 → `/usr/local/bin/agentpocket`。
+- 写 `/etc/systemd/system/agentpocket.service`：`ExecStart=/usr/local/bin/agentpocket serve`；`User=` 取 `SUDO_USER`（无则 root），`Environment=HOME=` 指向该用户 home（保证配置路径与手动 CLI 一致）；`Restart=on-failure`。
+- `daemon-reload` + `enable --now`；打印后续提示（`agentpocket peers` / `agentpocket pull <桌面host>`）。
+- `--uninstall`：停用并删除 unit 与二进制，保留配置目录。
+- 下载失败打印直链供手动处理。
 
-设置对话框新增 **Mesh 同步** 区块（替换原扫码同步区块）：
+## 9. 边界情况
 
-- peer 列表：名称（主机名）、地址、版本号（来自 `/info`）、在线状态点。每行两个动作：**拉取**、**推送**。
-- 拉取：`GET /config` → 打开现有导入预览（选合并/替换），用户确认后应用。
-- 推送：`POST /config`（带 `X-AgentPocket-Source`）→ 结果 toast（成功显示对方合并统计，失败显示错误）。
-- 手动添加：输入 host（+可选备注名）→ 探测 `/info` 验证；探测失败时提示但**允许保存**（对方可能暂未运行，保存后列表显示离线）。备注名留空时用 `/info` 返回的主机名。
-- **扫码引导**：面板展示一个二维码，编码 `agentpocket://peer?host=<ip>&port=48720`（复用 `enumerate_candidates` 选 Tailscale IP 优先 + `render_qr_svg`）。无 token、无 TTL——它只是把地址递给手机。
-- 主窗口不加任何东西。
+- **与 GUI 同机共存**：端口无冲突（48720 vs GUI 旧同步随机端口）；`config.json` 共享，daemon 收到推送落盘后 GUI 需重启（或下次加载）才能看到，可接受。
+- 两个 daemon 同机竞争 48720：后启动者报错退出。
+- tailscale 在线但探测超时（非 AgentPocket 机器/防火墙）：不进列表，无噪音。
+- 新服务器冷启动（主用例）：一键脚本装好 → `agentpocket pull <桌面host>` → 配置完成。
+- 自动更新中断电/崩溃：rename 原子性保证旧新二选一完整存在；systemd 拉起恢复。
 
-## 6. Android 端
+## 10. 安全模型（明确接受）
 
-- 同步入口改为 peer 管理界面：
-  - 添加：扫二维码（`agentpocket://peer?host=&port=`，intent filter 更新；保留对旧 `agentpocket://sync` 的兼容识别但按新语义处理）或手动输入 host。
-  - peer 持久化：与现有服务器配置同级的本地存储，格式 `{"peers":[{"name":"…","host":"…"}]}`。
-- 每个 peer：拉取（`GET /config` → 手机现有导入预览流程）、推送（`POST /config` + `X-AgentPocket-Source`）、在线探测（`/info`）。显示名取 `/info` 的 `name`，探测不到时显示 host。
-- 删除旧扫码同步里的 token 逻辑（`SyncClient` 改为无 token 的固定端点客户端）。
+- mesh 端点无鉴权：tailnet 内任何设备可读全量配置（含 kimi/dsh token）、可推送合并。
+- 防线是网络边界：`100.64.0.0/10` 之外一律 403。
+- 自动合并只增不删 + 5 份备份，最坏情况可回滚。
+- 自动更新仅信任本仓库 GitHub releases，semver 防降级。
+- README 如实陈述：mesh 端点仅在你的 Tailscale 网络内可达。
 
-## 7. 边界情况
+## 11. 测试
 
-- **推送与用户操作并发**：推送在配置写锁内完成读-合并-写；用户侧导入预览确认晚于推送到达时，按当时最新配置再应用。可接受，不做合并仲裁。
-- **推送到达时接收方正忙**：tiny_http 单线程逐请求处理，天然串行。
-- **tailscale 显示在线但 mesh 探测超时**（对方未跑 AgentPocket / 端口被防火墙挡）：不出现在 peer 列表，无报错噪音。
-- **同机两个 AgentPocket**：已被单实例机制排除。
-- **两台桌面经同一台手机间接同步**：不做中继，各自直连。
+- core 抽取后：GUI 现有 Rust 测试全部保持绿（shim 转发不改行为）。
+- daemon：`is_peer_allowed` 矩阵；`/info`/`GET`/`POST` 与 403/404/400；合并计数/备份/`X-AgentPocket-Source` 日志；tailscale JSON fixture；探测过滤（agentpocket 应答/异物/超时）；client 手写 HTTP 解析；semver 比较与更新流程（mock release JSON + 本地文件替换路径，不真连 GitHub）；命令行参数与输出。
 
-## 8. 安全模型（明确接受）
+## 12. 版本、发布与备注
 
-- mesh 端点**无鉴权**：tailnet 内任何设备可读全量配置（含 kimi/dsh token）、可推送合并。
-- 防线是网络边界：`100.64.0.0/10` 之外一律 403。tailnet 成员资格由 Tailscale 账号管理，等价于"tailnet 内互信"。
-- 自动合并只增不删（覆盖同 ID），且有 5 份配置备份；最坏情况是配置被塞入不需要的服务器，可手工删除或回滚。
-- README 如实陈述：**mesh 端点仅在你的 Tailscale 网络内可达**；不含"请勿在不可信网络开启"之类的开关话术（因为没有开关）。
-
-## 9. 测试
-
-- Rust 单测：`is_peer_allowed` 矩阵（回环/CGNAT/局域网/公网）；`/info` 握手；GET /config 放行与 403；POST 合并语义（added/updated 计数、备份生成、通知回调触发、非法 body 400）；tailscale JSON 解析（fixture）；探测过滤（mock server 应答 agentpocket/应答异物/不应答）；端口占用错误路径。
-- 前端：Mesh 面板渲染与动作事件（沿用 vitest）。
-- Android：peer 存取 round-trip、SyncClient 无 token 请求（沿用现有测试基建，若无则跟随现状）。
-
-## 10. 版本
-
-两端统一升至 2.8.0（Android versionCode 39）。发版流程沿用现有 release 习惯。
+- 版本 2.8.0 起；release 新增资产 `agentpocket-x86_64-linux-musl`（aarch64 可选）。musl 静态编译（`x86_64-unknown-linux-musl`）。
+- `status` 命令依赖 `desktop/src-tauri` 的 protocol REST 客户端抽取：若模块耦合 tauri 则本期降级为仅 kimi `/api/v1/meta` + sessions 计数的手写实现，不强行抽取（Phase 2 随 core 扩大顺带解决）。
