@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use agentpocket_core::config::{ConfigStore, ImportMode};
 
-use crate::client::{self, ClientError};
+use agentpocket_core::mesh_client::{self as client, ClientError};
 use crate::mesh::MESH_PORT;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -84,7 +84,7 @@ fn push_via(config_dir: &Path, host: &str, port: u16) -> Result<String, String> 
     let current = store.load().map_err(|e| e.to_string())?.config;
     let text = store.export_text(&current).map_err(|e| e.to_string())?;
 
-    let hostname = crate::paths::hostname();
+    let hostname = agentpocket_core::host::hostname();
     let response = client::post(
         host,
         port,

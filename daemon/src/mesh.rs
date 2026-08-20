@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use tiny_http::{Method, Request, Response, Server, StatusCode};
 
-/// mesh 固定监听端口。
-pub const MESH_PORT: u16 = 48720;
+/// mesh 固定监听端口（单一来源：core discovery，GUI 探测与 daemon 端点共用）。
+pub use agentpocket_core::discovery::MESH_PORT;
 /// recv 轮询间隔，保证 stop 信号能被及时检查。
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// POST body 大小上限（1 MiB），防止对端超大请求拖垮守护进程。

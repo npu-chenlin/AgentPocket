@@ -1,5 +1,3 @@
-mod client;
-mod discovery;
 mod mesh;
 mod ops;
 mod paths;
@@ -8,6 +6,7 @@ mod update;
 
 use std::time::Duration;
 
+use agentpocket_core::discovery;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -50,7 +49,7 @@ fn main() {
             let ctx = mesh::MeshContext {
                 config_dir: paths::default_config_dir(),
                 version: env!("CARGO_PKG_VERSION"),
-                hostname: paths::hostname(),
+                hostname: agentpocket_core::host::hostname(),
             };
             match mesh::start(ctx, mesh::MESH_PORT) {
                 Ok(handle) => {

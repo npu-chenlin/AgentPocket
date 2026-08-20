@@ -1,4 +1,4 @@
-//! 配置目录与主机名解析（与 GUI 共享 XDG 路径）。
+//! 配置目录解析（与 GUI 共享 XDG 路径）。
 
 use std::path::PathBuf;
 
@@ -14,13 +14,4 @@ pub fn default_config_dir() -> PathBuf {
             PathBuf::from(home).join(".local/share")
         });
     base.join("com.local.agentpocket.desktop")
-}
-
-pub fn hostname() -> String {
-    std::fs::read_to_string("/etc/hostname")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("HOSTNAME").ok())
-        .unwrap_or_else(|| "agentpocket".to_string())
 }

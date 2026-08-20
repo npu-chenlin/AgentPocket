@@ -148,19 +148,21 @@ mod tests {
 
     #[test]
     fn get_info_against_live_mesh_endpoint() {
-        let dir = tempfile::tempdir().unwrap();
-        let handle = crate::mesh::start(
-            crate::mesh::MeshContext {
-                config_dir: dir.path().to_path_buf(),
-                version: "t",
-                hostname: "h".to_string(),
-            },
-            0,
-        )
-        .unwrap();
-        let response = get("127.0.0.1", handle.port, "/info", &[], TIMEOUT).unwrap();
+        // tiny_http 模拟 mesh 端点：/info 应答自家身份 JSON。
+        let server = tiny_http::Server::http(("127.0.0.1", 0)).unwrap();
+        let port = match server.server_addr() {
+            tiny_http::ListenAddr::IP(addr) => addr.port(),
+            other => panic!("unexpected listen addr: {other:?}"),
+        };
+        std::thread::spawn(move || {
+            for request in server.incoming_requests() {
+                let _ = request.respond(tiny_http::Response::from_string(
+                    r#"{"app":"agentpocket","version":"t","name":"h"}"#,
+                ));
+            }
+        });
+        let response = get("127.0.0.1", port, "/info", &[], TIMEOUT).unwrap();
         assert_eq!(response.status, 200);
         assert!(response.body.contains("agentpocket"));
-        handle.stop();
     }
 }

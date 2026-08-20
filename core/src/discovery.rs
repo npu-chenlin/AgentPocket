@@ -7,8 +7,10 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::client;
-use crate::mesh::MESH_PORT;
+use crate::mesh_client;
+
+/// mesh 固定监听端口（daemon 端点与 peer 探测共用）。
+pub const MESH_PORT: u16 = 48720;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeshPeer {
@@ -73,7 +75,7 @@ pub fn parse_online_peers(json: &str) -> Vec<(String, String)> {
 
 /// 探测单个 host 的 mesh 端点；/info 应答 app==agentpocket 才算命中。
 pub fn probe_peer(host: &str, port: u16, fallback_name: &str, timeout: Duration) -> Option<MeshPeer> {
-    let response = client::get(host, port, "/info", &[], timeout).ok()?;
+    let response = mesh_client::get(host, port, "/info", &[], timeout).ok()?;
     if response.status != 200 {
         return None;
     }
@@ -96,21 +98,20 @@ pub fn probe_peer(host: &str, port: u16, fallback_name: &str, timeout: Duration)
     })
 }
 
-/// 完整发现：tailscale 在线设备 + 手动 peer，并发探测后按 host 去重。
-pub fn discover(config_dir: &Path, tailscale: Option<&Path>, timeout: Duration) -> Vec<MeshPeer> {
-    let mut candidates: Vec<(String, String)> = Vec::new(); // (host, 备用名)
-    if let Some(binary) = tailscale {
-        if let Ok(output) = Command::new(binary).args(["status", "--json"]).output() {
-            candidates.extend(
-                parse_online_peers(&String::from_utf8_lossy(&output.stdout))
-                    .into_iter()
-                    .map(|(name, ip)| (ip, name)),
-            );
-        }
-    }
-    let manual = load_manual_peers(config_dir);
-    candidates.extend(manual.iter().map(|p| (p.host.clone(), p.name.clone())));
+/// tailscale 在线设备候选：执行 status --json，返回 (ip, 备用名)。
+pub fn tailscale_candidates(tailscale: Option<&Path>) -> Vec<(String, String)> {
+    let Some(binary) = tailscale else { return Vec::new() };
+    let Ok(output) = Command::new(binary).args(["status", "--json"]).output() else {
+        return Vec::new();
+    };
+    parse_online_peers(&String::from_utf8_lossy(&output.stdout))
+        .into_iter()
+        .map(|(name, ip)| (ip, name))
+        .collect()
+}
 
+/// 并发探测候选列表，按 host 去重、按 name 排序。
+pub fn probe_candidates(candidates: &[(String, String)], timeout: Duration) -> Vec<MeshPeer> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut peers: Vec<MeshPeer> = Vec::new();
     std::thread::scope(|scope| {
@@ -129,6 +130,14 @@ pub fn discover(config_dir: &Path, tailscale: Option<&Path>, timeout: Duration) 
     });
     peers.sort_by(|a, b| a.name.cmp(&b.name));
     peers
+}
+
+/// 完整发现：tailscale 在线设备 + 手动 peer，并发探测后按 host 去重。
+pub fn discover(config_dir: &Path, tailscale: Option<&Path>, timeout: Duration) -> Vec<MeshPeer> {
+    let mut candidates = tailscale_candidates(tailscale);
+    let manual = load_manual_peers(config_dir);
+    candidates.extend(manual.iter().map(|p| (p.host.clone(), p.name.clone())));
+    probe_candidates(&candidates, timeout)
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -227,22 +236,23 @@ mod tests {
 
     #[test]
     fn discover_finds_live_mesh_endpoint_via_manual_peer() {
-        let dir = tempfile::tempdir().unwrap();
-        let handle = crate::mesh::start(
-            crate::mesh::MeshContext {
-                config_dir: dir.path().to_path_buf(),
-                version: "9.9.9",
-                hostname: "live-host".to_string(),
-            },
-            0,
-        )
-        .unwrap();
-        // 手动 peer 指向本机端点（端口由环境注入，测试里直接探测）。
-        let peer = probe_peer("127.0.0.1", handle.port, "live-host", Duration::from_secs(3));
+        // 手动 peer 指向本机 mock 端点（端口随机，测试里直接探测）。
+        let server = tiny_http::Server::http(("127.0.0.1", 0)).unwrap();
+        let port = match server.server_addr() {
+            tiny_http::ListenAddr::IP(addr) => addr.port(),
+            other => panic!("unexpected listen addr: {other:?}"),
+        };
+        std::thread::spawn(move || {
+            for request in server.incoming_requests() {
+                let _ = request.respond(tiny_http::Response::from_string(
+                    r#"{"app":"agentpocket","version":"9.9.9","name":"live-host"}"#,
+                ));
+            }
+        });
+        let peer = probe_peer("127.0.0.1", port, "live-host", Duration::from_secs(3));
         let peer = peer.expect("probe succeeds");
         assert_eq!(peer.name, "live-host");
         assert_eq!(peer.version.as_deref(), Some("9.9.9"));
-        handle.stop();
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use agentpocket_core::model::{Backend, ServerConfig};
 
-use crate::client;
+use agentpocket_core::mesh_client as client;
 
 #[derive(Debug)]
 pub struct ServerProbe {
@@ -116,7 +116,7 @@ fn probe_dsh(server: &ServerConfig, timeout: Duration) -> Result<(Option<String>
         "payload": {},
     })
     .to_string();
-    let response = crate::client::post(
+    let response = client::post(
         &server.host,
         server.port,
         "/api/session.list",
