@@ -3,6 +3,7 @@ mod discovery;
 mod mesh;
 mod ops;
 mod paths;
+mod status;
 mod update;
 
 use std::time::Duration;
@@ -36,6 +37,8 @@ enum Command {
     Push { host: String },
     /// 发现并列出 mesh peer
     Peers,
+    /// 一次性探测已配置服务器状态
+    Status,
     /// 手动检查并更新
     Update,
 }
@@ -112,6 +115,55 @@ fn main() {
                     peer.version.as_deref().unwrap_or("-")
                 );
             }
+        }
+        Command::Status => {
+            let config_dir = paths::default_config_dir();
+            let outcome = match agentpocket_core::config::ConfigStore::new(config_dir).load() {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    eprintln!("读取配置失败：{e}");
+                    std::process::exit(1);
+                }
+            };
+            if outcome.config.servers.is_empty() {
+                println!("尚未配置任何服务器（可 agentpocket pull <host> 先同步配置）");
+            }
+            // 并发探测全部已配置服务器，每个线程一个 5s 超时
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = outcome
+                    .config
+                    .servers
+                    .iter()
+                    .map(|server| {
+                        scope.spawn(move || {
+                            status::probe_server(server, Duration::from_secs(5))
+                        })
+                    })
+                    .collect();
+                for handle in handles {
+                    let probe = handle.join().expect("probe thread");
+                    let backend = match probe.backend {
+                        agentpocket_core::model::Backend::Kimi => "kimi",
+                        agentpocket_core::model::Backend::Dsh => "dsh",
+                    };
+                    if probe.online {
+                        println!(
+                            "{}  {}  在线 {}  {} 个活跃会话",
+                            probe.name,
+                            backend,
+                            probe.version.as_deref().unwrap_or("-"),
+                            probe.busy
+                        );
+                    } else {
+                        println!(
+                            "{}  {}  离线（{}）",
+                            probe.name,
+                            backend,
+                            probe.error.as_deref().unwrap_or("未知错误")
+                        );
+                    }
+                }
+            });
         }
         Command::Update => {
             match update::check_and_apply("https://api.github.com", Duration::from_secs(60)) {
