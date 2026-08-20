@@ -82,7 +82,7 @@ POST 语义（自动合并 = `ImportMode::Merge`）：同 ID 覆盖、新 ID 追
 ## 5. 发现（daemon::discovery）
 
 1. `tailscale status --json` 解析 `Self`/`Peer`；过滤 `Online == true`，排除 `Self`。
-2. 并发探测各 peer IPv4 `48720/info`：连接超时 400ms，总预算 ~1.5s。
+2. 并发探测各 peer IPv4 `48720/info`：连接超时 400ms，总预算 ~3s。
 3. `app == "agentpocket"` 即 mesh 节点，其余自然过滤。
 
 CLI 查找顺序：`PATH` → Linux `/usr/bin/tailscale`、`/usr/local/bin/tailscale`（首版仅 Linux）。找不到时 `peers` 输出警告并只列手动 peer。

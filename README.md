@@ -147,7 +147,7 @@ npm run tauri build -- --bundles appimage,deb
 curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/scripts/install.sh | sudo bash
 ```
 
-安装后自动启动并开机自启。常用命令（`sudo agentpocket …`）：
+安装后自动启动并开机自启。常用命令（`agentpocket …`）：
 
 | 命令 | 作用 |
 |---|---|
@@ -155,7 +155,9 @@ curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/script
 | `agentpocket pull <IP或MagicDNS名>` | 从某节点拉取配置（`--replace` 替换 / `--dry-run` 预览） |
 | `agentpocket push <IP或MagicDNS名>` | 把本机配置推送给某节点（对方自动合并） |
 | `agentpocket status` | 查看本机所配服务器的在线/版本/活跃会话 |
-| `agentpocket update` | 手动检查更新（日常每 24 小时自动检查并自更新） |
+| `agentpocket update` | 手动检查更新；服务每 24 小时自动检查，若安装为非 root 服务，按提示执行 `sudo agentpocket update` 完成更新 |
+
+（若以其他用户登录，用 sudo -u <服务用户> agentpocket …；配置与服务共用同一用户目录）
 
 守护进程与桌面端共用 `~/.local/share/com.local.agentpocket.desktop/config.json`，同机安装互不冲突。
 

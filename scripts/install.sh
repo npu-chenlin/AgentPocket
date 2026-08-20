@@ -13,7 +13,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     systemctl disable agentpocket 2>/dev/null || true
     rm -f "$SERVICE_PATH" "$BIN_PATH"
     systemctl daemon-reload
-    echo "已卸载 agentpocket（配置目录 ~/.local/share/AgentPocket 保留）"
+    echo "已卸载 agentpocket（配置目录 ~/.local/share/com.local.agentpocket.desktop 保留）"
     exit 0
 fi
 

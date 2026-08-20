@@ -17,6 +17,7 @@ pub enum UpdateError {
     Network(String),
     Parse(String),
     Io(String),
+    AssetMissing,
 }
 
 impl std::fmt::Display for UpdateError {
@@ -25,6 +26,9 @@ impl std::fmt::Display for UpdateError {
             UpdateError::Network(e) => write!(f, "更新检查网络错误：{e}"),
             UpdateError::Parse(e) => write!(f, "更新检查解析错误：{e}"),
             UpdateError::Io(e) => write!(f, "更新写入失败：{e}"),
+            UpdateError::AssetMissing => {
+                write!(f, "最新 release 未提供本架构资产（{}）", arch_asset_name())
+            }
         }
     }
 }
@@ -33,6 +37,14 @@ impl std::fmt::Display for UpdateError {
 pub struct ReleaseInfo {
     pub version: Version,
     pub asset_url: String,
+}
+
+/// fetch_latest 的检查结果：无更新 / 有更新但缺本架构资产 / 有可用更新。
+#[derive(Debug)]
+pub enum CheckOutcome {
+    UpToDate,
+    AssetMissing,
+    Available(ReleaseInfo),
 }
 
 pub fn arch_asset_name() -> String {
@@ -57,27 +69,28 @@ struct GithubRelease {
     assets: Vec<ReleaseAsset>,
 }
 
-/// 查询最新 release；仅当远端版本严格大于 current 且带本架构资产时返回 Some。
+/// 查询最新 release；严格大于 current 才视为有更新，并区分缺本架构资产的情况。
 pub fn fetch_latest(
     api_base: &str,
     current: &Version,
     timeout: Duration,
-) -> Result<Option<ReleaseInfo>, UpdateError> {
+) -> Result<CheckOutcome, UpdateError> {
     let url = format!("{api_base}/repos/{REPO}/releases/latest");
     let body = http_get_string(&url, timeout)?;
     let release: GithubRelease =
         serde_json::from_str(&body).map_err(|e| UpdateError::Parse(e.to_string()))?;
     let version = parse_tag_version(&release.tag_name)?;
     if version <= *current {
-        return Ok(None);
+        return Ok(CheckOutcome::UpToDate);
     }
     let wanted = arch_asset_name();
-    let asset_url = release
-        .assets
-        .into_iter()
-        .find(|asset| asset.name == wanted)
-        .map(|asset| asset.browser_download_url);
-    Ok(asset_url.map(|asset_url| ReleaseInfo { version, asset_url }))
+    let Some(asset) = release.assets.into_iter().find(|asset| asset.name == wanted) else {
+        return Ok(CheckOutcome::AssetMissing);
+    };
+    Ok(CheckOutcome::Available(ReleaseInfo {
+        version,
+        asset_url: asset.browser_download_url,
+    }))
 }
 
 /// 下载资产并原子替换 self_path（写临时文件 → fsync → chmod 755 → rename）。
@@ -128,18 +141,31 @@ fn self_path() -> Option<PathBuf> {
 pub fn check_and_apply(api_base: &str, timeout: Duration) -> Result<String, UpdateError> {
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .expect("crate version is valid semver");
-    let Some(release) = fetch_latest(api_base, &current, timeout)? else {
-        return Ok("已是最新版本".to_string());
+    let release = match fetch_latest(api_base, &current, timeout)? {
+        CheckOutcome::UpToDate => return Ok("已是最新版本".to_string()),
+        CheckOutcome::AssetMissing => return Err(UpdateError::AssetMissing),
+        CheckOutcome::Available(release) => release,
     };
     let Some(path) = self_path() else {
         return Err(UpdateError::Io("无法定位自身路径".to_string()));
     };
     let message = format!("更新到 {}：", release.version);
-    download_and_replace(&release.asset_url, &path, timeout)?;
+    download_and_replace(&release.asset_url, &path, timeout).map_err(permission_hint)?;
     if restart_systemd() {
         Ok(format!("{message}已替换并重启服务"))
     } else {
         Ok(format!("{message}已替换，请手动重启"))
+    }
+}
+
+/// 权限失败时附加可行动提示：非 root 服务无权覆盖 /usr/local/bin 下的自身，
+/// 需用户手动 sudo 执行更新。
+fn permission_hint(error: UpdateError) -> UpdateError {
+    match error {
+        UpdateError::Io(message) if message.to_lowercase().contains("permission denied") => {
+            UpdateError::Io(format!("{message}；服务以非 root 运行时请手动执行：sudo agentpocket update"))
+        }
+        other => other,
     }
 }
 
@@ -229,13 +255,48 @@ mod tests {
 
         let base = format!("http://127.0.0.1:{port}");
         let current = semver::Version::new(2, 8, 0);
-        let release = fetch_latest(&base, &current, TIMEOUT).unwrap().expect("newer release");
+        let release = match fetch_latest(&base, &current, TIMEOUT).unwrap() {
+            CheckOutcome::Available(release) => release,
+            other => panic!("expected Available, got {other:?}"),
+        };
         assert_eq!(release.version, semver::Version::new(2, 9, 0));
         assert!(release.asset_url.contains("musl"));
 
         // 当前已是 2.9.0 → 不更新。
         let same = semver::Version::new(2, 9, 0);
-        assert!(fetch_latest(&base, &same, TIMEOUT).unwrap().is_none());
+        assert!(matches!(
+            fetch_latest(&base, &same, TIMEOUT).unwrap(),
+            CheckOutcome::UpToDate
+        ));
+    }
+
+    #[test]
+    fn fetch_latest_reports_asset_missing_without_arch_asset() {
+        // mock release 版本更新，但资产列表不含本架构名 → AssetMissing。
+        let server = tiny_http::Server::http(("127.0.0.1", 0)).unwrap();
+        let port = match server.server_addr() {
+            tiny_http::ListenAddr::IP(addr) => addr.port(),
+            other => panic!("unexpected listen addr: {other:?}"),
+        };
+        std::thread::spawn(move || {
+            for request in server.incoming_requests() {
+                let body = serde_json::json!({
+                    "tag_name": "v2.9.0",
+                    "assets": [
+                        {"name": "app.apk", "browser_download_url": "http://127.0.0.1:0/apk"}
+                    ]
+                })
+                .to_string();
+                let _ = request.respond(tiny_http::Response::from_string(body));
+            }
+        });
+
+        let base = format!("http://127.0.0.1:{port}");
+        let current = semver::Version::new(2, 8, 0);
+        assert!(matches!(
+            fetch_latest(&base, &current, TIMEOUT).unwrap(),
+            CheckOutcome::AssetMissing
+        ));
     }
 
     #[test]
