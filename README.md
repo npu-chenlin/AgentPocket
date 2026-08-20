@@ -139,6 +139,28 @@ npm run tauri build -- --bundles appimage,deb
 - 服务器监听地址、可信网络、端口转发和防火墙仍需由用户自行配置。
 - Windows 与 macOS 尚未进行正式发布验证。
 
+## 服务器端（mesh 守护进程）
+
+在没有显示器的服务器上一键安装 AgentPocket 守护进程，让配置在所有机器间流动：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/scripts/install.sh | sudo bash
+```
+
+安装后自动启动并开机自启。常用命令（`sudo agentpocket …`）：
+
+| 命令 | 作用 |
+|---|---|
+| `agentpocket peers` | 发现 tailnet 内的 AgentPocket 节点 |
+| `agentpocket pull <IP或MagicDNS名>` | 从某节点拉取配置（`--replace` 替换 / `--dry-run` 预览） |
+| `agentpocket push <IP或MagicDNS名>` | 把本机配置推送给某节点（对方自动合并） |
+| `agentpocket status` | 查看本机所配服务器的在线/版本/活跃会话 |
+| `agentpocket update` | 手动检查更新（日常每 24 小时自动检查并自更新） |
+
+守护进程与桌面端共用 `~/.local/share/AgentPocket/config.json`，同机安装互不冲突。
+
+mesh 端点仅在你的 Tailscale 网络内可达（Tailscale 网段之外一律拒绝）；节点间无鉴权，信任边界即你的 tailnet。
+
 ## 说明
 
 本项目是非官方客户端，与 Moonshot AI/Kimi、DeepSeek 官方无隶属关系。请仅在可信网络中使用。

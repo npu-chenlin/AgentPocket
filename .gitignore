@@ -15,3 +15,4 @@
 /desktop/src-tauri/gen/
 /core/target/
 /daemon/target/
+/dist/
