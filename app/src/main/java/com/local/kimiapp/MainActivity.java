@@ -442,9 +442,10 @@ public class MainActivity extends ComponentActivity {
         setIntent(intent);
         if (activateServerFromIntent(intent)) {
             String sessionId = intent.getStringExtra(EXTRA_SESSION_ID);
-            // 页面已在目标服务器/会话上时不再重新加载，避免从通知栏打开每次都白屏刷新
+            // 页面已在目标服务器/会话上时不再重新加载；跨会话在同服务器内
+            // 走前端路由切换（navigateToSession），避免从通知栏打开整页刷新
             if (!isOnTargetPage(sessionId)) {
-                loadConfiguredUrl(sessionId);
+                navigateToSession(sessionId);
             }
         }
         if (intent.getBooleanExtra(EXTRA_SHOW_CONFIG, false)) showServerList();
@@ -469,6 +470,38 @@ public class MainActivity extends ComponentActivity {
             expected += "sessions/" + sessionId;
         }
         return current.equals(expected) || current.startsWith(expected);
+    }
+
+    /** 当前 WebView 是否已停在激活服务器的 kimi 页面上（可走前端路由切换会话）。 */
+    private boolean isOnServerPage() {
+        if (webView == null) return false;
+        String current = webView.getUrl();
+        if (current == null) return false;
+        ServerStore.Server server = ServerStore.active(this);
+        return server != null
+                && ServerStore.Server.BACKEND_KIMI.equals(server.backend)
+                && current.startsWith(server.baseUrl() + "/");
+    }
+
+    /**
+     * 打开激活服务器上的指定会话。kimi 前端是 history 路由的 SPA（popstate 驱动），
+     * 页面已在同一服务器上时用 pushState + popstate 触发前端路由切换，
+     * 避免跨会话点击通知/会话列表时整页重载白屏；其余情况退回整页加载。
+     */
+    private void navigateToSession(String sessionId) {
+        if (sessionId != null && !sessionId.isEmpty() && isOnServerPage()) {
+            String safeId = sessionId.replaceAll("[^A-Za-z0-9_-]", "");
+            String script = "(function(){try{"
+                    + "var p='/sessions/" + safeId + "';"
+                    + "if(location.pathname!==p){"
+                    + "history.pushState(null,'',p);"
+                    + "window.dispatchEvent(new PopStateEvent('popstate'));"
+                    + "}"
+                    + "}catch(e){}})();";
+            webView.evaluateJavascript(script, null);
+            return;
+        }
+        loadConfiguredUrl(sessionId);
     }
 
     private void handleUpdateIntent(Intent intent) {
@@ -1081,7 +1114,7 @@ public class MainActivity extends ComponentActivity {
         for (ServerStore.Server server : servers) {
             if (server.id.equals(serverId)) {
                 ServerStore.save(this, servers, serverId);
-                loadConfiguredUrl(sessionId);
+                navigateToSession(sessionId);
                 return;
             }
         }
