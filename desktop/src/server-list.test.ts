@@ -16,8 +16,8 @@ function viewFixture(): AppView {
         connected: true,
         activeCount: 2,
         sessions: [
-          { id: "sess-a", title: "重构登录模块" },
-          { id: "sess-b", title: "修复 <b> 注入" },
+          { id: "sess-a", title: "重构登录模块", activity: "Bash · npm test" },
+          { id: "sess-b", title: "修复 <b> 注入", activity: null },
         ],
         serverVersion: null,
         lastCheckedAt: null,
@@ -97,12 +97,21 @@ describe("renderServerList", () => {
     expect(html).toContain("&lt;b&gt;");
   });
 
+  it("shows escaped activity text for expanded busy sessions", () => {
+    const view = viewFixture();
+    view.statuses["dsh-1"].sessions[0].activity = 'Bash · rm -rf "x"';
+    const html = renderServerList(view, new Set(["dsh-1"]));
+    expect(html).toContain("session-activity");
+    expect(html).toContain("Bash · rm -rf &quot;x&quot;");
+    expect(html).not.toContain('rm -rf "x"');
+  });
+
   it("hides sessions panel for offline servers", () => {
     const view = viewFixture();
     view.statuses["kimi-1"] = {
       connected: false,
       activeCount: 1,
-      sessions: [{ id: "s", title: "离线会话" }],
+      sessions: [{ id: "s", title: "离线会话", activity: null }],
       serverVersion: null,
       lastCheckedAt: null,
       error: null,

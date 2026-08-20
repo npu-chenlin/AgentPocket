@@ -525,11 +525,25 @@ p {
   background: var(--accent-soft);
 }
 
-.session-title {
+.session-copy {
+  display: flex;
   flex: 1;
+  flex-direction: column;
+  gap: 1px;
   min-width: 0;
+}
+
+.session-title {
   overflow: hidden;
   font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-activity {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 0.7rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

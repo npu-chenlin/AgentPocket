@@ -73,7 +73,10 @@ function renderSessionRows(
           data-id="${id}" data-session-id="${escapeHtml(session.id)}"
           aria-label="打开会话 ${escapeHtml(session.title)}">
           <span class="session-spinner" aria-hidden="true"></span>
-          <span class="session-title">${escapeHtml(session.title)}</span>
+          <span class="session-copy">
+            <span class="session-title">${escapeHtml(session.title)}</span>
+            ${session.activity ? `<span class="session-activity">${escapeHtml(session.activity)}</span>` : ""}
+          </span>
         </button>
       </li>`,
       )

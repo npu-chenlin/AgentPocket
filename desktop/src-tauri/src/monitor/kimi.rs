@@ -106,6 +106,15 @@ async fn run_once(
         .await
         .map_err(|e| MonitorError::Ws(e.to_string()))?;
 
+    // 4. Subscribe transcript stream (block granularity) for activity details.
+    for id in &session_ids {
+        ws_stream
+            .send(Message::Text(subscribe_v2(id).to_string().into()))
+            .await
+            .map_err(|e| MonitorError::Ws(e.to_string()))?;
+        state.v2_subscribed.insert(id.clone());
+    }
+
     read_loop(client, ws_stream, server, update_tx, state, token).await
 }
 
@@ -245,6 +254,20 @@ async fn read_loop(
                                 emit_events(update_tx, events).await;
                             }
                             Err(e) => return Err(e),
+                        }
+                        // 新出现的会话（如 event.session.created）补订 transcript 流。
+                        let new_ids: Vec<String> = state
+                            .titles
+                            .keys()
+                            .filter(|id| !state.v2_subscribed.contains(*id))
+                            .cloned()
+                            .collect();
+                        for id in new_ids {
+                            ws_stream
+                                .send(Message::Text(subscribe_v2(&id).to_string().into()))
+                                .await
+                                .map_err(|e| MonitorError::Ws(e.to_string()))?;
+                            state.v2_subscribed.insert(id);
                         }
                         send_status(update_tx, &server.id, true, state, None);
                     }
@@ -421,6 +444,18 @@ fn subscribe(session_ids: &[String]) -> Value {
         "payload": {
             "session_ids": session_ids,
             "cursors": {},
+        },
+    })
+}
+
+/// block 粒度只推结构事件（相位、工具帧），不推 token 流，流量可忽略。
+fn subscribe_v2(session_id: &str) -> Value {
+    json!({
+        "type": "subscribe_v2",
+        "id": uuid::Uuid::new_v4().to_string(),
+        "payload": {
+            "session_id": session_id,
+            "transcript": { "main": "block" },
         },
     })
 }

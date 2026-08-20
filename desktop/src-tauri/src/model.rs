@@ -137,6 +137,8 @@ impl From<&ServerConfig> for ServerSummary {
 pub struct SessionSummary {
     pub id: String,
     pub title: String,
+    /// 当前正在执行的活动，如 "Bash · git push"；未知时为 None。
+    pub activity: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]

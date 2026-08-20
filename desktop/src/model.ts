@@ -17,6 +17,8 @@ export interface ServerSummary {
 export interface SessionSummary {
   id: string;
   title: string;
+  /** 当前正在执行的活动（如 "Bash · git push"）；未知为 null。 */
+  activity: string | null;
 }
 
 export interface ServerStatus {

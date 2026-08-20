@@ -842,6 +842,7 @@ mod tests {
             sessions: vec![crate::model::SessionSummary {
                 id: "s1".to_string(),
                 title: "会话".to_string(),
+                activity: None,
             }],
             ..base.clone()
         };
