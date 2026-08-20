@@ -157,7 +157,7 @@ curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/script
 | `agentpocket status` | 查看本机所配服务器的在线/版本/活跃会话 |
 | `agentpocket update` | 手动检查更新（日常每 24 小时自动检查并自更新） |
 
-守护进程与桌面端共用 `~/.local/share/AgentPocket/config.json`，同机安装互不冲突。
+守护进程与桌面端共用 `~/.local/share/com.local.agentpocket.desktop/config.json`，同机安装互不冲突。
 
 mesh 端点仅在你的 Tailscale 网络内可达（Tailscale 网段之外一律拒绝）；节点间无鉴权，信任边界即你的 tailnet。
 

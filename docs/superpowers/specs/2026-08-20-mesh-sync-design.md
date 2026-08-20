@@ -25,7 +25,7 @@ AgentPocket 的配置（kimi/dsh 服务器列表）目前只在 GUI 桌面端与
 - `daemon` crate：mesh HTTP 端点（48720）、tailscale 发现、pull/push 客户端、自动更新
 - 命令面：`serve` / `peers` / `pull` / `push` / `status` / `update` / `version`
 - 一键安装脚本 `scripts/install.sh`：下载 + systemd 安装 + 自启动
-- 与 GUI 同机共存：共享 `~/.local/share/AgentPocket/config.json`，端口无冲突
+- 与 GUI 同机共存：共享 `~/.local/share/com.local.agentpocket.desktop/config.json`，端口无冲突
 
 ### 2.2 Phase 2（延后，设计保留）
 
@@ -61,7 +61,7 @@ repo/
 
 - **core 抽取最小化**：只抽 `model.rs`/`config.rs`（纯 std+serde，无 tauri 依赖）。`desktop/src-tauri` 加 path 依赖并留转发 shim，现有测试与行为不变。daemon 与 GUI 必须共享同一套配置格式与合并逻辑，杜绝复制分叉。
 - **mesh 客户端无 TLS**：tailnet 内全部是 100.x 上的明文 HTTP，`std::net::TcpStream` 手写最小 HTTP 即可，musl 静态零系统依赖。仅自动更新走 GitHub API 需 HTTPS，用 `ureq`（rustls，musl 友好）。
-- **配置路径**：daemon 与 GUI 同为 Linux XDG `~/.local/share/AgentPocket/`；同机同用户共存时读同一份 `config.json`。
+- **配置路径**：daemon 与 GUI 同为 Linux XDG `~/.local/share/com.local.agentpocket.desktop/`（GUI 的 Tauri identifier 数据目录）；同机同用户共存时读同一份 `config.json`。
 - 无 workspace 改造：`daemon/`、`core/`、`desktop/src-tauri/` 各自独立 crate，path 依赖互联。
 
 ## 4. mesh 端点（daemon::mesh）
@@ -87,7 +87,7 @@ POST 语义（自动合并 = `ImportMode::Merge`）：同 ID 覆盖、新 ID 追
 
 CLI 查找顺序：`PATH` → Linux `/usr/bin/tailscale`、`/usr/local/bin/tailscale`（首版仅 Linux）。找不到时 `peers` 输出警告并只列手动 peer。
 
-手动 peer：`~/.local/share/AgentPocket/peers.json`，格式 `{"peers":[{"name":"…","host":"…"}]}`（host 为 100.x IP 或 MagicDNS 名），与发现列表按 host 去重。
+手动 peer：`~/.local/share/com.local.agentpocket.desktop/peers.json`，格式 `{"peers":[{"name":"…","host":"…"}]}`（host 为 100.x IP 或 MagicDNS 名），与发现列表按 host 去重。
 
 ## 6. 命令面
 
