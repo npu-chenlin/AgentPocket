@@ -1,3 +1,4 @@
+mod kimi;
 mod mesh;
 mod ops;
 mod paths;
@@ -38,6 +39,14 @@ enum Command {
     Status,
     /// 手动检查并更新
     Update,
+    /// 查询或安装/升级 Kimi Code CLI（省略 host 为本机，指定则为对应 mesh 节点）
+    Kimi {
+        /// 目标节点（IP 或 MagicDNS 名）
+        host: Option<String>,
+        /// 执行安装/升级（缺省只查询版本）
+        #[arg(long)]
+        upgrade: bool,
+    },
     /// 停止并移除服务与二进制（需 sudo，配置保留）
     Uninstall,
     /// 输出 shell 自动补全脚本（bash/zsh/fish/elvish/powershell）
@@ -164,6 +173,22 @@ fn main() {
         }
         Command::Update => {
             match update::check_and_apply("https://api.github.com", Duration::from_secs(60)) {
+                Ok(message) => println!("{message}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Command::Kimi { host, upgrade } => {
+            let home = agentpocket_core::kimi_config::home_dir();
+            let result = match (host, upgrade) {
+                (None, false) => ops::kimi_local_status(&home),
+                (None, true) => ops::kimi_local_upgrade(&home),
+                (Some(host), false) => ops::kimi_remote_status(&host),
+                (Some(host), true) => ops::kimi_remote_upgrade(&host),
+            };
+            match result {
                 Ok(message) => println!("{message}"),
                 Err(e) => {
                     eprintln!("{e}");

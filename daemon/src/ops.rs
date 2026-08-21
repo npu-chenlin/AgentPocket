@@ -72,6 +72,76 @@ fn push_via(home: &Path, host: &str, port: u16) -> Result<String, String> {
     Ok(format!("对方已接收 config.toml（{} 字节）", text.len()))
 }
 
+/// 远端升级走安装脚本，下载+执行放宽到 11 分钟（端点侧无额外超时）。
+const UPGRADE_TIMEOUT: Duration = Duration::from_secs(660);
+
+pub fn kimi_local_status(home: &Path) -> Result<String, String> {
+    let (installed, version) = crate::kimi::info(home);
+    Ok(if installed {
+        format!("Kimi Code CLI 已安装：{}", version.as_deref().unwrap_or("未知版本"))
+    } else {
+        "Kimi Code CLI 未安装（agentpocket kimi --upgrade 安装）".to_string()
+    })
+}
+
+pub fn kimi_local_upgrade(home: &Path) -> Result<String, String> {
+    println!("执行官方安装脚本（下载 + 校验，可能需要数分钟）…");
+    let outcome = crate::kimi::install_or_upgrade(home)?;
+    Ok(format_upgrade_message(outcome.before.as_deref(), outcome.after.as_deref()))
+}
+
+pub fn kimi_remote_status(host: &str) -> Result<String, String> {
+    kimi_remote_status_via(host, MESH_PORT)
+}
+
+fn kimi_remote_status_via(host: &str, port: u16) -> Result<String, String> {
+    let response = client::get(host, port, "/kimi-info", &[], TIMEOUT)
+        .map_err(|e| e.to_string())?;
+    if response.status != 200 {
+        return Err(format!("对方返回 HTTP {}：{}", response.status, response.body));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&response.body).map_err(|e| e.to_string())?;
+    Ok(if value["installed"].as_bool().unwrap_or(false) {
+        format!(
+            "对方 Kimi Code CLI：{}",
+            value["version"].as_str().unwrap_or("未知版本")
+        )
+    } else {
+        format!("对方未安装 Kimi Code CLI（agentpocket kimi {host} --upgrade 安装）")
+    })
+}
+
+pub fn kimi_remote_upgrade(host: &str) -> Result<String, String> {
+    kimi_remote_upgrade_via(host, MESH_PORT)
+}
+
+fn kimi_remote_upgrade_via(host: &str, port: u16) -> Result<String, String> {
+    println!("已请求对方执行安装脚本（下载 + 校验，可能需要数分钟）…");
+    let response = client::post(host, port, "/kimi-upgrade", &[], "", UPGRADE_TIMEOUT)
+        .map_err(|e: ClientError| e.to_string())?;
+    if response.status != 200 {
+        return Err(format!("对方返回 HTTP {}：{}", response.status, response.body));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&response.body).map_err(|e| e.to_string())?;
+    let before = value["before"].as_str();
+    let after = value["after"].as_str();
+    Ok(format!(
+        "对方{}",
+        format_upgrade_message(before, after)
+    ))
+}
+
+fn format_upgrade_message(before: Option<&str>, after: Option<&str>) -> String {
+    match (before, after) {
+        (Some(b), Some(a)) if b == a => format!("已是最新：{a}"),
+        (Some(b), Some(a)) => format!("升级完成：{b} -> {a}"),
+        (None, Some(a)) => format!("安装完成：{a}"),
+        (_, None) => "安装脚本已执行，但未能确认版本，请手动检查".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,6 +202,36 @@ mod tests {
             "model = \"local\"\n"
         );
         handle.stop();
+    }
+
+    #[test]
+    fn kimi_remote_status_reads_peer_info() {
+        use std::os::unix::fs::PermissionsExt;
+        let remote_dir = tempfile::tempdir().unwrap();
+        let bin_dir = remote_dir.path().join(".kimi-code/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let bin = bin_dir.join("kimi");
+        std::fs::write(&bin, "#!/bin/sh\necho 0.99.0\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let handle = start_remote(remote_dir.path());
+
+        let message = kimi_remote_status_via("127.0.0.1", handle.port).unwrap();
+
+        assert!(message.contains("0.99.0"));
+        handle.stop();
+    }
+
+    #[test]
+    fn upgrade_message_variants() {
+        assert_eq!(
+            format_upgrade_message(Some("0.37.0"), Some("0.38.0")),
+            "升级完成：0.37.0 -> 0.38.0"
+        );
+        assert_eq!(
+            format_upgrade_message(Some("0.38.0"), Some("0.38.0")),
+            "已是最新：0.38.0"
+        );
+        assert_eq!(format_upgrade_message(None, Some("0.38.0")), "安装完成：0.38.0");
     }
 
     #[test]

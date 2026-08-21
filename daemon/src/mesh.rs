@@ -135,6 +135,48 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
                 .with_status_code(StatusCode(200))
                 .with_header(json_header()));
         }
+        (Method::Get, "/kimi-info") => {
+            let (installed, version) = crate::kimi::info(&ctx.kimi_home);
+            let body = serde_json::json!({ "installed": installed, "version": version });
+            let _ = request.respond(Response::from_string(body.to_string())
+                .with_status_code(StatusCode(200))
+                .with_header(json_header()));
+        }
+        (Method::Post, "/kimi-upgrade") => {
+            let source = request
+                .headers()
+                .iter()
+                .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("X-AgentPocket-Source"))
+                .map(|h| h.value.as_str().to_string())
+                .or_else(|| {
+                    request.remote_addr().map(|a| a.ip().to_string())
+                })
+                .unwrap_or_else(|| "未知来源".to_string());
+
+            // 安装脚本下载+执行可能要数分钟，挪到工作线程，不阻塞 mesh 其余请求
+            let kimi_home = ctx.kimi_home.clone();
+            std::thread::spawn(move || {
+                match crate::kimi::install_or_upgrade(&kimi_home) {
+                    Ok(outcome) => {
+                        println!(
+                            "[mesh] {source} 触发 Kimi Code 升级：{:?} -> {:?}",
+                            outcome.before, outcome.after
+                        );
+                        let body = serde_json::json!({
+                            "before": outcome.before,
+                            "after": outcome.after,
+                        });
+                        let _ = request.respond(Response::from_string(body.to_string())
+                            .with_status_code(StatusCode(200))
+                            .with_header(json_header()));
+                    }
+                    Err(message) => {
+                        let _ = request.respond(Response::from_string(message)
+                            .with_status_code(StatusCode(500)));
+                    }
+                }
+            });
+        }
         (Method::Get, "/kimi-config") => match agentpocket_core::kimi_config::read(&ctx.kimi_home) {
             Ok(text) => {
                 let _ = request.respond(Response::from_string(text)
@@ -288,6 +330,29 @@ mod tests {
         );
         assert_eq!(status, 200);
         assert_eq!(body, "model = \"k2\"\n");
+        handle.stop();
+    }
+
+    #[test]
+    fn get_kimi_info_reports_installed_version() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        // 假 kimi：echo 固定版本的 shell 脚本
+        let bin_dir = dir.path().join(".kimi-code/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let bin = bin_dir.join("kimi");
+        std::fs::write(&bin, "#!/bin/sh\necho 0.99.0\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let handle = start(ctx(dir.path()), 0).unwrap();
+        let (status, body) = raw_request(
+            handle.port,
+            "GET /kimi-info HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(status, 200);
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(value["installed"], true);
+        assert_eq!(value["version"], "0.99.0");
         handle.stop();
     }
 
