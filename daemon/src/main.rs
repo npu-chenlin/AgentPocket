@@ -1,3 +1,4 @@
+mod kimi_config;
 mod mesh;
 mod ops;
 mod paths;
@@ -32,9 +33,17 @@ enum Command {
         /// 只打印预览，不落盘
         #[arg(long)]
         dry_run: bool,
+        /// 同步 ~/.kimi-code/config.toml（单文件覆盖，--replace 不适用）
+        #[arg(long, conflicts_with = "replace")]
+        kimi_config: bool,
     },
     /// 把本地配置推送给 peer
-    Push { host: String },
+    Push {
+        host: String,
+        /// 同步 ~/.kimi-code/config.toml（单文件覆盖）
+        #[arg(long)]
+        kimi_config: bool,
+    },
     /// 发现并列出 mesh peer
     Peers,
     /// 一次性探测已配置服务器状态
@@ -51,6 +60,7 @@ fn main() {
         Command::Serve => {
             let ctx = mesh::MeshContext {
                 config_dir: paths::default_config_dir(),
+                kimi_home: kimi_config::home_dir(),
                 version: env!("CARGO_PKG_VERSION"),
                 hostname: agentpocket_core::host::hostname(),
             };
@@ -71,7 +81,17 @@ fn main() {
             }
         }
         Command::Version => println!("{}", env!("CARGO_PKG_VERSION")),
-        Command::Pull { host, replace, dry_run } => {
+        Command::Pull { host, replace, dry_run, kimi_config: kimi } => {
+            if kimi {
+                match ops::run_pull_kimi_config(&kimi_config::home_dir(), &host, dry_run) {
+                    Ok(message) => println!("{message}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
             let mode = if dry_run {
                 ops::PullMode::DryRun
             } else if replace {
@@ -87,7 +107,17 @@ fn main() {
                 }
             }
         }
-        Command::Push { host } => {
+        Command::Push { host, kimi_config: kimi } => {
+            if kimi {
+                match ops::run_push_kimi_config(&kimi_config::home_dir(), &host) {
+                    Ok(message) => println!("{message}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
             match ops::run_push(&paths::default_config_dir(), &host) {
                 Ok(message) => println!("{message}"),
                 Err(e) => {

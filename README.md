@@ -154,6 +154,8 @@ curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/script
 | `agentpocket peers` | 发现 tailnet 内的 AgentPocket 节点 |
 | `agentpocket pull <IP或MagicDNS名>` | 从某节点拉取配置（`--replace` 替换 / `--dry-run` 预览） |
 | `agentpocket push <IP或MagicDNS名>` | 把本机配置推送给某节点（对方自动合并） |
+| `agentpocket pull <IP或MagicDNS名> --kimi-config` | 同步远端 `~/.kimi-code/config.toml`（覆盖本地，旧文件备份为 `.bak`，`--dry-run` 预览） |
+| `agentpocket push <IP或MagicDNS名> --kimi-config` | 把本机 `config.toml` 推送给某节点 |
 | `agentpocket status` | 查看本机所配服务器的在线/版本/活跃会话 |
 | `agentpocket update` | 手动检查更新；服务每 24 小时自动检查，若安装为非 root 服务，按提示执行 `sudo agentpocket update` 完成更新 |
 | `sudo agentpocket uninstall` | 停止并移除服务与二进制（配置目录保留） |

@@ -1,4 +1,5 @@
-//! mesh HTTP 端点：固定端口、tailnet 访问围栏、/info 握手、/config 拉取与合并推送。
+//! mesh HTTP 端点：固定端口、tailnet 访问围栏、/info 握手、/config 拉取与合并推送、
+//! /kimi-config 同步 ~/.kimi-code/config.toml。
 
 use std::collections::HashSet;
 use std::io::Read as _;
@@ -31,9 +32,10 @@ impl std::fmt::Display for MeshError {
     }
 }
 
-/// 端点运行上下文：配置目录（core ConfigStore 用）+ 自报身份。
+/// 端点运行上下文：配置目录（core ConfigStore 用）+ kimi config.toml 所在 HOME + 自报身份。
 pub struct MeshContext {
     pub config_dir: PathBuf,
+    pub kimi_home: PathBuf,
     pub version: &'static str,
     pub hostname: String,
 }
@@ -224,10 +226,62 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
                 }
             }
         }
+        (Method::Get, "/kimi-config") => match crate::kimi_config::read(&ctx.kimi_home) {
+            Ok(text) => {
+                let _ = request.respond(Response::from_string(text)
+                    .with_status_code(StatusCode(200))
+                    .with_header(text_header()));
+            }
+            Err(message) => {
+                let _ = request.respond(Response::from_string(message)
+                    .with_status_code(StatusCode(404)));
+            }
+        },
+        (Method::Post, "/kimi-config") => {
+            let source = request
+                .headers()
+                .iter()
+                .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("X-AgentPocket-Source"))
+                .map(|h| h.value.as_str().to_string())
+                .or_else(|| {
+                    request.remote_addr().map(|a| a.ip().to_string())
+                })
+                .unwrap_or_else(|| "未知来源".to_string());
+
+            let mut body = String::new();
+            let read_ok = request
+                .as_reader()
+                .take(MAX_BODY_BYTES)
+                .read_to_string(&mut body)
+                .is_ok();
+            if !read_ok || body.is_empty() {
+                let _ = request.respond(Response::empty(StatusCode(400)));
+                return;
+            }
+
+            match crate::kimi_config::write(&ctx.kimi_home, &body) {
+                Ok(()) => {
+                    println!("[mesh] 从 {source} 收到 kimi config.toml（{} 字节）", body.len());
+                    let resp = serde_json::json!({"bytes": body.len()});
+                    let _ = request.respond(Response::from_string(resp.to_string())
+                        .with_status_code(StatusCode(200))
+                        .with_header(json_header()));
+                }
+                Err(message) => {
+                    let _ = request.respond(Response::from_string(message)
+                        .with_status_code(StatusCode(500)));
+                }
+            }
+        }
         _ => {
             let _ = request.respond(Response::empty(StatusCode(404)));
         }
     }
+}
+
+fn text_header() -> tiny_http::Header {
+    tiny_http::Header::from_bytes("Content-Type", "text/plain; charset=utf-8")
+        .expect("static header is valid")
 }
 
 fn json_header() -> tiny_http::Header {
@@ -241,9 +295,11 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpStream;
 
+    /// 两个目录共用同一 tempdir：agentpocket config.json 与 .kimi-code/config.toml 不冲突。
     fn ctx(dir: &std::path::Path) -> MeshContext {
         MeshContext {
             config_dir: dir.to_path_buf(),
+            kimi_home: dir.to_path_buf(),
             version: "2.8.0-test",
             hostname: "test-host".to_string(),
         }
@@ -386,6 +442,56 @@ mod tests {
         let outcome = agentpocket_core::config::ConfigStore::new(dir.path().to_path_buf())
             .load().unwrap();
         assert_eq!(outcome.config.servers.len(), 1);
+        handle.stop();
+    }
+
+    #[test]
+    fn get_kimi_config_returns_file_or_404() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = start(ctx(dir.path()), 0).unwrap();
+        let (status, _) = raw_request(
+            handle.port,
+            "GET /kimi-config HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(status, 404);
+
+        std::fs::create_dir_all(dir.path().join(".kimi-code")).unwrap();
+        std::fs::write(dir.path().join(".kimi-code/config.toml"), "model = \"k2\"\n").unwrap();
+        let (status, body) = raw_request(
+            handle.port,
+            "GET /kimi-config HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(status, 200);
+        assert_eq!(body, "model = \"k2\"\n");
+        handle.stop();
+    }
+
+    #[test]
+    fn post_kimi_config_writes_and_backs_up() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".kimi-code")).unwrap();
+        std::fs::write(dir.path().join(".kimi-code/config.toml"), "old\n").unwrap();
+        let handle = start(ctx(dir.path()), 0).unwrap();
+
+        let body = "model = \"k3\"\n";
+        let (status, resp) = raw_request(
+            handle.port,
+            &format!(
+                "POST /kimi-config HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        assert_eq!(status, 200);
+        let value: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(value["bytes"], body.len());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".kimi-code/config.toml")).unwrap(),
+            "model = \"k3\"\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".kimi-code/config.toml.bak")).unwrap(),
+            "old\n"
+        );
         handle.stop();
     }
 
