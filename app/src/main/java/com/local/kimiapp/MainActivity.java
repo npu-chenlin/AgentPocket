@@ -527,7 +527,7 @@ public class MainActivity extends ComponentActivity {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(NOTIFICATION_CHANNEL,
-                    "AgentPocket 任务通知", NotificationManager.IMPORTANCE_DEFAULT);
+                    "AgentPocket 任务通知", NotificationManager.IMPORTANCE_HIGH);
             channel.setDescription("任务完成、等待回答或审批时通知");
             manager.createNotificationChannel(channel);
         }
@@ -1472,6 +1472,9 @@ public class MainActivity extends ComponentActivity {
     }
 
     @Override protected void onDestroy() {
+        getSharedPreferences(KeepAliveService.HEALTH_PREFS, MODE_PRIVATE)
+                .unregisterOnSharedPreferenceChangeListener(facePrefsListener);
+        mainHandler.removeCallbacksAndMessages(null);
         if (webView != null) { webView.stopLoading(); webView.destroy(); }
         super.onDestroy();
     }

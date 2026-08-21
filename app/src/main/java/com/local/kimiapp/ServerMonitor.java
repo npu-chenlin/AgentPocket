@@ -41,6 +41,7 @@ public abstract class ServerMonitor {
     protected final ServerStore.Server server;
     protected final OkHttpClient client;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable reconnectRunnable = this::runReconnect;
 
     protected final Map<String, String> titleCache = Collections.synchronizedMap(new HashMap<>());
     protected WebSocket webSocket;
@@ -84,8 +85,8 @@ public abstract class ServerMonitor {
 
     protected void scheduleReconnect() {
         if (stopped) return;
-        handler.removeCallbacks(this::runReconnect);
-        handler.postDelayed(this::runReconnect, reconnectDelay);
+        handler.removeCallbacks(reconnectRunnable);
+        handler.postDelayed(reconnectRunnable, reconnectDelay);
         reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
         Log.i(TAG, server.name + " reconnect in " + reconnectDelay + "ms");
     }
@@ -93,7 +94,7 @@ public abstract class ServerMonitor {
     private void runReconnect() { start(); }
 
     protected void disconnect() {
-        handler.removeCallbacks(this::runReconnect);
+        handler.removeCallbacks(reconnectRunnable);
         if (webSocket != null) { webSocket.cancel(); webSocket = null; }
         connected = false;
     }

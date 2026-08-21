@@ -276,6 +276,7 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         getSystemService(NotificationManager.class).notify("app-update", 0,
                 new Notification.Builder(this, UPDATE_CHANNEL)
+                        .setSmallIcon(R.mipmap.ic_launcher)
                         .setContentTitle("AgentPocket 有新版本 " + version)
                         .setContentText("点击下载并安装更新")
                         .setAutoCancel(true)
