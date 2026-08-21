@@ -13,8 +13,8 @@ import {
   type AppView,
   type ImportMode,
   type ImportPreview,
+  type KimiSyncResult,
   type MeshPeerView,
-  type PushCounts,
   type ServerDraft,
   type ServerForEdit,
   type SyncInfo,
@@ -502,16 +502,14 @@ meshPeers.addEventListener("click", async (event) => {
   button.disabled = true;
   try {
     if (action === "pull") {
-      pendingImport = await invoke<ImportPreview>(commands.meshPull, { host });
-      openImportConfirmation();
-    } else if (action === "push") {
-      const counts = await invoke<PushCounts>(commands.meshPush, { host });
+      const result = await invoke<KimiSyncResult>(commands.meshPull, { host });
       const name = meshPeerViews.find((peer) => peer.host === host)?.name ?? host;
-      const detail =
-        counts.added === 0 && counts.updated === 0
-          ? "已是最新"
-          : `新增 ${counts.added} / 更新 ${counts.updated}`;
-      setMessage(`已推送到 ${name}：${detail}`, "success");
+      const backup = result.backedUp ? "，旧文件已备份为 config.toml.bak" : "";
+      setMessage(`已从 ${name} 拉取 config.toml（${result.bytes} 字节）${backup}`, "success");
+    } else if (action === "push") {
+      const result = await invoke<KimiSyncResult>(commands.meshPush, { host });
+      const name = meshPeerViews.find((peer) => peer.host === host)?.name ?? host;
+      setMessage(`已推送 config.toml（${result.bytes} 字节）到 ${name}`, "success");
     } else if (action === "remove") {
       // 删除手动 peer：全量写回过滤后的列表，再刷新发现结果。
       const settings = currentView?.settings;

@@ -46,8 +46,8 @@ function renderMeshPeerRow(peer: MeshPeerView): string {
         </span>
       </span>
       <span class="mesh-peer-actions">
-        <button class="text-button" type="button" data-mesh-action="pull" data-mesh-host="${host}" aria-label="从 ${name} 拉取配置">拉取</button>
-        <button class="text-button" type="button" data-mesh-action="push" data-mesh-host="${host}" aria-label="推送配置到 ${name}">推送</button>
+        <button class="text-button" type="button" data-mesh-action="pull" data-mesh-host="${host}" aria-label="从 ${name} 拉取 config.toml">拉取</button>
+        <button class="text-button" type="button" data-mesh-action="push" data-mesh-host="${host}" aria-label="推送 config.toml 到 ${name}">推送</button>
       </span>${remove}
     </div>`;
 }

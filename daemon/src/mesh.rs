@@ -1,7 +1,6 @@
-//! mesh HTTP 端点：固定端口、tailnet 访问围栏、/info 握手、/config 拉取与合并推送、
+//! mesh HTTP 端点：固定端口、tailnet 访问围栏、/info 握手、
 //! /kimi-config 同步 ~/.kimi-code/config.toml。
 
-use std::collections::HashSet;
 use std::io::Read as _;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -136,97 +135,7 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
                 .with_status_code(StatusCode(200))
                 .with_header(json_header()));
         }
-        (Method::Get, "/config") => {
-            let store = agentpocket_core::config::ConfigStore::new(ctx.config_dir.clone());
-            let current = match store.load() {
-                Ok(outcome) => outcome.config,
-                Err(_) => agentpocket_core::model::AppConfig::default(),
-            };
-            match store.export_text(&current) {
-                Ok(text) => {
-                    let _ = request.respond(Response::from_string(text)
-                        .with_status_code(StatusCode(200))
-                        .with_header(json_header()));
-                }
-                Err(e) => {
-                    let _ = request.respond(Response::from_string(e.to_string())
-                        .with_status_code(StatusCode(500)));
-                }
-            }
-        }
-        (Method::Post, "/config") => {
-            let source = request
-                .headers()
-                .iter()
-                .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("X-AgentPocket-Source"))
-                .map(|h| h.value.as_str().to_string())
-                .or_else(|| {
-                    request.remote_addr().map(|a| a.ip().to_string())
-                })
-                .unwrap_or_else(|| "未知来源".to_string());
-
-            let mut body = String::new();
-            let read_ok = request
-                .as_reader()
-                .take(MAX_BODY_BYTES)
-                .read_to_string(&mut body)
-                .is_ok();
-            if !read_ok {
-                let _ = request.respond(Response::empty(StatusCode(400)));
-                return;
-            }
-
-            let store = agentpocket_core::config::ConfigStore::new(ctx.config_dir.clone());
-            let current = match store.load() {
-                Ok(outcome) => outcome.config,
-                Err(_) => agentpocket_core::model::AppConfig::default(),
-            };
-            let result = (|| -> Result<(usize, usize), String> {
-                let data = store
-                    .preview_import_text(&body)
-                    .map_err(|e| e.to_string())?;
-                // ImportPreviewData.config 为 core 私有字段，导入 ID 经公开的
-                // preview.servers（即全部有效服务器，与 apply_import 合并的集合一致）。
-                let imported: Vec<&str> = data
-                    .preview
-                    .servers
-                    .iter()
-                    .map(|s| s.id.as_str())
-                    .collect();
-                if imported.is_empty() {
-                    return Err("没有可导入的有效服务器".to_string());
-                }
-                let old_ids: HashSet<&str> =
-                    current.servers.iter().map(|s| s.id.as_str()).collect();
-                let added = imported
-                    .iter()
-                    .filter(|id| !old_ids.contains(*id))
-                    .count();
-                let updated = imported.len().saturating_sub(added);
-                let merged = store
-                    .apply_import(&current, data, agentpocket_core::config::ImportMode::Merge)
-                    .map_err(|e| e.to_string())?;
-                store.save(&merged).map_err(|e| e.to_string())?;
-                Ok((added, updated))
-            })();
-
-            match result {
-                Ok((added, updated)) => {
-                    println!(
-                        "[mesh] 从 {source} 收到配置：新增 {added} / 更新 {updated} 台服务器"
-                    );
-                    let body = serde_json::json!({"added": added, "updated": updated});
-                    let _ = request.respond(Response::from_string(body.to_string())
-                        .with_status_code(StatusCode(200))
-                        .with_header(json_header()));
-                }
-                Err(message) => {
-                    let _ = request.respond(Response::from_string(message)
-                        .with_status_code(StatusCode(400)));
-                }
-            }
-        }
-        (Method::Get, "/kimi-config") => match crate::kimi_config::read(&ctx.kimi_home) {
+        (Method::Get, "/kimi-config") => match agentpocket_core::kimi_config::read(&ctx.kimi_home) {
             Ok(text) => {
                 let _ = request.respond(Response::from_string(text)
                     .with_status_code(StatusCode(200))
@@ -259,7 +168,7 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
                 return;
             }
 
-            match crate::kimi_config::write(&ctx.kimi_home, &body) {
+            match agentpocket_core::kimi_config::write(&ctx.kimi_home, &body) {
                 Ok(()) => {
                     println!("[mesh] 从 {source} 收到 kimi config.toml（{} 字节）", body.len());
                     let resp = serde_json::json!({"bytes": body.len()});
@@ -358,90 +267,6 @@ mod tests {
             "GET /nope HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 404);
-        handle.stop();
-    }
-
-    use agentpocket_core::model::{Backend, ServerConfig};
-
-    fn seed_config(dir: &std::path::Path) {
-        let store = agentpocket_core::config::ConfigStore::new(dir.to_path_buf());
-        let config = agentpocket_core::model::AppConfig {
-            active_id: Some("s1".to_string()),
-            servers: vec![ServerConfig::new(
-                "s1", "Old", "100.64.0.2", 3080, "tok", Backend::Dsh,
-            )],
-            ..Default::default()
-        };
-        store.save(&config).unwrap();
-    }
-
-    #[test]
-    fn get_config_returns_exchange_format() {
-        let dir = tempfile::tempdir().unwrap();
-        seed_config(dir.path());
-        let handle = start(ctx(dir.path()), 0).unwrap();
-
-        let (status, body) = raw_request(
-            handle.port,
-            "GET /config HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-        );
-
-        assert_eq!(status, 200);
-        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(value["schema"], 1);
-        assert_eq!(value["servers"][0]["name"], "Old");
-        assert!(value.get("settings").is_none());
-        handle.stop();
-    }
-
-    #[test]
-    fn post_config_merges_and_counts_and_backs_up() {
-        let dir = tempfile::tempdir().unwrap();
-        seed_config(dir.path());
-        let handle = start(ctx(dir.path()), 0).unwrap();
-
-        let body = r#"{"schema":1,"servers":[
-            {"id":"s1","name":"Renamed","host":"100.64.0.2","port":3080,"token":"tok","backend":"dsh"},
-            {"id":"s2","name":"New","host":"100.64.0.3","port":58627,"backend":"kimi"}]}"#;
-        let (status, resp_body) = raw_request(
-            handle.port,
-            &format!(
-                "POST /config HTTP/1.1\r\nHost: localhost\r\nX-AgentPocket-Source: peer-a\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            ),
-        );
-
-        assert_eq!(status, 200);
-        let counts: serde_json::Value = serde_json::from_str(&resp_body).unwrap();
-        assert_eq!(counts["added"], 1);
-        assert_eq!(counts["updated"], 1);
-
-        // 落盘结果：合并后的两台 + activeId 保持。
-        let outcome = agentpocket_core::config::ConfigStore::new(dir.path().to_path_buf())
-            .load().unwrap();
-        assert_eq!(outcome.config.servers.len(), 2);
-        assert_eq!(outcome.config.servers[0].name, "Renamed");
-        assert_eq!(outcome.config.active_id.as_deref(), Some("s1"));
-        // 导入前自动备份已生成。
-        assert!(dir.path().join("backups").is_dir());
-        handle.stop();
-    }
-
-    #[test]
-    fn post_garbage_returns_400_without_touching_disk() {
-        let dir = tempfile::tempdir().unwrap();
-        seed_config(dir.path());
-        let handle = start(ctx(dir.path()), 0).unwrap();
-
-        let (status, _) = raw_request(
-            handle.port,
-            "POST /config HTTP/1.1\r\nHost: localhost\r\nContent-Length: 15\r\nConnection: close\r\n\r\nnot json at all",
-        );
-
-        assert_eq!(status, 400);
-        let outcome = agentpocket_core::config::ConfigStore::new(dir.path().to_path_buf())
-            .load().unwrap();
-        assert_eq!(outcome.config.servers.len(), 1);
         handle.stop();
     }
 

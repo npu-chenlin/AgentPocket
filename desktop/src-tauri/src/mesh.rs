@@ -1,7 +1,8 @@
-//! mesh 面板命令：peer 发现与配置拉取/推送。
-//! 复用 core 的 mesh_client/discovery（明文 HTTP，仅限 tailnet 内自家端点）。
+//! mesh 面板命令：peer 发现与 ~/.kimi-code/config.toml 拉取/推送。
+//! 复用 core 的 mesh_client/discovery/kimi_config（明文 HTTP，仅限 tailnet 内自家端点）。
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,9 +11,10 @@ use tauri::State;
 
 use agentpocket_core::discovery::{self, MeshPeer, MESH_PORT};
 use agentpocket_core::host;
+use agentpocket_core::kimi_config;
 use agentpocket_core::mesh_client;
 
-use crate::commands::{preview_from_content, AppState, CommandError, ImportPreview};
+use crate::commands::{AppState, CommandError};
 use crate::model::MeshPeerEntry;
 
 /// peer 在线探测（单次 /info 请求）超时。
@@ -31,12 +33,13 @@ pub struct MeshPeerView {
     pub manual: bool,
 }
 
-/// 推送到对端后的新增/更新计数（对端 /config 应答）。
+/// config.toml 同步完成回执。
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PushCounts {
-    pub added: u64,
-    pub updated: u64,
+pub struct KimiSyncResult {
+    pub bytes: usize,
+    /// 覆盖时是否生成了旧文件备份（仅 pull 有意义）。
+    pub backed_up: bool,
 }
 
 // 三条命令均为 async：网络 IO 跑在 Tauri 线程池，避免阻塞 UI 主线程。
@@ -48,19 +51,15 @@ pub async fn discover_mesh_peers(
 }
 
 #[tauri::command]
-pub async fn mesh_pull(
-    state: State<'_, Arc<AppState>>,
-    host: String,
-) -> Result<ImportPreview, CommandError> {
-    mesh_pull_at(&state, &host, MESH_PORT)
+pub async fn mesh_pull(host: String) -> Result<KimiSyncResult, CommandError> {
+    let home = kimi_config::home_dir();
+    mesh_pull_at(&home, &host, MESH_PORT)
 }
 
 #[tauri::command]
-pub async fn mesh_push(
-    state: State<'_, Arc<AppState>>,
-    host: String,
-) -> Result<PushCounts, CommandError> {
-    mesh_push_at(&state, &host, MESH_PORT)
+pub async fn mesh_push(host: String) -> Result<KimiSyncResult, CommandError> {
+    let home = kimi_config::home_dir();
+    mesh_push_at(&home, &host, MESH_PORT)
 }
 
 /// 发现 peer：tailscale 在线设备 + 手动 peer 合并探测，未应答的手动 peer
@@ -120,40 +119,36 @@ fn merge_views(manual: &[MeshPeerEntry], probed: Vec<MeshPeer>) -> Vec<MeshPeerV
     views
 }
 
-/// 从对端拉取配置并注册导入预览。port 参数便于测试注入 mock 端点。
+/// 从对端拉取 config.toml 覆盖本地（旧文件备份为 .bak）。port 参数便于测试注入 mock 端点。
 pub(crate) fn mesh_pull_at(
-    state: &Arc<AppState>,
+    home: &Path,
     host: &str,
     port: u16,
-) -> Result<ImportPreview, CommandError> {
-    let response = mesh_client::get(host, port, "/config", &[], MESH_HTTP_TIMEOUT)?;
+) -> Result<KimiSyncResult, CommandError> {
+    let response = mesh_client::get(host, port, "/kimi-config", &[], MESH_HTTP_TIMEOUT)?;
     if response.status != 200 {
         return Err(CommandError::Mesh(format!(
             "对方返回 HTTP {}：{}",
             response.status, response.body
         )));
     }
-    preview_from_content(state, &response.body)
+    let backed_up = kimi_config::config_path(home).exists();
+    kimi_config::write(home, &response.body).map_err(CommandError::Mesh)?;
+    Ok(KimiSyncResult { bytes: response.body.len(), backed_up })
 }
 
-/// 把当前配置推送到对端并解析新增/更新计数。port 参数便于测试注入 mock 端点。
+/// 把本地 config.toml 推送到对端。port 参数便于测试注入 mock 端点。
 pub(crate) fn mesh_push_at(
-    state: &Arc<AppState>,
+    home: &Path,
     host: &str,
     port: u16,
-) -> Result<PushCounts, CommandError> {
-    let text = {
-        let config = state
-            .config
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.store.export_text(&config)?
-    };
+) -> Result<KimiSyncResult, CommandError> {
+    let text = kimi_config::read(home).map_err(CommandError::Mesh)?;
     let source = host::hostname();
     let response = mesh_client::post(
         host,
         port,
-        "/config",
+        "/kimi-config",
         &[("X-AgentPocket-Source", source.as_str())],
         &text,
         MESH_HTTP_TIMEOUT,
@@ -164,9 +159,7 @@ pub(crate) fn mesh_push_at(
             response.status, response.body
         )));
     }
-    // 应答必须携带 added/updated 两个整数；缺失按错误处理，不显示 null。
-    serde_json::from_str::<PushCounts>(&response.body)
-        .map_err(|e| CommandError::Mesh(format!("推送应答解析失败：{e}")))
+    Ok(KimiSyncResult { bytes: text.len(), backed_up: false })
 }
 
 // ------------------------------------------------------------------
@@ -176,31 +169,9 @@ pub(crate) fn mesh_push_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ConfigStore;
-    use crate::model::{AppConfig, Backend, ServerConfig};
-    use crate::monitor::MonitorManager;
+    use std::io::Read as _;
     use std::sync::Mutex;
     use tempfile::tempdir;
-    use tokio::sync::mpsc;
-
-    fn sample_state() -> Arc<AppState> {
-        let config = AppConfig {
-            active_id: Some("s1".to_string()),
-            servers: vec![ServerConfig::new(
-                "s1",
-                "Work",
-                "100.64.0.2",
-                3080,
-                "secret-token",
-                Backend::Dsh,
-            )],
-            ..AppConfig::default()
-        };
-        let dir = tempdir().unwrap();
-        let store = ConfigStore::new(dir.path().to_path_buf());
-        let (tx, _) = mpsc::channel(4);
-        Arc::new(AppState::new(config, store, MonitorManager::new(tx)))
-    }
 
     /// 启动 mock 对端：对所有请求应答固定状态码和 body，返回监听端口。
     fn spawn_mock(status: u16, body: String) -> u16 {
@@ -220,43 +191,51 @@ mod tests {
         port
     }
 
+    fn seed_kimi_config(home: &Path, content: &str) {
+        std::fs::create_dir_all(home.join(".kimi-code")).unwrap();
+        std::fs::write(home.join(".kimi-code/config.toml"), content).unwrap();
+    }
+
     #[test]
-    fn mesh_pull_registers_preview_and_returns_counts() {
-        let state = sample_state();
-        let body = r#"{"schema":1,"servers":[{"id":"m1","name":"Peer-A","host":"100.64.0.9","port":3080,"token":"peer-token","backend":"kimi"}]}"#;
-        let port = spawn_mock(200, body.to_string());
+    fn mesh_pull_writes_remote_config_and_backs_up() {
+        let home = tempdir().unwrap();
+        seed_kimi_config(home.path(), "model = \"old\"\n");
+        let port = spawn_mock(200, "model = \"remote\"\n".to_string());
 
-        let preview = mesh_pull_at(&state, "127.0.0.1", port).unwrap();
+        let result = mesh_pull_at(home.path(), "127.0.0.1", port).unwrap();
 
-        assert_eq!(preview.valid_count, 1);
-        assert!(preview.invalid.is_empty());
-        // preview 已注册，后续 apply_import 可直接使用。
-        assert!(state
-            .import_previews
-            .lock()
-            .unwrap()
-            .contains_key(&preview.import_id));
+        assert_eq!(result.bytes, "model = \"remote\"\n".len());
+        assert!(result.backed_up);
+        assert_eq!(
+            std::fs::read_to_string(home.path().join(".kimi-code/config.toml")).unwrap(),
+            "model = \"remote\"\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.path().join(".kimi-code/config.toml.bak")).unwrap(),
+            "model = \"old\"\n"
+        );
     }
 
     #[test]
     fn mesh_pull_non_200_returns_error() {
-        let state = sample_state();
-        let port = spawn_mock(400, "没有可导入的有效服务器".to_string());
+        let home = tempdir().unwrap();
+        let port = spawn_mock(404, "读取失败".to_string());
 
-        let error = mesh_pull_at(&state, "127.0.0.1", port).unwrap_err();
+        let error = mesh_pull_at(home.path(), "127.0.0.1", port).unwrap_err();
 
         assert!(matches!(
             error,
-            CommandError::Mesh(ref message) if message.contains("HTTP 400")
+            CommandError::Mesh(ref message) if message.contains("HTTP 404")
         ));
-        assert!(error.to_string().contains("没有可导入的有效服务器"));
     }
 
     #[test]
-    fn mesh_push_sends_source_header_and_parses_counts() {
-        let state = sample_state();
-        // mock 把收到的 X-AgentPocket-Source 头回显进 body，同时记入断言变量。
-        let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    fn mesh_push_sends_local_config_with_source_header() {
+        let home = tempdir().unwrap();
+        seed_kimi_config(home.path(), "model = \"local\"\n");
+        // mock 记录收到的 body 与 X-AgentPocket-Source 头。
+        let received: Arc<Mutex<(String, Option<String>)>> =
+            Arc::new(Mutex::new((String::new(), None)));
         let received_for_mock = Arc::clone(&received);
         let server = tiny_http::Server::http(("127.0.0.1", 0)).unwrap();
         let port = match server.server_addr() {
@@ -264,39 +243,40 @@ mod tests {
             other => panic!("unexpected listen addr: {other:?}"),
         };
         std::thread::spawn(move || {
-            for request in server.incoming_requests() {
-                let source = request.headers().iter().find(|header| {
-                    header
-                        .field
-                        .as_str()
-                        .as_str()
-                        .eq_ignore_ascii_case("X-AgentPocket-Source")
-                });
-                let echo = source.map(|header| header.value.as_str().to_string());
-                *received_for_mock.lock().unwrap() = echo.clone();
-                // 应答携带 echo 字段：PushCounts 解析应忽略多余字段。
-                let body = format!(r#"{{"echo":{},"added":2,"updated":0}}"#, serde_json::json!(echo));
+            for mut request in server.incoming_requests() {
+                let mut body = String::new();
+                let _ = request.as_reader().read_to_string(&mut body);
+                let source = request
+                    .headers()
+                    .iter()
+                    .find(|header| {
+                        header
+                            .field
+                            .as_str()
+                            .as_str()
+                            .eq_ignore_ascii_case("X-AgentPocket-Source")
+                    })
+                    .map(|header| header.value.as_str().to_string());
+                *received_for_mock.lock().unwrap() = (body, source);
                 let _ = request.respond(
-                    tiny_http::Response::from_string(body)
+                    tiny_http::Response::from_string(r#"{"bytes":15}"#)
                         .with_status_code(tiny_http::StatusCode(200)),
                 );
             }
         });
 
-        let counts = mesh_push_at(&state, "127.0.0.1", port).unwrap();
+        let result = mesh_push_at(home.path(), "127.0.0.1", port).unwrap();
 
-        assert_eq!(counts, PushCounts { added: 2, updated: 0 });
-        // 推送请求携带本机主机名作为来源标识。
-        assert_eq!(
-            received.lock().unwrap().as_deref(),
-            Some(host::hostname().as_str())
-        );
+        assert_eq!(result.bytes, "model = \"local\"\n".len());
+        let (body, source) = received.lock().unwrap().clone();
+        assert_eq!(body, "model = \"local\"\n");
+        assert_eq!(source.as_deref(), Some(host::hostname().as_str()));
     }
 
     #[test]
     fn discover_merges_online_and_offline_manual_peers() {
         // 在线 peer：mock /info 应答身份 JSON（带版本）。
-        let info = r#"{"app":"agentpocket","version":"2.8.0","name":"live-host"}"#;
+        let info = r#"{"app":"agentpocket","version":"2.10.0","name":"live-host"}"#;
         let online_port = spawn_mock(200, info.to_string());
         // 离线 peer：占用一个端口后立刻关闭，确保连接被拒绝。
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -338,7 +318,7 @@ mod tests {
                 MeshPeerView {
                     name: "live-host".to_string(),
                     host: "127.0.0.1".to_string(),
-                    version: Some("2.8.0".to_string()),
+                    version: Some("2.10.0".to_string()),
                     online: true,
                     manual: true,
                 },

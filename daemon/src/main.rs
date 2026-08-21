@@ -1,4 +1,3 @@
-mod kimi_config;
 mod mesh;
 mod ops;
 mod paths;
@@ -24,26 +23,15 @@ enum Command {
     Serve,
     /// 打印版本
     Version,
-    /// 从 peer 拉取配置（默认合并）
+    /// 从 peer 拉取 ~/.kimi-code/config.toml（覆盖本地，旧文件备份为 .bak）
     Pull {
         host: String,
-        /// 用拉取结果替换本地服务器列表
-        #[arg(long)]
-        replace: bool,
         /// 只打印预览，不落盘
         #[arg(long)]
         dry_run: bool,
-        /// 同步 ~/.kimi-code/config.toml（单文件覆盖，--replace 不适用）
-        #[arg(long, conflicts_with = "replace")]
-        kimi_config: bool,
     },
-    /// 把本地配置推送给 peer
-    Push {
-        host: String,
-        /// 同步 ~/.kimi-code/config.toml（单文件覆盖）
-        #[arg(long)]
-        kimi_config: bool,
-    },
+    /// 把本地 ~/.kimi-code/config.toml 推送给 peer
+    Push { host: String },
     /// 发现并列出 mesh peer
     Peers,
     /// 一次性探测已配置服务器状态
@@ -60,7 +48,7 @@ fn main() {
         Command::Serve => {
             let ctx = mesh::MeshContext {
                 config_dir: paths::default_config_dir(),
-                kimi_home: kimi_config::home_dir(),
+                kimi_home: agentpocket_core::kimi_config::home_dir(),
                 version: env!("CARGO_PKG_VERSION"),
                 hostname: agentpocket_core::host::hostname(),
             };
@@ -81,25 +69,9 @@ fn main() {
             }
         }
         Command::Version => println!("{}", env!("CARGO_PKG_VERSION")),
-        Command::Pull { host, replace, dry_run, kimi_config: kimi } => {
-            if kimi {
-                match ops::run_pull_kimi_config(&kimi_config::home_dir(), &host, dry_run) {
-                    Ok(message) => println!("{message}"),
-                    Err(e) => {
-                        eprintln!("{e}");
-                        std::process::exit(1);
-                    }
-                }
-                return;
-            }
-            let mode = if dry_run {
-                ops::PullMode::DryRun
-            } else if replace {
-                ops::PullMode::Replace
-            } else {
-                ops::PullMode::Merge
-            };
-            match ops::run_pull(&paths::default_config_dir(), &host, mode) {
+        Command::Pull { host, dry_run } => {
+            let home = agentpocket_core::kimi_config::home_dir();
+            match ops::run_pull(&home, &host, dry_run) {
                 Ok(message) => println!("{message}"),
                 Err(e) => {
                     eprintln!("{e}");
@@ -107,18 +79,9 @@ fn main() {
                 }
             }
         }
-        Command::Push { host, kimi_config: kimi } => {
-            if kimi {
-                match ops::run_push_kimi_config(&kimi_config::home_dir(), &host) {
-                    Ok(message) => println!("{message}"),
-                    Err(e) => {
-                        eprintln!("{e}");
-                        std::process::exit(1);
-                    }
-                }
-                return;
-            }
-            match ops::run_push(&paths::default_config_dir(), &host) {
+        Command::Push { host } => {
+            let home = agentpocket_core::kimi_config::home_dir();
+            match ops::run_push(&home, &host) {
                 Ok(message) => println!("{message}"),
                 Err(e) => {
                     eprintln!("{e}");

@@ -21,9 +21,9 @@ export interface MeshPeerView {
   manual: boolean;
 }
 
-export interface PushCounts {
-  added: number;
-  updated: number;
+export interface KimiSyncResult {
+  bytes: number;
+  backedUp: boolean;
 }
 
 export interface ServerSummary {
