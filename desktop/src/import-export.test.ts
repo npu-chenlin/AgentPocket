@@ -14,6 +14,6 @@ describe("import/export presentation", () => {
   });
 
   it("uses the exact credential warning", () => {
-    expect(CREDENTIAL_WARNING).toBe("文件包含服务器访问凭据，请勿公开分享");
+    expect(CREDENTIAL_WARNING).toBe("文件包含 Agent 服务访问凭据，请勿公开分享");
   });
 });

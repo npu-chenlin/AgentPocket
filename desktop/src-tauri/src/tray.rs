@@ -175,6 +175,15 @@ fn read_state(state: &AppState) -> (AppConfig, HashMap<String, ServerStatus>) {
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
+    let configured_ids: std::collections::HashSet<&str> = config
+        .servers
+        .iter()
+        .map(|server| server.id.as_str())
+        .collect();
+    let statuses = statuses
+        .into_iter()
+        .filter(|(id, _)| configured_ids.contains(id.as_str()))
+        .collect();
     (config, statuses)
 }
 
@@ -210,7 +219,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, state: &Arc<AppState>, id: 
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .settings
                     .autostart;
-                let _ = mutate_config(&state, &app, |config| {
+                let _ = mutate_config(&state, &app, move |config| {
                     config.settings.autostart = !current;
                 })
                 .await;

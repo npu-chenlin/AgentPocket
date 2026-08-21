@@ -131,7 +131,14 @@ impl MonitorManager {
     async fn stop_one(&mut self, id: &str, timeout_duration: Duration) {
         if let Some(task) = self.tasks.remove(id) {
             task.token.cancel();
-            let _ = timeout(timeout_duration, task.handle).await;
+            let mut handle = task.handle;
+            if timeout(timeout_duration, &mut handle).await.is_err() {
+                // Dropping a JoinHandle detaches the task. Abort explicitly so
+                // a timed-out monitor cannot keep reconnecting after a config
+                // change or be duplicated by the replacement task.
+                handle.abort();
+                let _ = handle.await;
+            }
         }
     }
 }

@@ -48,7 +48,7 @@ app.innerHTML = `
       <nav class="header-actions" aria-label="全局操作">
         <button id="paste-import" class="ghost-button" type="button">导入</button>
         <button id="open-export" class="ghost-button" type="button">导出</button>
-        <button id="open-sync" class="ghost-button" type="button">同步</button>
+        <button id="open-sync" class="ghost-button" type="button">手机配对</button>
         <button id="open-settings" class="ghost-button" type="button">设置</button>
       </nav>
       <button id="pin-window" class="pin-toggle" type="button" aria-pressed="false" aria-label="窗口置顶" title="窗口置顶">
@@ -59,8 +59,8 @@ app.innerHTML = `
     <main class="content">
       <section class="servers-section" aria-labelledby="servers-title">
         <div class="section-heading">
-          <h2 id="servers-title">服务器</h2>
-          <button id="add-server" class="primary-button" type="button">添加服务器</button>
+          <h2 id="servers-title">服务连接</h2>
+          <button id="add-server" class="primary-button" type="button">添加服务连接</button>
         </div>
         <div id="server-list" class="server-list"></div>
       </section>
@@ -88,7 +88,7 @@ app.innerHTML = `
         <input type="checkbox" role="switch" data-setting="notifications" />
       </label>
       <div class="mesh-section">
-        <h3 class="mesh-section__title">Mesh 同步</h3>
+        <h3 class="mesh-section__title">节点管理</h3>
         <div id="mesh-peers" class="mesh-peers" aria-live="polite"></div>
         <div class="mesh-toolbar">
           <input id="mesh-add-host" class="mesh-input" autocomplete="off" placeholder="100.x.x.x 或 MagicDNS 名" aria-label="节点地址" />
@@ -99,7 +99,7 @@ app.innerHTML = `
       </div>
     </div>
     <div class="modal__actions">
-      <button id="reconnect-all" class="secondary-button" type="button">重新连接所有服务器</button>
+      <button id="reconnect-all" class="secondary-button" type="button">重新连接所有服务</button>
       <span class="modal__spacer"></span>
       <button class="text-button" type="button" data-close-dialog="settings-dialog">完成</button>
     </div>
@@ -108,16 +108,16 @@ app.innerHTML = `
   <dialog id="server-dialog" class="modal" aria-labelledby="server-dialog-title">
     <form id="server-form" method="dialog" novalidate>
       <div class="modal__heading">
-        <h2 id="server-dialog-title">添加服务器</h2>
+        <h2 id="server-dialog-title">添加服务连接</h2>
         <button class="modal__close" type="button" data-close-dialog="server-dialog" aria-label="关闭">×</button>
       </div>
       <input type="hidden" name="id" />
       <div class="form-grid">
         <label class="field field--wide">名称<input name="name" autocomplete="off" placeholder="工作站" /><small class="field-error" data-error-for="name"></small></label>
-        <label class="field field--host">主机地址<input name="host" autocomplete="off" placeholder="100.64.0.2" /><small class="field-error" data-error-for="host"></small></label>
+        <label class="field field--host">主机 IP / 域名<input name="host" autocomplete="off" placeholder="100.64.0.2" /><small class="field-error" data-error-for="host"></small></label>
         <label class="field field--port">端口<input name="port" type="number" min="1" max="65535" inputmode="numeric" /><small class="field-error" data-error-for="port"></small></label>
-        <label class="field">后端<select name="backend"><option value="dsh">dsh</option><option value="kimi">Kimi</option></select><small class="field-error" data-error-for="backend"></small></label>
-        <label class="field">访问令牌<input name="token" type="password" autocomplete="new-password" placeholder="可留空" /><small>令牌仅在编辑时读取，不会出现在服务器列表中。</small></label>
+        <label class="field">Agent 类型<select name="backend"><option value="dsh">dsh</option><option value="kimi">Kimi</option></select><small class="field-error" data-error-for="backend"></small></label>
+        <label class="field">访问令牌<input name="token" type="password" autocomplete="new-password" placeholder="可留空" /><small>令牌仅在编辑时读取，不会出现在服务连接列表中。</small></label>
       </div>
       <div id="form-error" class="inline-error" role="alert"></div>
       <div class="modal__actions">
@@ -137,7 +137,7 @@ app.innerHTML = `
       <fieldset class="mode-picker">
         <legend>导入方式</legend>
         <label><input type="radio" name="import-mode" value="merge" checked /> 合并：同 ID 覆盖，其余保留</label>
-        <label><input type="radio" name="import-mode" value="replace" /> 替换：清除现有服务器</label>
+        <label><input type="radio" name="import-mode" value="replace" /> 替换：清除现有服务连接</label>
       </fieldset>
       <div id="import-error" class="inline-error" role="alert"></div>
       <div class="modal__actions">
@@ -183,7 +183,7 @@ app.innerHTML = `
 
   <dialog id="sync-dialog" class="modal modal--small" aria-labelledby="sync-dialog-title">
     <div class="modal__heading">
-      <h2 id="sync-dialog-title">手机同步</h2>
+      <h2 id="sync-dialog-title">手机配对</h2>
       <button class="modal__close" type="button" data-close-dialog="sync-dialog" aria-label="关闭">×</button>
     </div>
     <select id="sync-address" class="sync-address" aria-label="对外地址"></select>
@@ -325,9 +325,9 @@ async function editServer(id: string): Promise<void> {
   setMessage("");
   try {
     const server = await invoke<ServerForEdit>(commands.getServerForEdit, { id });
-    showServerDialog(server, "编辑服务器");
+    showServerDialog(server, "编辑服务连接");
   } catch (error) {
-    setMessage(`无法读取服务器：${errorMessage(error)}`, "error");
+    setMessage(`无法读取服务连接：${errorMessage(error)}`, "error");
   }
 }
 
@@ -348,7 +348,7 @@ serverList.addEventListener("click", async (event) => {
   const action = button.dataset.action;
   const id = button.dataset.id;
   if (action === "add") {
-    showServerDialog(emptyServerDraft(), "添加服务器");
+    showServerDialog(emptyServerDraft(), "添加服务连接");
   } else if (id && action === "edit") {
     await editServer(id);
   } else if (id && action === "delete") {
@@ -378,7 +378,7 @@ serverList.addEventListener("click", async (event) => {
 });
 
 requiredElement<HTMLButtonElement>("#add-server").addEventListener("click", () => {
-  showServerDialog(emptyServerDraft(), "添加服务器");
+  showServerDialog(emptyServerDraft(), "添加服务连接");
 });
 
 requiredElement<HTMLButtonElement>("#open-settings").addEventListener("click", () => {
@@ -463,7 +463,7 @@ requiredElement<HTMLButtonElement>("#reconnect-all").addEventListener("click", a
   button.disabled = true;
   try {
     await invoke(commands.reconnectAll);
-    setMessage("已请求所有服务器立即重连", "success");
+    setMessage("已请求所有服务立即重连", "success");
   } catch (error) {
     setMessage(`重连失败：${errorMessage(error)}`, "error");
   } finally {
@@ -483,7 +483,7 @@ async function refreshMeshPeers(): Promise<void> {
   } catch (error) {
     meshPeerViews = [];
     meshPeers.innerHTML = renderMeshPeerList({ peers: [], loading: false });
-    setMessage(`发现 mesh 节点失败：${errorMessage(error)}`, "error");
+    setMessage(`发现节点失败：${errorMessage(error)}`, "error");
   } finally {
     meshRefresh.disabled = false;
   }
@@ -505,11 +505,11 @@ meshPeers.addEventListener("click", async (event) => {
       const result = await invoke<KimiSyncResult>(commands.meshPull, { host });
       const name = meshPeerViews.find((peer) => peer.host === host)?.name ?? host;
       const backup = result.backedUp ? "，旧文件已备份为 config.toml.bak" : "";
-      setMessage(`已从 ${name} 拉取 config.toml（${result.bytes} 字节）${backup}`, "success");
+      setMessage(`已从 ${name} 获取 config.toml（${result.bytes} 字节）${backup}`, "success");
     } else if (action === "push") {
       const result = await invoke<KimiSyncResult>(commands.meshPush, { host });
       const name = meshPeerViews.find((peer) => peer.host === host)?.name ?? host;
-      setMessage(`已推送 config.toml（${result.bytes} 字节）到 ${name}`, "success");
+      setMessage(`已将 config.toml（${result.bytes} 字节）发送到 ${name}`, "success");
     } else if (action === "upgrade") {
       const name = meshPeerViews.find((peer) => peer.host === host)?.name ?? host;
       setMessage(`正在升级 ${name} 的 Kimi Code CLI（可能需要数分钟）…`, "info");
@@ -549,9 +549,9 @@ meshPeers.addEventListener("click", async (event) => {
   } catch (error) {
     const prefix =
       action === "pull"
-        ? "拉取失败"
+        ? "获取配置失败"
         : action === "push"
-          ? "推送失败"
+          ? "发送配置失败"
           : action === "upgrade"
             ? "升级失败"
             : action === "restart-web"
@@ -744,7 +744,7 @@ requiredElement<HTMLButtonElement>("#open-sync").addEventListener("click", async
     syncAddress.value = info.selected;
     applySyncOption(info.selected);
   } catch (error) {
-    syncStatus.textContent = `启动同步服务失败：${errorMessage(error)}`;
+    syncStatus.textContent = `启动手机配对服务失败：${errorMessage(error)}`;
     syncStatus.dataset.kind = "error";
   }
 });

@@ -667,7 +667,7 @@ input[role="switch"]:checked::after {
   transform: translateX(14px);
 }
 
-/* ---------- 设置：Mesh 同步区块 ---------- */
+/* ---------- 设置：节点管理区块 ---------- */
 
 .mesh-section {
   display: grid;
@@ -757,7 +757,7 @@ input[role="switch"]:checked::after {
   gap: 2px;
 }
 
-/* 手动 peer 行尾的 ✕：沿用次级色惯例，24px 命中区，不加新变量。 */
+/* 手动节点行尾的 ✕：沿用次级色惯例，24px 命中区，不加新变量。 */
 .mesh-remove {
   display: inline-flex;
   align-items: center;

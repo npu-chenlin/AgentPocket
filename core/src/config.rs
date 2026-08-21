@@ -2,11 +2,13 @@ use crate::model::{
     default_schema, AppConfig, Backend, DesktopSettings, ServerConfig, ServerSummary,
 };
 use chrono::{DateTime, Utc};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -52,8 +54,15 @@ pub enum ConfigError {
     NoValidBackup,
     #[error("server configuration is invalid")]
     InvalidServer,
+    #[error("duplicate server id: {0}")]
+    DuplicateServerId(String),
+    #[error("active server does not exist: {0}")]
+    InvalidActiveServer(String),
+    #[error("configuration is being written by another process")]
+    WriteLocked,
 }
 
+#[derive(Clone)]
 pub struct ConfigStore {
     app_dir: PathBuf,
     config_path: PathBuf,
@@ -89,17 +98,21 @@ impl ConfigStore {
     }
 
     pub fn save(&self, config: &AppConfig) -> Result<(), ConfigError> {
-        validate_schema(config.schema)?;
-        if config
-            .servers
-            .iter()
-            .any(|server| server.validate().is_err())
-        {
-            return Err(ConfigError::InvalidServer);
-        }
-        fs::create_dir_all(&self.app_dir)?;
-        let bytes = serde_json::to_vec_pretty(config)?;
-        atomic_write(&self.config_path, &bytes)
+        let _lock = ConfigLock::acquire(&self.app_dir)?;
+        self.save_unlocked(config)
+    }
+
+    /// Hold the cross-process lock across the complete read-modify-write
+    /// transaction so a caller cannot overwrite a concurrent process's update.
+    pub fn update<F>(&self, mutate: F) -> Result<AppConfig, ConfigError>
+    where
+        F: FnOnce(&mut AppConfig),
+    {
+        let _lock = ConfigLock::acquire(&self.app_dir)?;
+        let mut config = self.load()?.config;
+        mutate(&mut config);
+        self.save_unlocked(&config)?;
+        Ok(config)
     }
 
     pub fn preview_import(&self, path: &Path) -> Result<ImportPreviewData, ConfigError> {
@@ -124,47 +137,32 @@ impl ConfigStore {
         if data.config.servers.is_empty() {
             return Err(ConfigError::NoValidServers);
         }
+        let _lock = ConfigLock::acquire(&self.app_dir)?;
         self.backup_primary()?;
-
-        match mode {
-            ImportMode::Merge => {
-                let mut merged = current.clone();
-                for imported in data.config.servers {
-                    if let Some(index) = merged
-                        .servers
-                        .iter()
-                        .position(|server| server.id == imported.id)
-                    {
-                        merged.servers[index] = imported;
-                    } else {
-                        merged.servers.push(imported);
-                    }
-                }
-                Ok(merged)
-            }
-            ImportMode::Replace => {
-                let mut replacement = data.config;
-                // 统一交换格式不含桌面本地设置，替换时保留当前设置。
-                replacement.settings = current.settings.clone();
-                if replacement.active_id.as_ref().is_none_or(|active_id| {
-                    !replacement
-                        .servers
-                        .iter()
-                        .any(|server| &server.id == active_id)
-                }) {
-                    replacement.active_id =
-                        replacement.servers.first().map(|server| server.id.clone());
-                }
-                Ok(replacement)
-            }
-        }
+        let config = merge_import(current, data, mode);
+        validate_app_config(&config)?;
+        Ok(config)
     }
 
-    pub fn export(
+    /// Apply an import against the latest on-disk config and persist it while
+    /// holding one cross-process lock for the entire transaction.
+    pub fn apply_import_and_save(
         &self,
-        config: &AppConfig,
-        path: &Path,
-    ) -> Result<(), ConfigError> {
+        data: ImportPreviewData,
+        mode: ImportMode,
+    ) -> Result<AppConfig, ConfigError> {
+        if data.config.servers.is_empty() {
+            return Err(ConfigError::NoValidServers);
+        }
+        let _lock = ConfigLock::acquire(&self.app_dir)?;
+        let current = self.load()?.config;
+        self.backup_primary()?;
+        let config = merge_import(&current, data, mode);
+        self.save_unlocked(&config)?;
+        Ok(config)
+    }
+
+    pub fn export(&self, config: &AppConfig, path: &Path) -> Result<(), ConfigError> {
         let text = self.export_text(config)?;
         atomic_write(path, text.as_bytes())
     }
@@ -215,6 +213,46 @@ impl ConfigStore {
             fs::remove_file(path)?;
         }
         Ok(())
+    }
+
+    fn save_unlocked(&self, config: &AppConfig) -> Result<(), ConfigError> {
+        validate_app_config(config)?;
+        fs::create_dir_all(&self.app_dir)?;
+        let bytes = serde_json::to_vec_pretty(config)?;
+        atomic_write(&self.config_path, &bytes)
+    }
+}
+
+fn merge_import(current: &AppConfig, data: ImportPreviewData, mode: ImportMode) -> AppConfig {
+    match mode {
+        ImportMode::Merge => {
+            let mut merged = current.clone();
+            for imported in data.config.servers {
+                if let Some(index) = merged
+                    .servers
+                    .iter()
+                    .position(|server| server.id == imported.id)
+                {
+                    merged.servers[index] = imported;
+                } else {
+                    merged.servers.push(imported);
+                }
+            }
+            merged
+        }
+        ImportMode::Replace => {
+            let mut replacement = data.config;
+            replacement.settings = current.settings.clone();
+            if replacement.active_id.as_ref().is_none_or(|active_id| {
+                !replacement
+                    .servers
+                    .iter()
+                    .any(|server| &server.id == active_id)
+            }) {
+                replacement.active_id = replacement.servers.first().map(|server| server.id.clone());
+            }
+            replacement
+        }
     }
 }
 
@@ -282,6 +320,7 @@ fn parse_config(bytes: &[u8]) -> Result<ParsedConfig, ConfigError> {
     validate_schema(file.schema)?;
     let server_entries = file.servers.len();
     let (servers, invalid_servers) = parse_servers(file.servers);
+    validate_servers(&servers)?;
     let active_id = file
         .active_id
         .filter(|active_id| servers.iter().any(|server| &server.id == active_id));
@@ -307,6 +346,30 @@ fn parse_servers(values: Vec<Value>) -> (Vec<ServerConfig>, usize) {
         .collect::<Vec<_>>();
     let invalid = total - servers.len();
     (servers, invalid)
+}
+
+fn validate_servers(servers: &[ServerConfig]) -> Result<(), ConfigError> {
+    let mut ids = std::collections::HashSet::with_capacity(servers.len());
+    for server in servers {
+        if server.validate().is_err() {
+            return Err(ConfigError::InvalidServer);
+        }
+        if !ids.insert(server.id.as_str()) {
+            return Err(ConfigError::DuplicateServerId(server.id.clone()));
+        }
+    }
+    Ok(())
+}
+
+fn validate_app_config(config: &AppConfig) -> Result<(), ConfigError> {
+    validate_schema(config.schema)?;
+    validate_servers(&config.servers)?;
+    if let Some(active_id) = &config.active_id {
+        if !config.servers.iter().any(|server| &server.id == active_id) {
+            return Err(ConfigError::InvalidActiveServer(active_id.clone()));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -365,10 +428,12 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
         fs::create_dir_all(parent)?;
     }
     let tmp_path = path.with_file_name(format!(
-        "{}.tmp",
+        ".{}.tmp-{}-{}",
         path.file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or("config.json")
+            .unwrap_or("config.json"),
+        std::process::id(),
+        Uuid::new_v4()
     ));
     let mut file = File::create(&tmp_path)?;
     file.write_all(bytes)?;
@@ -380,6 +445,41 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
     }
     replace_file(&tmp_path, path)?;
     Ok(())
+}
+
+struct ConfigLock {
+    file: File,
+}
+
+impl ConfigLock {
+    fn acquire(app_dir: &Path) -> Result<Self, ConfigError> {
+        fs::create_dir_all(app_dir)?;
+        let path = app_dir.join(".config.lock");
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(path)?;
+        let start = Instant::now();
+        loop {
+            match file.try_lock_exclusive() {
+                Ok(()) => return Ok(Self { file }),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if start.elapsed() >= Duration::from_secs(5) {
+                        return Err(ConfigError::WriteLocked);
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => return Err(ConfigError::Io(error)),
+            }
+        }
+    }
+}
+
+impl Drop for ConfigLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
 }
 
 #[cfg(not(windows))]
@@ -714,6 +814,68 @@ mod tests {
         store.save(&second).unwrap();
 
         assert_eq!(store.load().unwrap().config, second);
+    }
+
+    #[test]
+    fn save_rejects_duplicate_server_ids() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let config = AppConfig {
+            servers: vec![server("same", "First"), server("same", "Second")],
+            ..AppConfig::default()
+        };
+
+        assert!(matches!(
+            store.save(&config),
+            Err(ConfigError::DuplicateServerId(id)) if id == "same"
+        ));
+        assert!(!dir.path().join("config.json").exists());
+    }
+
+    #[test]
+    fn preexisting_lock_file_does_not_block_save() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join(".config.lock"), b"old marker").unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+
+        store.save(&AppConfig::default()).unwrap();
+
+        assert!(dir.path().join("config.json").exists());
+    }
+
+    #[test]
+    fn update_reads_and_preserves_latest_disk_state() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        store
+            .save(&AppConfig {
+                servers: vec![server("existing", "Existing")],
+                ..AppConfig::default()
+            })
+            .unwrap();
+
+        let updated = store
+            .update(|config| config.servers.push(server("new", "New")))
+            .unwrap();
+
+        assert_eq!(updated.servers.len(), 2);
+        assert_eq!(store.load().unwrap().config.servers.len(), 2);
+    }
+
+    #[test]
+    fn save_rejects_missing_active_server() {
+        let dir = tempdir().unwrap();
+        let store = ConfigStore::new(dir.path().to_path_buf());
+        let config = AppConfig {
+            active_id: Some("missing".to_string()),
+            servers: vec![server("existing", "Existing")],
+            ..AppConfig::default()
+        };
+
+        assert!(matches!(
+            store.save(&config),
+            Err(ConfigError::InvalidActiveServer(id)) if id == "missing"
+        ));
     }
 
     #[test]

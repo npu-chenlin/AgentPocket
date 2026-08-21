@@ -1,7 +1,7 @@
 //! mesh HTTP 端点：固定端口、tailnet 访问围栏、/info 握手、
 //! /kimi-config 同步 ~/.kimi-code/config.toml。
 
-use std::io::Read as _;
+use std::io::Read;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,7 +16,26 @@ pub use agentpocket_core::discovery::MESH_PORT;
 /// recv 轮询间隔，保证 stop 信号能被及时检查。
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// POST body 大小上限（1 MiB），防止对端超大请求拖垮守护进程。
-const MAX_BODY_BYTES: u64 = 1024 * 1024;
+const MAX_BODY_BYTES: usize = 1024 * 1024;
+
+static KIMI_OPERATION_BUSY: AtomicBool = AtomicBool::new(false);
+
+struct KimiOperationGuard;
+
+impl KimiOperationGuard {
+    fn try_acquire() -> Option<Self> {
+        KIMI_OPERATION_BUSY
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            .then_some(Self)
+    }
+}
+
+impl Drop for KimiOperationGuard {
+    fn drop(&mut self) {
+        KIMI_OPERATION_BUSY.store(false, Ordering::Release);
+    }
+}
 
 #[derive(Debug)]
 pub enum MeshError {
@@ -92,29 +111,35 @@ pub fn start(ctx: MeshContext, port: u16) -> Result<MeshHandle, MeshError> {
     let server = Server::http(("0.0.0.0", port)).map_err(|e| MeshError::Bind(e.to_string()))?;
     let bound = match server.server_addr() {
         tiny_http::ListenAddr::IP(addr) => addr.port(),
-        other => return Err(MeshError::Bind(format!("unexpected listen addr: {other:?}"))),
+        other => {
+            return Err(MeshError::Bind(format!(
+                "unexpected listen addr: {other:?}"
+            )))
+        }
     };
 
     let stop = Arc::new(AtomicBool::new(false));
     let stop_for_thread = Arc::clone(&stop);
     let ctx = Arc::new(ctx);
-    let join = std::thread::spawn(move || {
-        loop {
-            if stop_for_thread.load(Ordering::SeqCst) {
-                break;
-            }
-            match server.recv_timeout(POLL_INTERVAL) {
-                Ok(Some(request)) => handle_request(request, &ctx),
-                Ok(None) => continue,
-                Err(e) => {
-                    eprintln!("[mesh] 接收错误：{e}");
-                    std::process::exit(1);
-                }
+    let join = std::thread::spawn(move || loop {
+        if stop_for_thread.load(Ordering::SeqCst) {
+            break;
+        }
+        match server.recv_timeout(POLL_INTERVAL) {
+            Ok(Some(request)) => handle_request(request, &ctx),
+            Ok(None) => continue,
+            Err(e) => {
+                eprintln!("[mesh] 接收错误：{e}");
+                std::process::exit(1);
             }
         }
     });
 
-    Ok(MeshHandle { port: bound, stop, join: Some(join) })
+    Ok(MeshHandle {
+        port: bound,
+        stop,
+        join: Some(join),
+    })
 }
 
 fn handle_request(mut request: Request, ctx: &MeshContext) {
@@ -131,9 +156,11 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
                 "version": ctx.version,
                 "name": ctx.hostname,
             });
-            let _ = request.respond(Response::from_string(body.to_string())
-                .with_status_code(StatusCode(200))
-                .with_header(json_header()));
+            let _ = request.respond(
+                Response::from_string(body.to_string())
+                    .with_status_code(StatusCode(200))
+                    .with_header(json_header()),
+            );
         }
         (Method::Get, "/kimi-info") => {
             let state = crate::kimi::detect(&ctx.kimi_home);
@@ -153,17 +180,21 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
                     "port": web.port,
                 },
             });
-            let _ = request.respond(Response::from_string(body.to_string())
-                .with_status_code(StatusCode(200))
-                .with_header(json_header()));
+            let _ = request.respond(
+                Response::from_string(body.to_string())
+                    .with_status_code(StatusCode(200))
+                    .with_header(json_header()),
+            );
         }
         (Method::Post, "/kimi-web-enable") => {
-            let mut body = String::new();
-            let read_ok = request
-                .as_reader()
-                .take(MAX_BODY_BYTES)
-                .read_to_string(&mut body)
-                .is_ok();
+            let body = match read_body(&mut request) {
+                Ok(body) => body,
+                Err(status) => {
+                    let _ = request.respond(Response::empty(status));
+                    return;
+                }
+            };
+            let read_ok = !body.is_empty();
             let port = read_ok
                 .then(|| serde_json::from_str::<serde_json::Value>(&body).ok())
                 .flatten()
@@ -178,41 +209,56 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
             match result {
                 Ok(resp) => {
                     println!("[mesh] kimi web 服务已生成（端口 {port}）");
-                    let _ = request.respond(Response::from_string(resp.to_string())
-                        .with_status_code(StatusCode(200))
-                        .with_header(json_header()));
+                    let _ = request.respond(
+                        Response::from_string(resp.to_string())
+                            .with_status_code(StatusCode(200))
+                            .with_header(json_header()),
+                    );
                 }
                 Err(message) => {
-                    let _ = request.respond(Response::from_string(message)
-                        .with_status_code(StatusCode(400)));
+                    let _ = request
+                        .respond(Response::from_string(message).with_status_code(StatusCode(400)));
                 }
             }
         }
         (Method::Post, "/kimi-web-restart") => {
-            let mut body = String::new();
-            let read_ok = request
-                .as_reader()
-                .take(MAX_BODY_BYTES)
-                .read_to_string(&mut body)
-                .is_ok();
+            let body = match read_body(&mut request) {
+                Ok(body) => body,
+                Err(status) => {
+                    let _ = request.respond(Response::empty(status));
+                    return;
+                }
+            };
+            let read_ok = !body.is_empty();
             let force = read_ok
                 .then(|| serde_json::from_str::<serde_json::Value>(&body).ok())
                 .flatten()
                 .and_then(|v| v["force"].as_bool())
                 .unwrap_or(false);
+            let lock = match KimiOperationGuard::try_acquire() {
+                Some(lock) => lock,
+                None => {
+                    let _ = request.respond(Response::empty(StatusCode(409)));
+                    return;
+                }
+            };
             // 强制重启带活跃会话时 systemd 停止阶段可能要几十秒，挪到工作线程避免阻塞 mesh
             let kimi_home = ctx.kimi_home.clone();
             std::thread::spawn(move || {
+                let _operation = lock;
                 match crate::kimi_web::restart_guarded(&kimi_home, force) {
                     Ok(()) => {
                         println!("[mesh] kimi web 服务已重启（force={force}）");
-                        let _ = request.respond(Response::from_string("{\"ok\":true}")
-                            .with_status_code(StatusCode(200))
-                            .with_header(json_header()));
+                        let _ = request.respond(
+                            Response::from_string("{\"ok\":true}")
+                                .with_status_code(StatusCode(200))
+                                .with_header(json_header()),
+                        );
                     }
                     Err(message) => {
-                        let _ = request.respond(Response::from_string(message)
-                            .with_status_code(StatusCode(400)));
+                        let _ = request.respond(
+                            Response::from_string(message).with_status_code(StatusCode(400)),
+                        );
                     }
                 }
             });
@@ -220,29 +266,42 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
         (Method::Post, "/kimi-web-disable") => match crate::kimi_web::disable(&ctx.kimi_home) {
             Ok(()) => {
                 println!("[mesh] kimi web 服务已停用");
-                let _ = request.respond(Response::from_string("{\"ok\":true}")
-                    .with_status_code(StatusCode(200))
-                    .with_header(json_header()));
+                let _ = request.respond(
+                    Response::from_string("{\"ok\":true}")
+                        .with_status_code(StatusCode(200))
+                        .with_header(json_header()),
+                );
             }
             Err(message) => {
-                let _ = request.respond(Response::from_string(message)
-                    .with_status_code(StatusCode(400)));
-                }
+                let _ = request
+                    .respond(Response::from_string(message).with_status_code(StatusCode(400)));
+            }
         },
         (Method::Post, "/kimi-upgrade") => {
+            let lock = match KimiOperationGuard::try_acquire() {
+                Some(lock) => lock,
+                None => {
+                    let _ = request.respond(Response::empty(StatusCode(409)));
+                    return;
+                }
+            };
             let source = request
                 .headers()
                 .iter()
-                .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("X-AgentPocket-Source"))
-                .map(|h| h.value.as_str().to_string())
-                .or_else(|| {
-                    request.remote_addr().map(|a| a.ip().to_string())
+                .find(|h| {
+                    h.field
+                        .as_str()
+                        .as_str()
+                        .eq_ignore_ascii_case("X-AgentPocket-Source")
                 })
+                .map(|h| h.value.as_str().to_string())
+                .or_else(|| request.remote_addr().map(|a| a.ip().to_string()))
                 .unwrap_or_else(|| "未知来源".to_string());
 
             // 卸 npm + 官方脚本下载执行可能要数分钟，挪到工作线程，不阻塞 mesh 其余请求
             let kimi_home = ctx.kimi_home.clone();
             std::thread::spawn(move || {
+                let _operation = lock;
                 match crate::kimi::ensure_official(&kimi_home) {
                     Ok(outcome) => {
                         println!(
@@ -257,45 +316,57 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
                             "npmRemoved": outcome.npm_removed,
                             "npmFailed": outcome.npm_failed,
                         });
-                        let _ = request.respond(Response::from_string(body.to_string())
-                            .with_status_code(StatusCode(200))
-                            .with_header(json_header()));
+                        let _ = request.respond(
+                            Response::from_string(body.to_string())
+                                .with_status_code(StatusCode(200))
+                                .with_header(json_header()),
+                        );
                     }
                     Err(message) => {
-                        let _ = request.respond(Response::from_string(message)
-                            .with_status_code(StatusCode(500)));
+                        let _ = request.respond(
+                            Response::from_string(message).with_status_code(StatusCode(500)),
+                        );
                     }
                 }
             });
         }
-        (Method::Get, "/kimi-config") => match agentpocket_core::kimi_config::read(&ctx.kimi_home) {
-            Ok(text) => {
-                let _ = request.respond(Response::from_string(text)
-                    .with_status_code(StatusCode(200))
-                    .with_header(text_header()));
+        (Method::Get, "/kimi-config") => {
+            match agentpocket_core::kimi_config::read(&ctx.kimi_home) {
+                Ok(text) => {
+                    let _ = request.respond(
+                        Response::from_string(text)
+                            .with_status_code(StatusCode(200))
+                            .with_header(text_header()),
+                    );
+                }
+                Err(message) => {
+                    let _ = request
+                        .respond(Response::from_string(message).with_status_code(StatusCode(404)));
+                }
             }
-            Err(message) => {
-                let _ = request.respond(Response::from_string(message)
-                    .with_status_code(StatusCode(404)));
-            }
-        },
+        }
         (Method::Post, "/kimi-config") => {
             let source = request
                 .headers()
                 .iter()
-                .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("X-AgentPocket-Source"))
-                .map(|h| h.value.as_str().to_string())
-                .or_else(|| {
-                    request.remote_addr().map(|a| a.ip().to_string())
+                .find(|h| {
+                    h.field
+                        .as_str()
+                        .as_str()
+                        .eq_ignore_ascii_case("X-AgentPocket-Source")
                 })
+                .map(|h| h.value.as_str().to_string())
+                .or_else(|| request.remote_addr().map(|a| a.ip().to_string()))
                 .unwrap_or_else(|| "未知来源".to_string());
 
-            let mut body = String::new();
-            let read_ok = request
-                .as_reader()
-                .take(MAX_BODY_BYTES)
-                .read_to_string(&mut body)
-                .is_ok();
+            let body = match read_body(&mut request) {
+                Ok(body) => body,
+                Err(status) => {
+                    let _ = request.respond(Response::empty(status));
+                    return;
+                }
+            };
+            let read_ok = !body.is_empty();
             if !read_ok || body.is_empty() {
                 let _ = request.respond(Response::empty(StatusCode(400)));
                 return;
@@ -303,15 +374,20 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
 
             match agentpocket_core::kimi_config::write(&ctx.kimi_home, &body) {
                 Ok(()) => {
-                    println!("[mesh] 从 {source} 收到 kimi config.toml（{} 字节）", body.len());
+                    println!(
+                        "[mesh] 从 {source} 收到 kimi config.toml（{} 字节）",
+                        body.len()
+                    );
                     let resp = serde_json::json!({"bytes": body.len()});
-                    let _ = request.respond(Response::from_string(resp.to_string())
-                        .with_status_code(StatusCode(200))
-                        .with_header(json_header()));
+                    let _ = request.respond(
+                        Response::from_string(resp.to_string())
+                            .with_status_code(StatusCode(200))
+                            .with_header(json_header()),
+                    );
                 }
                 Err(message) => {
-                    let _ = request.respond(Response::from_string(message)
-                        .with_status_code(StatusCode(500)));
+                    let _ = request
+                        .respond(Response::from_string(message).with_status_code(StatusCode(500)));
                 }
             }
         }
@@ -319,6 +395,19 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
             let _ = request.respond(Response::empty(StatusCode(404)));
         }
     }
+}
+
+fn read_body(request: &mut Request) -> Result<String, StatusCode> {
+    let mut bytes = Vec::new();
+    request
+        .as_reader()
+        .take((MAX_BODY_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| StatusCode(400))?;
+    if bytes.len() > MAX_BODY_BYTES {
+        return Err(StatusCode(413));
+    }
+    String::from_utf8(bytes).map_err(|_| StatusCode(400))
 }
 
 fn text_header() -> tiny_http::Header {
@@ -349,22 +438,31 @@ mod tests {
 
     fn raw_request(port: u16, request: &str) -> (u16, String) {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
         stream.write_all(request.as_bytes()).unwrap();
         let mut response = Vec::new();
         stream.read_to_end(&mut response).unwrap();
         let text = String::from_utf8_lossy(&response).into_owned();
-        let status = text.split_whitespace().nth(1)
-            .and_then(|c| c.parse::<u16>().ok()).expect("status code");
-        let body = text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+        let status = text
+            .split_whitespace()
+            .nth(1)
+            .and_then(|c| c.parse::<u16>().ok())
+            .expect("status code");
+        let body = text
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
         (status, body)
     }
 
     #[test]
     fn is_peer_allowed_matrix() {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-        let sa = |a: u8, b: u8, c: u8, d: u8| SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(a, b, c, d)), 48720);
+        let sa = |a: u8, b: u8, c: u8, d: u8| {
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(a, b, c, d)), 48720)
+        };
         assert!(is_peer_allowed(&sa(127, 0, 0, 1)));
         assert!(is_peer_allowed(&sa(100, 64, 0, 2)));
         assert!(is_peer_allowed(&sa(100, 127, 255, 254)));
@@ -414,13 +512,31 @@ mod tests {
         assert_eq!(status, 404);
 
         std::fs::create_dir_all(dir.path().join(".kimi-code")).unwrap();
-        std::fs::write(dir.path().join(".kimi-code/config.toml"), "model = \"k2\"\n").unwrap();
+        std::fs::write(
+            dir.path().join(".kimi-code/config.toml"),
+            "model = \"k2\"\n",
+        )
+        .unwrap();
         let (status, body) = raw_request(
             handle.port,
             "GET /kimi-config HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
         );
         assert_eq!(status, 200);
         assert_eq!(body, "model = \"k2\"\n");
+        handle.stop();
+    }
+
+    #[test]
+    fn oversized_config_body_returns_payload_too_large() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = start(ctx(dir.path()), 0).unwrap();
+        let body = "x".repeat(MAX_BODY_BYTES + 1);
+        let request = format!(
+            "POST /kimi-config HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(), body
+        );
+        let (status, _) = raw_request(handle.port, &request);
+        assert_eq!(status, 413);
         handle.stop();
     }
 

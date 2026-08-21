@@ -1,7 +1,7 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import type { ImportPreview } from "./model";
 
-export const CREDENTIAL_WARNING = "文件包含服务器访问凭据，请勿公开分享";
+export const CREDENTIAL_WARNING = "文件包含 Agent 服务访问凭据，请勿公开分享";
 
 export function importPreviewText(preview: ImportPreview): string {
   const invalidCount = preview.invalid.length;

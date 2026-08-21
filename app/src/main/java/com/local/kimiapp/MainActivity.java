@@ -102,6 +102,7 @@ public class MainActivity extends ComponentActivity {
     public static final String EXTRA_SESSION_ID = "open_session_id";
     public static final String EXTRA_UPDATE_URL = "update_download_url";
     public static final String EXTRA_UPDATE_NAME = "update_download_name";
+    private static final String OFFICIAL_UPDATE_PATH = "/npu-chenlin/AgentPocket/releases/download/";
     private static final int FILE_CHOOSER = 42;
     private static final String NOTIFICATION_CHANNEL = "kimi_tasks";
     private WebView webView;
@@ -112,6 +113,7 @@ public class MainActivity extends ComponentActivity {
     private final Runnable faceFallback = this::applyBaseFaceState;
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingPermission;
+    private String[] pendingPermissionResources;
     /** 悬浮球控制器（配置变化/折叠屏展开时需要重新贴边）。 */
     private IFxScopeControl floatingControl;
     /** 后端类型探测用短超时 client，避免阻塞页面加载。 */
@@ -209,7 +211,7 @@ public class MainActivity extends ComponentActivity {
     private void installServerHandle(FrameLayout root) {
         FrameLayout handle = new FrameLayout(this);
         handle.setLayoutParams(new FrameLayout.LayoutParams(dp(56), dp(56)));
-        handle.setContentDescription("切换服务器");
+        handle.setContentDescription("切换服务连接");
         handle.setElevation(dp(8));
         styleServerHandle(handle);
         faceView = new GrokFaceView(this);
@@ -400,7 +402,7 @@ public class MainActivity extends ComponentActivity {
         webView.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
-                if ("http".equals(uri.getScheme()) || "https".equals(uri.getScheme())) return false;
+                if (isTrustedServerOrigin(uri)) return false;
                 try { startActivity(new Intent(Intent.ACTION_VIEW, uri)); } catch (Exception ignored) {}
                 return true;
             }
@@ -506,10 +508,16 @@ public class MainActivity extends ComponentActivity {
 
     private void handleUpdateIntent(Intent intent) {
         String url = intent.getStringExtra(EXTRA_UPDATE_URL);
-        if (url == null || url.isEmpty()) return;
-        String name = intent.getStringExtra(EXTRA_UPDATE_NAME);
-        if (name == null || !name.endsWith(".apk")) name = "AgentPocket-update.apk";
-        DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url))
+        String requestedName = intent.getStringExtra(EXTRA_UPDATE_NAME);
+        // 无论是否可信都消费掉 extra，避免外部 Intent 在 onNewIntent 中反复触发。
+        intent.removeExtra(EXTRA_UPDATE_URL);
+        intent.removeExtra(EXTRA_UPDATE_NAME);
+        if (!isOfficialUpdateUrl(url)) return;
+        Uri updateUri = Uri.parse(url);
+        String assetName = updateUri.getLastPathSegment();
+        String name = isSafeApkName(requestedName) && requestedName.equals(assetName)
+                ? requestedName : assetName;
+        DownloadManager.Request request = new DownloadManager.Request(updateUri)
                 .setTitle("正在下载 AgentPocket 更新")
                 .setDescription(name)
                 .setMimeType("application/vnd.android.package-archive")
@@ -518,8 +526,28 @@ public class MainActivity extends ComponentActivity {
         long id = getSystemService(DownloadManager.class).enqueue(request);
         getSharedPreferences(UpdateDownloadReceiver.PREFS, MODE_PRIVATE).edit()
                 .putLong("download_id", id).putString("download_name", name).apply();
-        intent.removeExtra(EXTRA_UPDATE_URL);
         Toast.makeText(this, "更新开始下载，完成后将打开安装页面", Toast.LENGTH_LONG).show();
+    }
+
+    private static boolean isSafeApkName(String name) {
+        return name != null && name.matches("[A-Za-z0-9._-]+\\.apk");
+    }
+
+    /** 更新只接受官方仓库的 HTTPS release asset，拒绝任意 APK URL。 */
+    private static boolean isOfficialUpdateUrl(String rawUrl) {
+        if (rawUrl == null || rawUrl.isEmpty()) return false;
+        try {
+            Uri uri = Uri.parse(rawUrl);
+            String path = uri.getPath();
+            return "https".equalsIgnoreCase(uri.getScheme())
+                    && "github.com".equalsIgnoreCase(uri.getHost())
+                    && uri.getPort() == -1
+                    && uri.getQuery() == null && uri.getFragment() == null
+                    && path != null && path.startsWith(OFFICIAL_UPDATE_PATH)
+                    && isSafeApkName(uri.getLastPathSegment());
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
 
@@ -595,12 +623,43 @@ public class MainActivity extends ComponentActivity {
     }
 
     private void requestWebPermission(PermissionRequest request) {
+        if (!isTrustedServerOrigin(request.getOrigin())) {
+            request.deny();
+            return;
+        }
+        List<String> resources = new ArrayList<>();
+        List<String> runtimePermissions = new ArrayList<>();
+        for (String resource : request.getResources()) {
+            if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) {
+                resources.add(resource);
+                if (Build.VERSION.SDK_INT >= 23 &&
+                        checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                    runtimePermissions.add(Manifest.permission.CAMERA);
+                }
+            } else if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
+                resources.add(resource);
+                if (Build.VERSION.SDK_INT >= 23 &&
+                        checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    runtimePermissions.add(Manifest.permission.RECORD_AUDIO);
+                }
+            } else {
+                request.deny();
+                return;
+            }
+        }
+        if (resources.isEmpty()) {
+            request.deny();
+            return;
+        }
         pendingPermission = request;
-        if (android.os.Build.VERSION.SDK_INT >= 23 &&
-            (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED ||
-             checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)) {
-            requestPermissions(new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO}, 7);
-        } else request.grant(request.getResources());
+        pendingPermissionResources = resources.toArray(new String[0]);
+        if (!runtimePermissions.isEmpty()) {
+            requestPermissions(runtimePermissions.toArray(new String[0]), 7);
+        } else {
+            request.grant(pendingPermissionResources);
+            pendingPermission = null;
+            pendingPermissionResources = null;
+        }
     }
 
     @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
@@ -608,9 +667,27 @@ public class MainActivity extends ComponentActivity {
         if (code == 7 && pendingPermission != null) {
             boolean granted = true;
             for (int result : results) granted &= result == PackageManager.PERMISSION_GRANTED;
-            if (granted) pendingPermission.grant(pendingPermission.getResources()); else pendingPermission.deny();
+            if (granted) pendingPermission.grant(pendingPermissionResources);
+            else pendingPermission.deny();
             pendingPermission = null;
+            pendingPermissionResources = null;
         }
+    }
+
+    /** WebView 只在当前配置服务的 origin 内加载；其它页面交给系统浏览器。 */
+    private boolean isTrustedServerOrigin(Uri uri) {
+        if (uri == null || uri.getScheme() == null || uri.getHost() == null) return false;
+        if (!"http".equalsIgnoreCase(uri.getScheme()) && !"https".equalsIgnoreCase(uri.getScheme())) return false;
+        ServerStore.Server server = ServerStore.active(this);
+        if (server == null) return false;
+        Uri expected = Uri.parse(server.baseUrl());
+        int expectedPort = expected.getPort();
+        int actualPort = uri.getPort();
+        if (actualPort < 0) actualPort = "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
+        if (expectedPort < 0) expectedPort = "https".equalsIgnoreCase(expected.getScheme()) ? 443 : 80;
+        return expected.getScheme().equalsIgnoreCase(uri.getScheme())
+                && expected.getHost().equalsIgnoreCase(uri.getHost())
+                && expectedPort == actualPort;
     }
 
     private void showServerList() {
@@ -624,13 +701,13 @@ public class MainActivity extends ComponentActivity {
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         list.setPadding(dp(20), dp(4), dp(20), dp(8));
-        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("服务器")
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("服务连接")
                 .setView(list).setNegativeButton("关闭", null).create();
 
         LinearLayout tabBar = new LinearLayout(this);
         tabBar.setOrientation(LinearLayout.HORIZONTAL);
         Button tabServers = new Button(this);
-        tabServers.setText("服务器");
+        tabServers.setText("服务连接");
         Button tabSessions = new Button(this);
         tabSessions.setText("活跃会话");
         for (Button tab : new Button[]{ tabServers, tabSessions }) {
@@ -689,7 +766,7 @@ public class MainActivity extends ComponentActivity {
         UiKit.styleSecondaryButton(this, copy);
 
         Button sync = new Button(this);
-        sync.setText("扫码同步");
+        sync.setText("同步连接");
         UiKit.styleSecondaryButton(this, sync);
 
         LinearLayout.LayoutParams refreshParams = new LinearLayout.LayoutParams(0, dp(50), 1);
@@ -704,7 +781,7 @@ public class MainActivity extends ComponentActivity {
         serverPage.addView(actions, new LinearLayout.LayoutParams(-1, dp(50)));
 
         Button add = new Button(this);
-        add.setText("＋  添加服务器");
+        add.setText("＋  添加服务连接");
         UiKit.styleOutlinePrimaryButton(this, add);
         LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(-1, dp(50));
         addParams.setMargins(0, dp(8), 0, 0);
@@ -983,7 +1060,7 @@ public class MainActivity extends ComponentActivity {
                     .put("servers", items);
         } catch (Exception ignored) {}
         ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        clipboard.setPrimaryClip(ClipData.newPlainText("服务器配置", doc.toString()));
+        clipboard.setPrimaryClip(ClipData.newPlainText("服务连接配置", doc.toString()));
         Toast.makeText(this, "配置已复制到剪贴板（含 API 凭据，注意安全）", Toast.LENGTH_LONG).show();
     }
 
@@ -1001,7 +1078,7 @@ public class MainActivity extends ComponentActivity {
     private void handleSyncLink(String text) {
         SyncClient.SyncLink link = SyncClient.parseLink(text);
         if (link == null) {
-            Toast.makeText(this, "不是有效的同步二维码", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "不是有效的服务连接同步二维码", Toast.LENGTH_SHORT).show();
             return;
         }
         showSyncChoice(link);
@@ -1010,7 +1087,7 @@ public class MainActivity extends ComponentActivity {
     private void launchSyncScanner() {
         ScanOptions options = new ScanOptions();
         options.setDesiredBarcodeFormats(ScanOptions.QR_CODE);
-        options.setPrompt("对准电脑上的同步二维码");
+        options.setPrompt("对准电脑上的手机配对二维码");
         options.setBeepEnabled(false);
         options.setOrientationLocked(false);
         syncScanner.launch(options);
@@ -1019,7 +1096,7 @@ public class MainActivity extends ComponentActivity {
     private void showSyncChoice(SyncClient.SyncLink link) {
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("扫码成功")
-                .setMessage("已连接电脑 " + link.host + ":" + link.port + "，请选择同步方向。")
+                .setMessage("已连接电脑 " + link.host + ":" + link.port + "，请选择配置传输方向。")
                 .setPositiveButton("获取电脑配置", (d, w) -> fetchDesktopConfig(link))
                 .setNeutralButton("取消", null)
                 .setNegativeButton("上传手机配置", (d, w) -> uploadPhoneConfig(link))
@@ -1030,7 +1107,7 @@ public class MainActivity extends ComponentActivity {
     private void fetchDesktopConfig(SyncClient.SyncLink link) {
         SyncClient.fetch(probeClient, this, link, new SyncClient.FetchCallback() {
             @Override public void onMerged(int count) {
-                showSyncResult("同步成功", "已从电脑同步 " + count + " 台服务器。");
+                showSyncResult("同步成功", "已从电脑获取 " + count + " 个服务连接。");
                 restartListener();
                 applyBaseFaceState();
                 if (webView != null && webView.getUrl() == null) loadConfiguredUrl();
@@ -1045,7 +1122,7 @@ public class MainActivity extends ComponentActivity {
         int count = ServerStore.load(this).size();
         SyncClient.upload(probeClient, this, link, new SyncClient.UploadCallback() {
             @Override public void onSent() {
-                showSyncResult("上传成功", "已上传 " + count + " 台服务器，请在电脑上确认导入。");
+                showSyncResult("发送成功", "已发送 " + count + " 个服务连接，请在电脑上确认导入。");
             }
             @Override public void onError(String message) {
                 Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
@@ -1133,7 +1210,7 @@ public class MainActivity extends ComponentActivity {
 
     private void deleteServer(ServerStore.Server target) {
         List<ServerStore.Server> servers = new ArrayList<>(ServerStore.load(this));
-        if (servers.size() <= 1) { Toast.makeText(this, "至少保留一台服务器", Toast.LENGTH_SHORT).show(); return; }
+        if (servers.size() <= 1) { Toast.makeText(this, "至少保留一个服务连接", Toast.LENGTH_SHORT).show(); return; }
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("删除 " + target.name + "？")
                 .setMessage(target.host + ":" + target.port)
                 .setNegativeButton("取消", null).setPositiveButton("删除", (d, w) -> {
@@ -1188,7 +1265,7 @@ public class MainActivity extends ComponentActivity {
         recognize.setLayoutParams(recognizeParams);
         TextView detailLabel = fieldLabel("连接详情");
         detailLabel.setPadding(0, dp(18), 0, dp(7));
-        TextView backendLabel = fieldLabel("服务器类型");
+        TextView backendLabel = fieldLabel("Agent 类型");
         final RadioButton kimiRadio = new RadioButton(this);
         kimiRadio.setText("Kimi Code");
         kimiRadio.setTextSize(14);
@@ -1203,9 +1280,9 @@ public class MainActivity extends ComponentActivity {
         String editingBackend = editing == null ? ServerStore.Server.BACKEND_KIMI : editing.backend;
         kimiRadio.setChecked(ServerStore.Server.BACKEND_KIMI.equals(editingBackend));
         dshRadio.setChecked(ServerStore.Server.BACKEND_DSH.equals(editingBackend));
-        EditText name = modernField("服务器名称（例如：工作站）", false);
+        EditText name = modernField("服务连接名称（例如：工作站）", false);
         name.setText(editing == null ? "" : editing.name);
-        EditText ip = modernField("IP 地址或主机名", false);
+        EditText ip = modernField("主机 IP 或域名", false);
         ip.setText(editing == null ? "" : editing.host);
         EditText port = modernField("端口", false);
         port.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
@@ -1224,13 +1301,13 @@ public class MainActivity extends ComponentActivity {
             port.setText(String.valueOf(parsed.port));
             token.setText(parsed.token);
             if (name.getText().toString().trim().isEmpty()) name.setText(parsed.host + ":" + parsed.port);
-            Toast.makeText(this, "已识别，正在探测服务器类型…", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "已识别，正在探测 Agent 类型…", Toast.LENGTH_SHORT).show();
             probeBackend(parsed.host, parsed.port, backend -> runOnUiThread(() -> {
                 if (backend == null) {
                     // 探测失败：dsh 启动串已标明类型则采用，否则回落 Kimi
                     if (ServerStore.Server.BACKEND_DSH.equals(parsed.backend)) dshRadio.setChecked(true);
                     else kimiRadio.setChecked(true);
-                    Toast.makeText(this, "未能确认服务器类型，已按 "
+                    Toast.makeText(this, "未能确认 Agent 类型，已按 "
                             + (dshRadio.isChecked() ? "DeepSeek Harness" : "Kimi Code") + " 处理", Toast.LENGTH_SHORT).show();
                 } else if (ServerStore.Server.BACKEND_DSH.equals(backend)) {
                     dshRadio.setChecked(true);
@@ -1249,7 +1326,7 @@ public class MainActivity extends ComponentActivity {
         scroll.addView(box);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
-            .setTitle(editing == null ? "添加服务器" : "编辑服务器")
+            .setTitle(editing == null ? "添加服务连接" : "编辑服务连接")
             .setView(scroll)
             .setCancelable(!required)
             .setNegativeButton(required ? null : "取消", null)

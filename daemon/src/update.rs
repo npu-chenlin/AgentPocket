@@ -11,12 +11,14 @@ use serde::Deserialize;
 pub const REPO: &str = "npu-chenlin/AgentPocket";
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const INITIAL_DELAY: Duration = Duration::from_secs(10);
+const MAX_ASSET_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum UpdateError {
     Network(String),
     Parse(String),
     Io(String),
+    InvalidAsset(String),
     AssetMissing,
     /// GitHub 未认证 API 限额 60 次/小时/IP，撞满后返回 403/429。
     RateLimited(u16),
@@ -28,6 +30,7 @@ impl std::fmt::Display for UpdateError {
             UpdateError::Network(e) => write!(f, "更新检查网络错误：{e}"),
             UpdateError::Parse(e) => write!(f, "更新检查解析错误：{e}"),
             UpdateError::Io(e) => write!(f, "更新写入失败：{e}"),
+            UpdateError::InvalidAsset(e) => write!(f, "更新资产无效：{e}"),
             UpdateError::AssetMissing => {
                 write!(f, "最新 release 未提供本架构资产（{}）", arch_asset_name())
             }
@@ -98,7 +101,11 @@ pub fn fetch_latest(
         return Ok(CheckOutcome::UpToDate);
     }
     let wanted = arch_asset_name();
-    let Some(asset) = release.assets.into_iter().find(|asset| asset.name == wanted) else {
+    let Some(asset) = release
+        .assets
+        .into_iter()
+        .find(|asset| asset.name == wanted)
+    else {
         return Ok(CheckOutcome::AssetMissing);
     };
     Ok(CheckOutcome::Available(ReleaseInfo {
@@ -114,30 +121,88 @@ pub fn download_and_replace(
     timeout: Duration,
 ) -> Result<(), UpdateError> {
     let bytes = http_get_bytes(url, timeout)?;
-    if bytes.is_empty() {
-        return Err(UpdateError::Network("资产内容为空".to_string()));
-    }
-    let tmp_path = self_path.with_extension("new");
-    {
+    validate_asset(&bytes)?;
+    let tmp_path = self_path.with_file_name(format!(
+        ".agentpocket.new-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let result = (|| -> Result<(), UpdateError> {
         use std::io::Write as _;
-        let mut file = std::fs::File::create(&tmp_path)
+        let mut file =
+            std::fs::File::create(&tmp_path).map_err(|e| UpdateError::Io(e.to_string()))?;
+        file.write_all(&bytes)
             .map_err(|e| UpdateError::Io(e.to_string()))?;
-        file.write_all(&bytes).map_err(|e| UpdateError::Io(e.to_string()))?;
-        file.sync_all().map_err(|e| UpdateError::Io(e.to_string()))?;
+        file.sync_all()
+            .map_err(|e| UpdateError::Io(e.to_string()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| UpdateError::Io(e.to_string()))?;
+        }
+        if self_path.exists() {
+            let backup_path = self_path.with_extension("old");
+            std::fs::copy(self_path, &backup_path)
+                .map_err(|e| UpdateError::Io(format!("保留旧版本失败：{e}")))?;
+        }
+        std::fs::rename(&tmp_path, self_path).map_err(|e| UpdateError::Io(e.to_string()))?;
+        sync_parent(self_path.parent())?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
     }
+    result
+}
+
+fn validate_asset(bytes: &[u8]) -> Result<(), UpdateError> {
+    if bytes.is_empty() {
+        return Err(UpdateError::InvalidAsset("资产内容为空".to_string()));
+    }
+    if bytes.len() < 20 || &bytes[..4] != b"\x7fELF" {
+        return Err(UpdateError::InvalidAsset("不是 ELF 可执行文件".to_string()));
+    }
+    if bytes[4] != 2 || bytes[5] != 1 {
+        return Err(UpdateError::InvalidAsset(
+            "仅支持 64 位小端 ELF".to_string(),
+        ));
+    }
+    let elf_type = u16::from_le_bytes([bytes[16], bytes[17]]);
+    if !matches!(elf_type, 2 | 3) {
+        return Err(UpdateError::InvalidAsset(
+            "ELF 类型不是可执行文件或 PIE".to_string(),
+        ));
+    }
+    let machine = u16::from_le_bytes([bytes[18], bytes[19]]);
+    let expected = match std::env::consts::ARCH {
+        "x86_64" => 62,
+        "aarch64" => 183,
+        "x86" => 3,
+        "arm" => 40,
+        arch => return Err(UpdateError::InvalidAsset(format!("不支持校验架构 {arch}"))),
+    };
+    if machine != expected {
+        return Err(UpdateError::InvalidAsset(format!(
+            "ELF 架构不匹配：得到 {machine}，需要 {expected}"
+        )));
+    }
+    Ok(())
+}
+
+fn sync_parent(parent: Option<&Path>) -> Result<(), UpdateError> {
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755))
-            .map_err(|e| UpdateError::Io(e.to_string()))?;
+    if let Some(parent) = parent {
+        let dir = std::fs::File::open(parent).map_err(|e| UpdateError::Io(e.to_string()))?;
+        dir.sync_all().map_err(|e| UpdateError::Io(e.to_string()))?;
     }
-    std::fs::rename(&tmp_path, self_path).map_err(|e| UpdateError::Io(e.to_string()))
+    Ok(())
 }
 
 /// 在 systemd 环境下重启服务；返回是否尝试了重启。
 pub fn restart_systemd() -> bool {
-    let under_systemd = std::env::var_os("INVOCATION_ID").is_some()
-        || Path::new("/run/systemd/system").exists();
+    let under_systemd =
+        std::env::var_os("INVOCATION_ID").is_some() || Path::new("/run/systemd/system").exists();
     if !under_systemd {
         return false;
     }
@@ -153,8 +218,7 @@ fn self_path() -> Option<PathBuf> {
 
 /// 执行一轮检查+更新；返回描述文案（serve 循环与 update 命令共用）。
 pub fn check_and_apply(api_base: &str, timeout: Duration) -> Result<String, UpdateError> {
-    let current = Version::parse(env!("CARGO_PKG_VERSION"))
-        .expect("crate version is valid semver");
+    let current = Version::parse(env!("CARGO_PKG_VERSION")).expect("crate version is valid semver");
     let release = match fetch_latest(api_base, &current, timeout)? {
         CheckOutcome::UpToDate => return Ok("已是最新版本".to_string()),
         CheckOutcome::AssetMissing => return Err(UpdateError::AssetMissing),
@@ -177,7 +241,9 @@ pub fn check_and_apply(api_base: &str, timeout: Duration) -> Result<String, Upda
 fn permission_hint(error: UpdateError) -> UpdateError {
     match error {
         UpdateError::Io(message) if message.to_lowercase().contains("permission denied") => {
-            UpdateError::Io(format!("{message}；服务以非 root 运行时请手动执行：sudo agentpocket update"))
+            UpdateError::Io(format!(
+                "{message}；服务以非 root 运行时请手动执行：sudo agentpocket update"
+            ))
         }
         other => other,
     }
@@ -217,8 +283,15 @@ fn http_get_bytes(url: &str, timeout: Duration) -> Result<Vec<u8>, UpdateError> 
     let mut bytes = Vec::new();
     response
         .into_reader()
+        .take((MAX_ASSET_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|e| UpdateError::Network(e.to_string()))?;
+    if bytes.len() > MAX_ASSET_BYTES {
+        return Err(UpdateError::InvalidAsset(format!(
+            "资产超过 {} 字节上限",
+            MAX_ASSET_BYTES
+        )));
+    }
     Ok(bytes)
 }
 
@@ -231,7 +304,10 @@ mod tests {
 
     #[test]
     fn parses_v_prefixed_tag() {
-        assert_eq!(parse_tag_version("v2.8.1").unwrap(), semver::Version::new(2, 8, 1));
+        assert_eq!(
+            parse_tag_version("v2.8.1").unwrap(),
+            semver::Version::new(2, 8, 1)
+        );
         assert!(parse_tag_version("not-a-version").is_err());
     }
 
@@ -341,6 +417,21 @@ mod tests {
     #[test]
     fn download_and_replace_swaps_file_atomically() {
         // mock 资产服务器返回新二进制内容。
+        let mut new_binary = vec![0_u8; 20];
+        new_binary[..4].copy_from_slice(b"\x7fELF");
+        new_binary[4] = 2;
+        new_binary[5] = 1;
+        new_binary[16..18].copy_from_slice(&2_u16.to_le_bytes());
+        new_binary[18..20].copy_from_slice(
+            &match std::env::consts::ARCH {
+                "x86_64" => 62_u16,
+                "aarch64" => 183_u16,
+                "x86" => 3_u16,
+                "arm" => 40_u16,
+                arch => panic!("unsupported test arch: {arch}"),
+            }
+            .to_le_bytes(),
+        );
         let server = tiny_http::Server::http(("127.0.0.1", 0)).unwrap();
         let port = match server.server_addr() {
             tiny_http::ListenAddr::IP(addr) => addr.port(),
@@ -348,7 +439,7 @@ mod tests {
         };
         std::thread::spawn(move || {
             for request in server.incoming_requests() {
-                let _ = request.respond(tiny_http::Response::from_string("new binary bytes"));
+                let _ = request.respond(tiny_http::Response::from_data(new_binary.clone()));
             }
         });
 
@@ -363,7 +454,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(std::fs::read(&self_path).unwrap(), b"new binary bytes");
+        let installed = std::fs::read(&self_path).unwrap();
+        assert_eq!(&installed[..4], b"\x7fELF");
+        assert_eq!(
+            std::fs::read(self_path.with_extension("old")).unwrap(),
+            b"old"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

@@ -162,28 +162,34 @@ pub fn register_server_entry(config_dir: &Path, port: u16) -> Result<String, Str
     let host = tailscale_self_ip().unwrap_or_else(|| "127.0.0.1".to_string());
     let name = agentpocket_core::host::hostname();
     let store = agentpocket_core::config::ConfigStore::new(config_dir.to_path_buf());
-    let mut current = store.load().map_err(|e| e.to_string())?.config;
-    if let Some(server) = current
-        .servers
-        .iter_mut()
-        .find(|s| s.host == host && s.port == port)
-    {
-        server.name = name.clone();
-        server.backend = agentpocket_core::model::Backend::Kimi;
-        store.save(&current).map_err(|e| e.to_string())?;
-        return Ok(format!("已更新服务器条目 {name}（{host}:{port}）"));
+    let mut updated = false;
+    store
+        .update(|current| {
+            if let Some(server) = current
+                .servers
+                .iter_mut()
+                .find(|s| s.host == host && s.port == port)
+            {
+                server.name = name.clone();
+                server.backend = agentpocket_core::model::Backend::Kimi;
+                updated = true;
+                return;
+            }
+            let id = uuid::Uuid::new_v4().to_string();
+            current.servers.push(agentpocket_core::model::ServerConfig::new(
+                &id,
+                &name,
+                &host,
+                port,
+                "",
+                agentpocket_core::model::Backend::Kimi,
+            ));
+        })
+        .map_err(|e| e.to_string())?;
+    if updated {
+        return Ok(format!("已更新 Agent 服务连接 {name}（{host}:{port}）"));
     }
-    let id = uuid::Uuid::new_v4().to_string();
-    current.servers.push(agentpocket_core::model::ServerConfig::new(
-        &id,
-        &name,
-        &host,
-        port,
-        "",
-        agentpocket_core::model::Backend::Kimi,
-    ));
-    store.save(&current).map_err(|e| e.to_string())?;
-    Ok(format!("已注册服务器条目 {name}（{host}:{port}）"))
+    Ok(format!("已注册 Agent 服务连接 {name}（{host}:{port}）"))
 }
 
 fn tailscale_self_ip() -> Option<String> {

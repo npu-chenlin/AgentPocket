@@ -22,16 +22,22 @@ pub fn run_push(home: &Path, host: &str) -> Result<String, String> {
 
 /// 实际实现；端口单列是为了测试能用 mesh::start(…, 0) 的随机端口起对端做端到端。
 fn pull_via(home: &Path, host: &str, port: u16, dry_run: bool) -> Result<String, String> {
-    let response = client::get(host, port, "/kimi-config", &[], TIMEOUT)
-        .map_err(|e| e.to_string())?;
+    let response =
+        client::get(host, port, "/kimi-config", &[], TIMEOUT).map_err(|e| e.to_string())?;
     if response.status != 200 {
-        return Err(format!("对方返回 HTTP {}：{}", response.status, response.body));
+        return Err(format!(
+            "对方返回 HTTP {}：{}",
+            response.status, response.body
+        ));
     }
     let local = kimi_config::read(home).ok();
     if dry_run {
         return Ok(match &local {
             Some(current) if *current == response.body => {
-                format!("[dry-run] 远端 config.toml {} 字节，与本地一致", response.body.len())
+                format!(
+                    "[dry-run] 远端 config.toml {} 字节，与本地一致",
+                    response.body.len()
+                )
             }
             Some(current) => format!(
                 "[dry-run] 远端 config.toml {} 字节，本地 {} 字节，将被覆盖",
@@ -67,7 +73,10 @@ fn push_via(home: &Path, host: &str, port: u16) -> Result<String, String> {
     )
     .map_err(|e: ClientError| e.to_string())?;
     if response.status != 200 {
-        return Err(format!("对方返回 HTTP {}：{}", response.status, response.body));
+        return Err(format!(
+            "对方返回 HTTP {}：{}",
+            response.status, response.body
+        ));
     }
     Ok(format!("对方已接收 config.toml（{} 字节）", text.len()))
 }
@@ -79,7 +88,10 @@ pub fn kimi_local_status(home: &Path) -> Result<String, String> {
     let state = crate::kimi::detect(home);
     Ok(format_kimi_state(
         state.official.as_deref(),
-        state.npm.iter().map(|n| (n.prefix.display().to_string(), n.version.clone())),
+        state
+            .npm
+            .iter()
+            .map(|n| (n.prefix.display().to_string(), n.version.clone())),
     ))
 }
 
@@ -89,7 +101,11 @@ pub fn kimi_local_upgrade(home: &Path) -> Result<String, String> {
     Ok(format_ensure_message(
         outcome.before.as_deref(),
         outcome.after.as_deref(),
-        &outcome.npm_removed.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        &outcome
+            .npm_removed
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>(),
         &outcome.npm_failed,
     ))
 }
@@ -99,10 +115,13 @@ pub fn kimi_remote_status(host: &str) -> Result<String, String> {
 }
 
 fn kimi_remote_status_via(host: &str, port: u16) -> Result<String, String> {
-    let response = client::get(host, port, "/kimi-info", &[], TIMEOUT)
-        .map_err(|e| e.to_string())?;
+    let response =
+        client::get(host, port, "/kimi-info", &[], TIMEOUT).map_err(|e| e.to_string())?;
     if response.status != 200 {
-        return Err(format!("对方返回 HTTP {}：{}", response.status, response.body));
+        return Err(format!(
+            "对方返回 HTTP {}：{}",
+            response.status, response.body
+        ));
     }
     let value: serde_json::Value =
         serde_json::from_str(&response.body).map_err(|e| e.to_string())?;
@@ -118,7 +137,10 @@ fn kimi_remote_status_via(host: &str, port: u16) -> Result<String, String> {
         })
         .into_iter()
         .flatten();
-    Ok(format!("对方{}", format_kimi_state(value["version"].as_str(), npm)))
+    Ok(format!(
+        "对方{}",
+        format_kimi_state(value["version"].as_str(), npm)
+    ))
 }
 
 pub fn kimi_remote_upgrade(host: &str) -> Result<String, String> {
@@ -130,28 +152,46 @@ fn kimi_remote_upgrade_via(host: &str, port: u16) -> Result<String, String> {
     let response = client::post(host, port, "/kimi-upgrade", &[], "", UPGRADE_TIMEOUT)
         .map_err(|e: ClientError| e.to_string())?;
     if response.status != 200 {
-        return Err(format!("对方返回 HTTP {}：{}", response.status, response.body));
+        return Err(format!(
+            "对方返回 HTTP {}：{}",
+            response.status, response.body
+        ));
     }
     let value: serde_json::Value =
         serde_json::from_str(&response.body).map_err(|e| e.to_string())?;
     let removed: Vec<String> = value["npmRemoved"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|p| p.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| p.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     let failed: Vec<String> = value["npmFailed"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|p| p.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| p.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     Ok(format!(
         "对方{}",
-        format_ensure_message(value["before"].as_str(), value["after"].as_str(), &removed, &failed)
+        format_ensure_message(
+            value["before"].as_str(),
+            value["after"].as_str(),
+            &removed,
+            &failed
+        )
     ))
 }
 
 pub fn kimi_web_enable(config_dir: &Path, home: &Path, port: u16) -> Result<String, String> {
     crate::kimi_web::enable(home, port)?;
     let registered = crate::kimi_web::register_server_entry(config_dir, port)?;
-    Ok(format!("kimi web 服务已生成并启动（端口 {port}）；{registered}"))
+    Ok(format!(
+        "kimi web 服务已生成并启动（端口 {port}）；{registered}"
+    ))
 }
 
 pub fn kimi_web_restart(home: &Path, force: bool) -> Result<String, String> {
@@ -169,7 +209,11 @@ pub fn kimi_web_status(home: &Path) -> Result<String, String> {
     Ok(if status.installed {
         format!(
             "kimi web 服务：{}（端口 {}）",
-            if status.active { "运行中" } else { "未运行" },
+            if status.active {
+                "运行中"
+            } else {
+                "未运行"
+            },
             status.port
         )
     } else {
@@ -183,8 +227,15 @@ pub fn kimi_remote_web_restart(host: &str, force: bool) -> Result<String, String
 
 fn kimi_remote_web_restart_via(host: &str, port: u16, force: bool) -> Result<String, String> {
     let body = serde_json::json!({ "force": force }).to_string();
-    let response = client::post(host, port, "/kimi-web-restart", &[], &body, TIMEOUT)
-        .map_err(|e: ClientError| e.to_string())?;
+    let response = client::post(
+        host,
+        port,
+        "/kimi-web-restart",
+        &[],
+        &body,
+        Duration::from_secs(120),
+    )
+    .map_err(|e: ClientError| e.to_string())?;
     if response.status != 200 {
         // 端点拒绝时 body 携带原因（如活跃会话保护），原样透传
         return Err(response.body);
