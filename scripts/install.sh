@@ -1,7 +1,7 @@
 #!/bin/sh
 # AgentPocket mesh 守护进程一键安装：下载二进制 + systemd 服务 + 自启动。
 # 用法：curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/scripts/install.sh | sudo bash
-# 卸载：同命令加 --uninstall
+# 卸载：sudo agentpocket uninstall（或同命令加 --uninstall）
 set -eu
 
 REPO="npu-chenlin/AgentPocket"
@@ -9,6 +9,10 @@ BIN_PATH="/usr/local/bin/agentpocket"
 SERVICE_PATH="/etc/systemd/system/agentpocket.service"
 
 if [ "${1:-}" = "--uninstall" ]; then
+    # 二进制自带卸载命令，优先委托给它
+    if [ -x "$BIN_PATH" ]; then
+        exec "$BIN_PATH" uninstall
+    fi
     systemctl stop agentpocket 2>/dev/null || true
     systemctl disable agentpocket 2>/dev/null || true
     rm -f "$SERVICE_PATH" "$BIN_PATH"
@@ -69,3 +73,4 @@ echo "  状态    systemctl status agentpocket"
 echo "  日志    journalctl -u agentpocket -f"
 echo "  发现    sudo -u ${RUN_USER} ${BIN_PATH} peers"
 echo "  同步    sudo -u ${RUN_USER} ${BIN_PATH} pull <桌面机IP或MagicDNS名>"
+echo "  卸载    sudo ${BIN_PATH} uninstall"

@@ -2,6 +2,7 @@ mod mesh;
 mod ops;
 mod paths;
 mod status;
+mod uninstall;
 mod update;
 
 use std::time::Duration;
@@ -40,6 +41,8 @@ enum Command {
     Status,
     /// 手动检查并更新
     Update,
+    /// 停止并移除服务与二进制（需 sudo，配置保留）
+    Uninstall,
 }
 
 fn main() {
@@ -173,5 +176,6 @@ fn main() {
                 }
             }
         }
+        Command::Uninstall => uninstall::run(),
     }
 }

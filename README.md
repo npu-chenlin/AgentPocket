@@ -156,6 +156,7 @@ curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/script
 | `agentpocket push <IP或MagicDNS名>` | 把本机配置推送给某节点（对方自动合并） |
 | `agentpocket status` | 查看本机所配服务器的在线/版本/活跃会话 |
 | `agentpocket update` | 手动检查更新；服务每 24 小时自动检查，若安装为非 root 服务，按提示执行 `sudo agentpocket update` 完成更新 |
+| `sudo agentpocket uninstall` | 停止并移除服务与二进制（配置目录保留） |
 
 （若以其他用户登录，用 sudo -u <服务用户> agentpocket …；配置与服务共用同一用户目录）
 
