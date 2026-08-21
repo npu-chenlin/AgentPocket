@@ -62,16 +62,16 @@ app.innerHTML = `
           <h2 id="servers-title">服务器</h2>
           <button id="add-server" class="primary-button" type="button">添加服务器</button>
         </div>
-        <div id="server-list" class="server-list" aria-live="polite"></div>
+        <div id="server-list" class="server-list"></div>
       </section>
     </main>
 
     <div id="toast-root" class="toast-root" aria-live="polite"></div>
   </div>
 
-  <dialog id="settings-dialog" class="modal modal--small">
+  <dialog id="settings-dialog" class="modal modal--small" aria-labelledby="settings-dialog-title">
     <div class="modal__heading">
-      <h2>设置</h2>
+      <h2 id="settings-dialog-title">设置</h2>
       <button class="modal__close" type="button" data-close-dialog="settings-dialog" aria-label="关闭">×</button>
     </div>
     <div class="settings-body">
@@ -91,8 +91,8 @@ app.innerHTML = `
         <h3 class="mesh-section__title">Mesh 同步</h3>
         <div id="mesh-peers" class="mesh-peers" aria-live="polite"></div>
         <div class="mesh-toolbar">
-          <input id="mesh-add-host" class="mesh-input" autocomplete="off" placeholder="100.x.x.x 或 MagicDNS 名" />
-          <input id="mesh-add-name" class="mesh-input" autocomplete="off" placeholder="备注名（可选）" />
+          <input id="mesh-add-host" class="mesh-input" autocomplete="off" placeholder="100.x.x.x 或 MagicDNS 名" aria-label="节点地址" />
+          <input id="mesh-add-name" class="mesh-input" autocomplete="off" placeholder="备注名（可选）" aria-label="备注名（可选）" />
           <button id="mesh-add" class="secondary-button" type="button">添加</button>
           <button id="mesh-refresh" class="text-button" type="button">刷新</button>
         </div>
@@ -105,7 +105,7 @@ app.innerHTML = `
     </div>
   </dialog>
 
-  <dialog id="server-dialog" class="modal">
+  <dialog id="server-dialog" class="modal" aria-labelledby="server-dialog-title">
     <form id="server-form" method="dialog" novalidate>
       <div class="modal__heading">
         <h2 id="server-dialog-title">添加服务器</h2>
@@ -129,9 +129,9 @@ app.innerHTML = `
     </form>
   </dialog>
 
-  <dialog id="import-dialog" class="modal modal--small">
+  <dialog id="import-dialog" class="modal modal--small" aria-labelledby="import-dialog-title">
     <form id="import-form" method="dialog">
-      <div class="modal__heading"><h2>确认导入</h2></div>
+      <div class="modal__heading"><h2 id="import-dialog-title">确认导入</h2></div>
       <p id="import-summary" class="modal__summary"></p>
       <ul id="import-issues" class="issue-list"></ul>
       <fieldset class="mode-picker">
@@ -148,14 +148,14 @@ app.innerHTML = `
     </form>
   </dialog>
 
-  <dialog id="paste-dialog" class="modal modal--small">
+  <dialog id="paste-dialog" class="modal modal--small" aria-labelledby="paste-dialog-title">
     <form id="paste-form" method="dialog">
       <div class="modal__heading">
-        <h2>粘贴导入</h2>
+        <h2 id="paste-dialog-title">粘贴导入</h2>
         <button class="modal__close" type="button" data-close-dialog="paste-dialog" aria-label="关闭">×</button>
       </div>
       <p class="modal__summary">把复制好的 JSON 配置粘贴到下方。</p>
-      <textarea id="paste-content" class="code-area" rows="10" spellcheck="false" placeholder='[{"name":"工作站","host":"100.64.0.2","port":3080,"backend":"dsh"}]'></textarea>
+      <textarea id="paste-content" class="code-area" rows="10" spellcheck="false" placeholder='[{"name":"工作站","host":"100.64.0.2","port":3080,"backend":"dsh"}]' aria-label="粘贴的配置 JSON"></textarea>
       <div id="paste-error" class="inline-error" role="alert"></div>
       <div class="modal__actions">
         <span class="modal__spacer"></span>
@@ -165,14 +165,14 @@ app.innerHTML = `
     </form>
   </dialog>
 
-  <dialog id="export-dialog" class="modal">
+  <dialog id="export-dialog" class="modal" aria-labelledby="export-dialog-title">
     <div class="modal__heading">
-      <h2>导出配置</h2>
+      <h2 id="export-dialog-title">导出配置</h2>
       <button class="modal__close" type="button" data-close-dialog="export-dialog" aria-label="关闭">×</button>
     </div>
     <p class="credential-warning">${CREDENTIAL_WARNING}</p>
     <p class="modal__summary">直接复制下方 JSON，或另存为文件。</p>
-    <textarea id="export-text" class="code-area" rows="12" readonly spellcheck="false"></textarea>
+    <textarea id="export-text" class="code-area" rows="12" readonly spellcheck="false" aria-label="导出的配置 JSON"></textarea>
     <div class="modal__actions">
       <button id="copy-export" class="secondary-button" type="button">复制</button>
       <span class="modal__spacer"></span>
@@ -181,9 +181,9 @@ app.innerHTML = `
     </div>
   </dialog>
 
-  <dialog id="sync-dialog" class="modal modal--small">
+  <dialog id="sync-dialog" class="modal modal--small" aria-labelledby="sync-dialog-title">
     <div class="modal__heading">
-      <h2>手机同步</h2>
+      <h2 id="sync-dialog-title">手机同步</h2>
       <button class="modal__close" type="button" data-close-dialog="sync-dialog" aria-label="关闭">×</button>
     </div>
     <select id="sync-address" class="sync-address" aria-label="对外地址"></select>
@@ -507,7 +507,11 @@ meshPeers.addEventListener("click", async (event) => {
     } else if (action === "push") {
       const counts = await invoke<PushCounts>(commands.meshPush, { host });
       const name = meshPeerViews.find((peer) => peer.host === host)?.name ?? host;
-      setMessage(`已推送到 ${name}：新增 ${counts.added} / 更新 ${counts.updated}`, "success");
+      const detail =
+        counts.added === 0 && counts.updated === 0
+          ? "已是最新"
+          : `新增 ${counts.added} / 更新 ${counts.updated}`;
+      setMessage(`已推送到 ${name}：${detail}`, "success");
     } else if (action === "remove") {
       // 删除手动 peer：全量写回过滤后的列表，再刷新发现结果。
       const settings = currentView?.settings;
@@ -517,7 +521,7 @@ meshPeers.addEventListener("click", async (event) => {
           settings: { ...settings, meshPeers: settings.meshPeers.filter((peer) => peer.host !== host) },
         }),
       );
-      setMessage("已删除 peer", "success");
+      setMessage("已删除节点", "success");
       await refreshMeshPeers();
     }
   } catch (error) {

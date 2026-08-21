@@ -92,6 +92,8 @@ function renderServerCard(
   const id = escapeHtml(server.id);
   const name = escapeHtml(server.name);
   const address = escapeHtml(`${server.host}:${server.port}`);
+  // 离线且后端给出了错误原因时，用 tooltip 透出，让用户知道为什么离线。
+  const statusTitle = !connected && status?.error ? ` title="${escapeHtml(status.error)}"` : "";
   const version = status?.serverVersion
     ? `
               <span class="server-meta-sep" aria-hidden="true">·</span>
@@ -111,7 +113,7 @@ function renderServerCard(
             <span class="server-meta">
               <span class="server-address">${address}</span>${version}
               <span class="server-meta-sep" aria-hidden="true">·</span>
-              <span class="server-status${connected ? " server-status--online" : ""}">${statusLabel(status)}</span>
+              <span class="server-status${connected ? " server-status--online" : ""}"${statusTitle}>${statusLabel(status)}</span>
             </span>
           </span>
         </button>

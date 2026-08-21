@@ -63,10 +63,22 @@ describe("renderServerList", () => {
     expect(html).not.toContain("data-action=\"activate\"");
   });
 
-  it("never serializes token-like error details", () => {
-    const html = renderServerList(viewFixture());
-    expect(html).not.toContain("secret-token");
+  it("surfaces escaped error details as a tooltip on the offline status", () => {
+    const view = viewFixture();
+    view.statuses["kimi-1"].error = 'dial "tcp" <b> timeout';
+    const html = renderServerList(view);
     expect(html).toContain("连接异常");
+    expect(html).toContain('title="dial &quot;tcp&quot; &lt;b&gt; timeout"');
+    expect(html).not.toContain("<b> timeout");
+  });
+
+  it("omits the status tooltip when there is no error", () => {
+    const view = viewFixture();
+    view.statuses["kimi-1"].error = null;
+    const html = renderServerList(view);
+    expect(html).toContain("server-status--online");
+    expect(html).not.toContain("server-status\" title=");
+    expect(html).not.toContain("secret-token");
   });
 
   it("escapes server fields", () => {
