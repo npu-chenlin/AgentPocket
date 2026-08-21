@@ -784,6 +784,7 @@ public class MainActivity extends ComponentActivity {
             String sessionId = o.optString("sessionId");
             String title = o.optString("title", "");
             String serverName = o.optString("serverName", "");
+            String activity = o.optString("activity", "");
             ServerStore.Server server = null;
             for (ServerStore.Server s : servers) {
                 if (s.id.equals(serverId)) { server = s; break; }
@@ -821,6 +822,16 @@ public class MainActivity extends ComponentActivity {
             sub.setTextColor(UiKit.TEXT_SECONDARY);
             if (text.getChildCount() > 0) sub.setPadding(0, dp(3), 0, 0);
             text.addView(sub);
+            if (!activity.isEmpty()) {
+                TextView act = new TextView(this);
+                act.setText(activity);
+                act.setTextSize(12);
+                act.setTextColor(UiKit.TEXT_SECONDARY);
+                act.setSingleLine(true);
+                act.setEllipsize(TextUtils.TruncateAt.END);
+                act.setPadding(0, dp(3), 0, 0);
+                text.addView(act);
+            }
             card.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
 
             ProgressBar spinner = new ProgressBar(this);

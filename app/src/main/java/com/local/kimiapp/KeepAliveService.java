@@ -179,7 +179,8 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
                             .put("serverId", s[0])
                             .put("serverName", m.serverName())
                             .put("sessionId", s[1])
-                            .put("title", s[2]));
+                            .put("title", s[2])
+                            .put("activity", s.length > 3 ? s[3] : ""));
                 } catch (Exception ignored) {}
             }
         }

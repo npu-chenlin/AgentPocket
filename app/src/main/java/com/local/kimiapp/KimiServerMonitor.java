@@ -40,6 +40,15 @@ public class KimiServerMonitor extends ServerMonitor {
     private final Map<String, Boolean> busyBySession = Collections.synchronizedMap(new HashMap<>());
     private final Map<String, String> pendingBySession = Collections.synchronizedMap(new HashMap<>());
 
+    // 会话当前活动展示（与桌面端 transcript 相位逻辑一致）：
+    // activityBySession: sessionId -> 展示文本（如 "Bash · git push" / "思考中"）
+    // toolCommands: sessionId -> (toolCallId -> 命令首行预览)
+    // currentTool: sessionId -> [toolCallId, 工具名]
+    private final Map<String, String> activityBySession = Collections.synchronizedMap(new HashMap<>());
+    private final Map<String, Map<String, String>> toolCommands = Collections.synchronizedMap(new HashMap<>());
+    private final Map<String, String[]> currentTool = Collections.synchronizedMap(new HashMap<>());
+    private long lastActivityNotify;
+
     public KimiServerMonitor(MonitorHost host, ServerStore.Server server, OkHttpClient client) {
         super(host, server, client);
     }
@@ -59,7 +68,9 @@ public class KimiServerMonitor extends ServerMonitor {
         synchronized (busyBySession) {
             for (Map.Entry<String, Boolean> entry : busyBySession.entrySet()) {
                 if (Boolean.TRUE.equals(entry.getValue())) {
-                    result.add(new String[]{ server.id, entry.getKey(), getTitle(entry.getKey()) });
+                    String activity = activityBySession.get(entry.getKey());
+                    result.add(new String[]{ server.id, entry.getKey(), getTitle(entry.getKey()),
+                            activity != null ? activity : "" });
                 }
             }
         }
@@ -107,6 +118,9 @@ public class KimiServerMonitor extends ServerMonitor {
                         titleCache.clear();
                         busyBySession.clear();
                         pendingBySession.clear();
+                        activityBySession.clear();
+                        toolCommands.clear();
+                        currentTool.clear();
                         for (int i = 0; i < items.length(); i++) {
                             JSONObject item = items.getJSONObject(i);
                             String id = item.getString("id");
@@ -155,6 +169,12 @@ public class KimiServerMonitor extends ServerMonitor {
                 List<String> ids = new ArrayList<>(titleCache.keySet());
                 try {
                     sendJson(ws, buildClientHello(ids));
+                    // 订阅 transcript 块粒度流，用于展示会话当前活动（与桌面端一致）
+                    for (String id : ids) {
+                        if (Boolean.TRUE.equals(busyBySession.get(id))) {
+                            sendJson(ws, buildSubscribeV2(id));
+                        }
+                    }
                 } catch (JSONException e) {
                     Log.e(TAG, server.name + " hello failed", e);
                 }
@@ -227,6 +247,21 @@ public class KimiServerMonitor extends ServerMonitor {
                     Log.w(TAG, server.name + " error: " + text);
                     break;
 
+                case "transcript.ops": {
+                    String sessionId = msg.optString("session_id", "");
+                    JSONArray ops = msg.optJSONObject("payload") != null
+                            ? msg.optJSONObject("payload").optJSONArray("ops") : null;
+                    if (!sessionId.isEmpty() && ops != null) { applyActivityOps(sessionId, ops); refreshActivityThrottled(); }
+                    break;
+                }
+
+                case "transcript.reset": {
+                    String sessionId = msg.optString("session_id", "");
+                    JSONObject phase = optPath(msg, "payload", "snapshot", "meta", "agent", "phase");
+                    if (!sessionId.isEmpty() && phase != null) { applyPhase(sessionId, phase); refreshActivityThrottled(); }
+                    break;
+                }
+
                 default:
                     if (type.startsWith("event.session.")) {
                         handleProtocolEvent(msg);
@@ -257,6 +292,7 @@ public class KimiServerMonitor extends ServerMonitor {
                 boolean isActive = !"idle".equals(status);
                 if (!sessionId.isEmpty() && wasActive != isActive) {
                     busyBySession.put(sessionId, isActive);
+                    if (!isActive) clearActivity(sessionId);
                     activeCount = busyCount();
                 }
                 notifySummary();
@@ -289,6 +325,7 @@ public class KimiServerMonitor extends ServerMonitor {
                 boolean busy = payload.optBoolean("busy", false);
                 boolean wasBusy = Boolean.TRUE.equals(busyBySession.get(sessionId));
                 busyBySession.put(sessionId, busy);
+                if (!busy) clearActivity(sessionId);
                 if (busy != wasBusy) {
                     activeCount = busyCount();
                     notifySummary();
@@ -329,6 +366,7 @@ public class KimiServerMonitor extends ServerMonitor {
                         if (webSocket != null) {
                             try {
                                 sendJson(webSocket, buildSubscribe(Collections.singletonList(newId)));
+                                sendJson(webSocket, buildSubscribeV2(newId));
                             } catch (JSONException e) {}
                         }
                     }
@@ -395,6 +433,105 @@ public class KimiServerMonitor extends ServerMonitor {
         if (server.token != null && !server.token.isEmpty())
             req.header("Authorization", "Bearer " + server.token);
         return req.build();
+    }
+
+    // --- transcript 活动展示（与桌面端 protocol/kimi.rs 逻辑一致） ---
+
+    private static JSONObject optPath(JSONObject root, String... keys) {
+        JSONObject cur = root;
+        for (String key : keys) {
+            if (cur == null) return null;
+            cur = cur.optJSONObject(key);
+        }
+        return cur;
+    }
+
+    /** 命令预览：取首个非空行并截断到 80 字符，避免把整段脚本塞进界面。 */
+    private static String commandPreview(String inputText) {
+        String firstLine = "";
+        for (String line : inputText.split("\n", -1)) {
+            String t = line.trim();
+            if (!t.isEmpty()) { firstLine = t; break; }
+        }
+        final int MAX = 80;
+        if (firstLine.length() <= MAX) return firstLine;
+        return firstLine.substring(0, MAX) + "…";
+    }
+
+    private void applyPhase(String sessionId, JSONObject phase) {
+        String kind = phase.optString("kind", "");
+        if ("tool_call".equals(kind)) {
+            String toolCallId = phase.optString("toolCallId", "");
+            String name = phase.optString("name", "工具");
+            Map<String, String> cmds = toolCommands.get(sessionId);
+            String command = (cmds != null && !toolCallId.isEmpty()) ? cmds.get(toolCallId) : null;
+            String display = command != null ? name + " · " + command : name;
+            currentTool.put(sessionId, new String[]{ toolCallId, name });
+            activityBySession.put(sessionId, display);
+        } else if ("streaming".equals(kind) || "running".equals(kind)) {
+            currentTool.remove(sessionId);
+            activityBySession.put(sessionId, "思考中");
+        }
+    }
+
+    private void applyActivityOps(String sessionId, JSONArray ops) {
+        for (int i = 0; i < ops.length(); i++) {
+            JSONObject op = ops.optJSONObject(i);
+            if (op == null) continue;
+            String opType = op.optString("op", "");
+            if ("meta.merge".equals(opType)) {
+                JSONObject phase = optPath(op, "meta", "agent", "phase");
+                if (phase != null) applyPhase(sessionId, phase);
+            } else if ("frame.upsert".equals(opType)) {
+                JSONObject frame = op.optJSONObject("frame");
+                if (frame == null || !"tool".equals(frame.optString("kind", ""))) continue;
+                String toolCallId = frame.optString("toolCallId", "");
+                if (toolCallId.isEmpty()) continue;
+                String inputText = frame.optString("inputText", "");
+                if (!inputText.isEmpty()) {
+                    String preview = commandPreview(inputText);
+                    if (!preview.isEmpty()) {
+                        Map<String, String> cmds = toolCommands.get(sessionId);
+                        if (cmds == null) { cmds = Collections.synchronizedMap(new HashMap<>()); toolCommands.put(sessionId, cmds); }
+                        cmds.put(toolCallId, preview);
+                    }
+                }
+                // 命令到达时若相位正指向该工具，刷新展示文本。
+                String[] cur = currentTool.get(sessionId);
+                if (cur != null && cur[0].equals(toolCallId)) {
+                    Map<String, String> cmds = toolCommands.get(sessionId);
+                    String cmd = cmds != null ? cmds.get(toolCallId) : null;
+                    if (cmd != null) activityBySession.put(sessionId, cur[1] + " · " + cmd);
+                }
+            } else if ("turn.upsert".equals(opType)) {
+                // 新轮次开始，丢弃上一轮命令缓存防止无界增长。
+                toolCommands.remove(sessionId);
+            }
+        }
+    }
+
+    private void clearActivity(String sessionId) {
+        activityBySession.remove(sessionId);
+        toolCommands.remove(sessionId);
+        currentTool.remove(sessionId);
+    }
+
+    /** transcript 块粒度事件可能较密，节流 1s 刷新一次摘要/会话列表，避免高频重建通知。 */
+    private void refreshActivityThrottled() {
+        long now = System.currentTimeMillis();
+        if (now - lastActivityNotify >= 1000) {
+            lastActivityNotify = now;
+            notifySummary();
+        }
+    }
+
+    private static JSONObject buildSubscribeV2(String sessionId) throws JSONException {
+        return new JSONObject()
+                .put("type", "subscribe_v2")
+                .put("id", UUID.randomUUID().toString())
+                .put("payload", new JSONObject()
+                        .put("session_id", sessionId)
+                        .put("transcript", new JSONObject().put("main", "block")));
     }
 
     private static JSONObject buildClientHello(List<String> sessionIds) throws JSONException {
