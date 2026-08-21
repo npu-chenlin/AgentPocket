@@ -158,8 +158,8 @@ curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/script
 | `agentpocket update` | 手动检查更新；服务每 24 小时自动检查，若安装为非 root 服务，按提示执行 `sudo agentpocket update` 完成更新 |
 | `sudo agentpocket uninstall` | 停止并移除服务与二进制（配置目录保留） |
 | `agentpocket completions bash` | 输出 shell 补全脚本（bash 安装时已自动装入 `/usr/share/bash-completion/completions/`，zsh/fish 可重定向到各自的补全目录） |
-| `agentpocket kimi [host]` | 查询本机（或某节点）的 Kimi Code CLI 版本 |
-| `agentpocket kimi [host] --upgrade` | 在本机（或某节点）安装/升级 Kimi Code CLI，走官方安装脚本 |
+| `agentpocket kimi [host]` | 查询本机（或某节点）的 Kimi Code CLI 版本，含 npm 安装探测 |
+| `agentpocket kimi [host] --upgrade` | 归一化到官方版：发现 npm 安装（nvm/全局前缀）先移除，再执行官方安装脚本 |
 
 （若以其他用户登录，用 sudo -u <服务用户> agentpocket …；配置与服务共用同一用户目录）
 

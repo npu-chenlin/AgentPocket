@@ -136,8 +136,17 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
                 .with_header(json_header()));
         }
         (Method::Get, "/kimi-info") => {
-            let (installed, version) = crate::kimi::info(&ctx.kimi_home);
-            let body = serde_json::json!({ "installed": installed, "version": version });
+            let state = crate::kimi::detect(&ctx.kimi_home);
+            let npm: Vec<serde_json::Value> = state
+                .npm
+                .iter()
+                .map(|n| serde_json::json!({ "prefix": n.prefix, "version": n.version }))
+                .collect();
+            let body = serde_json::json!({
+                "installed": state.official.is_some(),
+                "version": state.official,
+                "npm": npm,
+            });
             let _ = request.respond(Response::from_string(body.to_string())
                 .with_status_code(StatusCode(200))
                 .with_header(json_header()));
@@ -153,18 +162,22 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
                 })
                 .unwrap_or_else(|| "未知来源".to_string());
 
-            // 安装脚本下载+执行可能要数分钟，挪到工作线程，不阻塞 mesh 其余请求
+            // 卸 npm + 官方脚本下载执行可能要数分钟，挪到工作线程，不阻塞 mesh 其余请求
             let kimi_home = ctx.kimi_home.clone();
             std::thread::spawn(move || {
-                match crate::kimi::install_or_upgrade(&kimi_home) {
+                match crate::kimi::ensure_official(&kimi_home) {
                     Ok(outcome) => {
                         println!(
-                            "[mesh] {source} 触发 Kimi Code 升级：{:?} -> {:?}",
-                            outcome.before, outcome.after
+                            "[mesh] {source} 触发 Kimi Code 归一化：{:?} -> {:?}，移除 npm {} 处",
+                            outcome.before,
+                            outcome.after,
+                            outcome.npm_removed.len()
                         );
                         let body = serde_json::json!({
                             "before": outcome.before,
                             "after": outcome.after,
+                            "npmRemoved": outcome.npm_removed,
+                            "npmFailed": outcome.npm_failed,
                         });
                         let _ = request.respond(Response::from_string(body.to_string())
                             .with_status_code(StatusCode(200))
