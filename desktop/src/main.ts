@@ -510,6 +510,30 @@ meshPeers.addEventListener("click", async (event) => {
       const result = await invoke<KimiSyncResult>(commands.meshPush, { host });
       const name = meshPeerViews.find((peer) => peer.host === host)?.name ?? host;
       setMessage(`已推送 config.toml（${result.bytes} 字节）到 ${name}`, "success");
+    } else if (action === "upgrade") {
+      const name = meshPeerViews.find((peer) => peer.host === host)?.name ?? host;
+      setMessage(`正在升级 ${name} 的 Kimi Code CLI（可能需要数分钟）…`, "info");
+      const message = await invoke<string>(commands.meshKimiUpgrade, { host });
+      setMessage(`${name}：${message}`, "success");
+      await refreshMeshPeers();
+    } else if (action === "restart-web") {
+      const name = meshPeerViews.find((peer) => peer.host === host)?.name ?? host;
+      if (!window.confirm(`确认重启 ${name} 的 kimi web 服务？`)) return;
+      try {
+        const message = await invoke<string>(commands.meshKimiWebRestart, { host, force: false });
+        setMessage(message, "success");
+      } catch (firstError) {
+        const reason = errorMessage(firstError);
+        // daemon 的活跃会话保护拒绝：展示会话数并允许二次确认强制重启
+        if (reason.includes("会话运行中") && window.confirm(`${reason}\n仍要强制重启吗？`)) {
+          const message = await invoke<string>(commands.meshKimiWebRestart, { host, force: true });
+          setMessage(message, "success");
+        } else {
+          setMessage(`重启已取消：${reason}`, "info");
+          return;
+        }
+      }
+      await refreshMeshPeers();
     } else if (action === "remove") {
       // 删除手动 peer：全量写回过滤后的列表，再刷新发现结果。
       const settings = currentView?.settings;
@@ -523,7 +547,16 @@ meshPeers.addEventListener("click", async (event) => {
       await refreshMeshPeers();
     }
   } catch (error) {
-    const prefix = action === "pull" ? "拉取失败" : action === "push" ? "推送失败" : "删除失败";
+    const prefix =
+      action === "pull"
+        ? "拉取失败"
+        : action === "push"
+          ? "推送失败"
+          : action === "upgrade"
+            ? "升级失败"
+            : action === "restart-web"
+              ? "重启失败"
+              : "删除失败";
     setMessage(`${prefix}：${errorMessage(error)}`, "error");
   } finally {
     button.disabled = false;

@@ -21,8 +21,10 @@ use crate::model::MeshPeerEntry;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// 拉取/推送 HTTP 请求超时。
 const MESH_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+/// 重启 kimi web 的超时：带活跃会话时 systemd 停止阶段可能要几十秒。
+const RESTART_TIMEOUT: Duration = Duration::from_secs(150);
 
-/// 前端展示用：一个 mesh peer 及其在线状态。
+/// 前端展示用：一个 mesh peer 及其在线状态、Kimi Code CLI / kimi web 状态。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MeshPeerView {
@@ -31,6 +33,9 @@ pub struct MeshPeerView {
     pub version: Option<String>,
     pub online: bool,
     pub manual: bool,
+    pub kimi_version: Option<String>,
+    pub web_active: bool,
+    pub web_port: Option<u16>,
 }
 
 /// config.toml 同步完成回执。
@@ -62,14 +67,81 @@ pub async fn mesh_push(host: String) -> Result<KimiSyncResult, CommandError> {
     mesh_push_at(&home, &host, MESH_PORT)
 }
 
+/// 远端 Kimi Code CLI 升级（daemon /kimi-upgrade，含 npm 归一化；耗时放宽到 11 分钟）。
+#[tauri::command]
+pub async fn mesh_kimi_upgrade(host: String) -> Result<String, CommandError> {
+    let response = mesh_client::post(
+        &host,
+        MESH_PORT,
+        "/kimi-upgrade",
+        &[],
+        "",
+        Duration::from_secs(660),
+    )?;
+    if response.status != 200 {
+        return Err(CommandError::Mesh(format!(
+            "对方返回 HTTP {}：{}",
+            response.status, response.body
+        )));
+    }
+    let value: serde_json::Value = serde_json::from_str(&response.body)
+        .map_err(|e| CommandError::Mesh(format!("升级应答解析失败：{e}")))?;
+    Ok(match (value["before"].as_str(), value["after"].as_str()) {
+        (Some(b), Some(a)) if b == a => format!("已是最新：{a}"),
+        (Some(b), Some(a)) => format!("升级完成：{b} -> {a}"),
+        (None, Some(a)) => format!("安装完成：{a}"),
+        (_, None) => "安装脚本已执行，但未能确认版本".to_string(),
+    })
+}
+
+/// 远端重启 kimi web 服务（daemon /kimi-web-restart）。
+/// 有活跃会话时 daemon 会拒绝；force=true 强制重启（GUI 需二次确认后才传）。
+#[tauri::command]
+pub async fn mesh_kimi_web_restart(host: String, force: bool) -> Result<String, CommandError> {
+    let body = serde_json::json!({ "force": force }).to_string();
+    let response =
+        mesh_client::post(&host, MESH_PORT, "/kimi-web-restart", &[], &body, RESTART_TIMEOUT)?;
+    if response.status != 200 {
+        // daemon 拒绝原因（如活跃会话保护）原样透传给前端
+        return Err(CommandError::Mesh(response.body));
+    }
+    Ok("对方 kimi web 服务已重启".to_string())
+}
+
 /// 发现 peer：tailscale 在线设备 + 手动 peer 合并探测，未应答的手动 peer
 /// 补 online:false 行（对端 daemon 可能暂时离线，仍需展示以便推送配置）。
+/// 在线 peer 追加一次 /kimi-info 探测，补齐 Kimi CLI 版本与 web 服务状态。
 fn discover_peers(state: &AppState) -> Vec<MeshPeerView> {
     let manual = manual_peers(state);
     let mut candidates = discovery::tailscale_candidates(discovery::find_tailscale_binary().as_deref());
     candidates.extend(manual.iter().map(|peer| (peer.host.clone(), peer.name.clone())));
     let probed = discovery::probe_candidates(&candidates, PROBE_TIMEOUT);
-    merge_views(&manual, probed)
+    let mut views = merge_views(&manual, probed);
+    for view in views.iter_mut().filter(|v| v.online) {
+        let (kimi_version, web_active, web_port) = fetch_kimi_info(&view.host);
+        view.kimi_version = kimi_version;
+        view.web_active = web_active;
+        view.web_port = web_port;
+    }
+    views
+}
+
+fn fetch_kimi_info(host: &str) -> (Option<String>, bool, Option<u16>) {
+    let Ok(response) = mesh_client::get(host, MESH_PORT, "/kimi-info", &[], PROBE_TIMEOUT) else {
+        return (None, false, None);
+    };
+    if response.status != 200 {
+        return (None, false, None);
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&response.body) else {
+        return (None, false, None);
+    };
+    let web = &value["web"];
+    (
+        value["version"].as_str().map(String::from),
+        web["active"].as_bool().unwrap_or(false),
+        web["port"].as_u64().and_then(|p| u16::try_from(p).ok()),
+    )
 }
 
 fn manual_peers(state: &AppState) -> Vec<MeshPeerEntry> {
@@ -99,6 +171,9 @@ fn merge_views(manual: &[MeshPeerEntry], probed: Vec<MeshPeer>) -> Vec<MeshPeerV
                 version: peer.version,
                 online: true,
                 manual: is_manual,
+                kimi_version: None,
+                web_active: false,
+                web_port: None,
             }
         })
         .collect();
@@ -111,6 +186,9 @@ fn merge_views(manual: &[MeshPeerEntry], probed: Vec<MeshPeer>) -> Vec<MeshPeerV
                 version: None,
                 online: false,
                 manual: true,
+                kimi_version: None,
+                web_active: false,
+                web_port: None,
             });
         }
     }
@@ -321,6 +399,9 @@ mod tests {
                     version: Some("2.10.0".to_string()),
                     online: true,
                     manual: true,
+                    kimi_version: None,
+                    web_active: false,
+                    web_port: None,
                 },
                 // 未应答的手动 peer 补 online:false 行，version 为 None。
                 MeshPeerView {
@@ -329,6 +410,9 @@ mod tests {
                     version: None,
                     online: false,
                     manual: true,
+                    kimi_version: None,
+                    web_active: false,
+                    web_port: None,
                 },
             ]
         );

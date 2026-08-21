@@ -30,6 +30,16 @@ function renderMeshPeerRow(peer: MeshPeerView): string {
     : `
         <span class="server-meta-sep" aria-hidden="true">·</span>
         <span class="mesh-peer-offline">离线</span>`;
+  const kimi = peer.kimiVersion
+    ? `
+        <span class="server-meta-sep" aria-hidden="true">·</span>
+        <span class="mesh-peer-version">kimi v${escapeHtml(peer.kimiVersion)}</span>`
+    : "";
+  const web = peer.webActive
+    ? `
+        <span class="server-meta-sep" aria-hidden="true">·</span>
+        <span class="mesh-peer-version">web:${peer.webPort ?? "-"}</span>`
+    : "";
   // 手动登记的 peer 才允许删除；发现得到的 tailscale 节点不显示 ✕。
   const remove = peer.manual
     ? `
@@ -42,12 +52,14 @@ function renderMeshPeerRow(peer: MeshPeerView): string {
       <span class="mesh-peer-copy">
         <strong class="mesh-peer-name">${name}</strong>
         <span class="mesh-peer-meta">
-          <span class="mesh-peer-host">${host}</span>${version}${offline}
+          <span class="mesh-peer-host">${host}</span>${version}${offline}${kimi}${web}
         </span>
       </span>
       <span class="mesh-peer-actions">
         <button class="text-button" type="button" data-mesh-action="pull" data-mesh-host="${host}" aria-label="从 ${name} 拉取 config.toml">拉取</button>
         <button class="text-button" type="button" data-mesh-action="push" data-mesh-host="${host}" aria-label="推送 config.toml 到 ${name}">推送</button>
+        <button class="text-button" type="button" data-mesh-action="upgrade" data-mesh-host="${host}" aria-label="升级 ${name} 的 Kimi Code CLI">升级</button>
+        <button class="text-button" type="button" data-mesh-action="restart-web" data-mesh-host="${host}" aria-label="重启 ${name} 的 kimi web 服务">重启web</button>
       </span>${remove}
     </div>`;
 }

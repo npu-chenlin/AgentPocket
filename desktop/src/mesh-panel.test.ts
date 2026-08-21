@@ -9,6 +9,9 @@ function peerFixture(overrides: Partial<MeshPeerView> = {}): MeshPeerView {
     version: null,
     online: true,
     manual: false,
+    kimiVersion: null,
+    webActive: false,
+    webPort: null,
     ...overrides,
   };
 }
@@ -31,6 +34,17 @@ describe("renderMeshPeerList", () => {
   it("omits the version segment when the peer reports none", () => {
     const html = renderMeshPeerList({ peers: [peerFixture()], loading: false });
     expect(html).not.toContain("mesh-peer-version");
+  });
+
+  it("shows kimi version and web state, with upgrade/restart-web buttons", () => {
+    const html = renderMeshPeerList({
+      peers: [peerFixture({ kimiVersion: "0.38.0", webActive: true, webPort: 58627 })],
+      loading: false,
+    });
+    expect(html).toContain("kimi v0.38.0");
+    expect(html).toContain("web:58627");
+    expect(html).toContain('data-mesh-action="upgrade"');
+    expect(html).toContain('data-mesh-action="restart-web"');
   });
 
   it("shows offline manual peers with a gray dot and offline label", () => {

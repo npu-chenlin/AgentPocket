@@ -148,6 +148,50 @@ fn kimi_remote_upgrade_via(host: &str, port: u16) -> Result<String, String> {
     ))
 }
 
+pub fn kimi_web_enable(config_dir: &Path, home: &Path, port: u16) -> Result<String, String> {
+    crate::kimi_web::enable(home, port)?;
+    let registered = crate::kimi_web::register_server_entry(config_dir, port)?;
+    Ok(format!("kimi web 服务已生成并启动（端口 {port}）；{registered}"))
+}
+
+pub fn kimi_web_restart(home: &Path, force: bool) -> Result<String, String> {
+    crate::kimi_web::restart_guarded(home, force)?;
+    Ok("kimi web 服务已重启".to_string())
+}
+
+pub fn kimi_web_disable(home: &Path) -> Result<String, String> {
+    crate::kimi_web::disable(home)?;
+    Ok("kimi web 服务已停止并移除".to_string())
+}
+
+pub fn kimi_web_status(home: &Path) -> Result<String, String> {
+    let status = crate::kimi_web::status(home);
+    Ok(if status.installed {
+        format!(
+            "kimi web 服务：{}（端口 {}）",
+            if status.active { "运行中" } else { "未运行" },
+            status.port
+        )
+    } else {
+        "kimi web 服务未生成（agentpocket kimi-web enable 生成）".to_string()
+    })
+}
+
+pub fn kimi_remote_web_restart(host: &str, force: bool) -> Result<String, String> {
+    kimi_remote_web_restart_via(host, MESH_PORT, force)
+}
+
+fn kimi_remote_web_restart_via(host: &str, port: u16, force: bool) -> Result<String, String> {
+    let body = serde_json::json!({ "force": force }).to_string();
+    let response = client::post(host, port, "/kimi-web-restart", &[], &body, TIMEOUT)
+        .map_err(|e: ClientError| e.to_string())?;
+    if response.status != 200 {
+        // 端点拒绝时 body 携带原因（如活跃会话保护），原样透传
+        return Err(response.body);
+    }
+    Ok("对方 kimi web 服务已重启".to_string())
+}
+
 /// 状态视图：官方版版本 + npm 安装清单（两者可能并存）。
 fn format_kimi_state(
     official: Option<&str>,

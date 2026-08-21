@@ -52,6 +52,7 @@ chmod 755 "$BIN_PATH"
 RUN_USER="${SUDO_USER:-root}"
 HOME_DIR="$(getent passwd "$RUN_USER" | cut -d: -f6)"
 [ -n "$HOME_DIR" ] || { HOME_DIR="/root"; RUN_USER="root"; }
+RUN_UID="$(id -u "$RUN_USER")"
 
 cat > "$SERVICE_PATH" <<EOF
 [Unit]
@@ -62,6 +63,7 @@ Wants=network-online.target
 [Service]
 User=${RUN_USER}
 Environment=HOME=${HOME_DIR}
+Environment=XDG_RUNTIME_DIR=/run/user/${RUN_UID}
 ExecStart=${BIN_PATH} serve
 Restart=on-failure
 RestartSec=5
@@ -76,6 +78,18 @@ systemctl enable --now agentpocket
 # bash 补全（新 shell 生效）
 if [ -d /usr/share/bash-completion/completions ]; then
     "$BIN_PATH" completions bash > "$COMPLETION_PATH" 2>/dev/null || true
+fi
+
+# 可选：安装 Kimi Code CLI 并生成 kimi-web 服务（交互终端才询问）
+if [ -e /dev/tty ]; then
+    printf '是否安装 Kimi Code CLI 并生成 kimi-web 服务？[y/N] ' > /dev/tty
+    read -r REPLY < /dev/tty || REPLY=""
+    case "$REPLY" in
+        y|Y)
+            sudo -u "$RUN_USER" "$BIN_PATH" kimi --upgrade > /dev/tty 2>&1 || true
+            sudo -u "$RUN_USER" "$BIN_PATH" kimi-web enable > /dev/tty 2>&1 || true
+            ;;
+    esac
 fi
 
 echo "安装完成："

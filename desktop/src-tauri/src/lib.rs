@@ -140,6 +140,8 @@ pub fn run() {
             mesh::discover_mesh_peers,
             mesh::mesh_pull,
             mesh::mesh_push,
+            mesh::mesh_kimi_upgrade,
+            mesh::mesh_kimi_web_restart,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgentPocket Desktop");

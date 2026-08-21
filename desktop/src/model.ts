@@ -19,6 +19,9 @@ export interface MeshPeerView {
   version: string | null;
   online: boolean;
   manual: boolean;
+  kimiVersion: string | null;
+  webActive: boolean;
+  webPort: number | null;
 }
 
 export interface KimiSyncResult {
@@ -115,6 +118,8 @@ export const commands = {
   discoverMeshPeers: "discover_mesh_peers",
   meshPull: "mesh_pull",
   meshPush: "mesh_push",
+  meshKimiUpgrade: "mesh_kimi_upgrade",
+  meshKimiWebRestart: "mesh_kimi_web_restart",
 } as const;
 
 export function emptyServerDraft(): ServerDraft {

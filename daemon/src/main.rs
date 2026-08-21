@@ -1,4 +1,5 @@
 mod kimi;
+mod kimi_web;
 mod mesh;
 mod ops;
 mod paths;
@@ -16,6 +17,26 @@ use clap::{Parser, Subcommand};
 struct Cli {
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Subcommand)]
+enum KimiWebAction {
+    /// 生成并启动 kimi web 服务，同时注册进本机 AgentPocket 服务器列表
+    Enable {
+        /// 监听端口
+        #[arg(long, default_value_t = kimi_web::DEFAULT_PORT)]
+        port: u16,
+    },
+    /// 重启 kimi web 服务（有活跃会话时拒绝，--force 强制）
+    Restart {
+        /// 忽略活跃会话，强制重启
+        #[arg(long)]
+        force: bool,
+    },
+    /// 停止并移除 kimi web 服务
+    Disable,
+    /// 查看状态
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -46,6 +67,11 @@ enum Command {
         /// 执行安装/升级（缺省只查询版本）
         #[arg(long)]
         upgrade: bool,
+    },
+    /// kimi web 服务管理（用户级 systemd 单元，监听 0.0.0.0、tailnet 内免 token）
+    KimiWeb {
+        #[command(subcommand)]
+        action: KimiWebAction,
     },
     /// 停止并移除服务与二进制（需 sudo，配置保留）
     Uninstall,
@@ -187,6 +213,24 @@ fn main() {
                 (None, true) => ops::kimi_local_upgrade(&home),
                 (Some(host), false) => ops::kimi_remote_status(&host),
                 (Some(host), true) => ops::kimi_remote_upgrade(&host),
+            };
+            match result {
+                Ok(message) => println!("{message}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Command::KimiWeb { action } => {
+            let home = agentpocket_core::kimi_config::home_dir();
+            let result = match action {
+                KimiWebAction::Enable { port } => {
+                    ops::kimi_web_enable(&paths::default_config_dir(), &home, port)
+                }
+                KimiWebAction::Restart { force } => ops::kimi_web_restart(&home, force),
+                KimiWebAction::Disable => ops::kimi_web_disable(&home),
+                KimiWebAction::Status => ops::kimi_web_status(&home),
             };
             match result {
                 Ok(message) => println!("{message}"),

@@ -142,15 +142,93 @@ fn handle_request(mut request: Request, ctx: &MeshContext) {
                 .iter()
                 .map(|n| serde_json::json!({ "prefix": n.prefix, "version": n.version }))
                 .collect();
+            let web = crate::kimi_web::status(&ctx.kimi_home);
             let body = serde_json::json!({
                 "installed": state.official.is_some(),
                 "version": state.official,
                 "npm": npm,
+                "web": {
+                    "installed": web.installed,
+                    "active": web.active,
+                    "port": web.port,
+                },
             });
             let _ = request.respond(Response::from_string(body.to_string())
                 .with_status_code(StatusCode(200))
                 .with_header(json_header()));
         }
+        (Method::Post, "/kimi-web-enable") => {
+            let mut body = String::new();
+            let read_ok = request
+                .as_reader()
+                .take(MAX_BODY_BYTES)
+                .read_to_string(&mut body)
+                .is_ok();
+            let port = read_ok
+                .then(|| serde_json::from_str::<serde_json::Value>(&body).ok())
+                .flatten()
+                .and_then(|v| v["port"].as_u64())
+                .and_then(|p| u16::try_from(p).ok())
+                .unwrap_or(crate::kimi_web::DEFAULT_PORT);
+            let result = (|| -> Result<serde_json::Value, String> {
+                crate::kimi_web::enable(&ctx.kimi_home, port)?;
+                let registered = crate::kimi_web::register_server_entry(&ctx.config_dir, port)?;
+                Ok(serde_json::json!({ "port": port, "registered": registered }))
+            })();
+            match result {
+                Ok(resp) => {
+                    println!("[mesh] kimi web 服务已生成（端口 {port}）");
+                    let _ = request.respond(Response::from_string(resp.to_string())
+                        .with_status_code(StatusCode(200))
+                        .with_header(json_header()));
+                }
+                Err(message) => {
+                    let _ = request.respond(Response::from_string(message)
+                        .with_status_code(StatusCode(400)));
+                }
+            }
+        }
+        (Method::Post, "/kimi-web-restart") => {
+            let mut body = String::new();
+            let read_ok = request
+                .as_reader()
+                .take(MAX_BODY_BYTES)
+                .read_to_string(&mut body)
+                .is_ok();
+            let force = read_ok
+                .then(|| serde_json::from_str::<serde_json::Value>(&body).ok())
+                .flatten()
+                .and_then(|v| v["force"].as_bool())
+                .unwrap_or(false);
+            // 强制重启带活跃会话时 systemd 停止阶段可能要几十秒，挪到工作线程避免阻塞 mesh
+            let kimi_home = ctx.kimi_home.clone();
+            std::thread::spawn(move || {
+                match crate::kimi_web::restart_guarded(&kimi_home, force) {
+                    Ok(()) => {
+                        println!("[mesh] kimi web 服务已重启（force={force}）");
+                        let _ = request.respond(Response::from_string("{\"ok\":true}")
+                            .with_status_code(StatusCode(200))
+                            .with_header(json_header()));
+                    }
+                    Err(message) => {
+                        let _ = request.respond(Response::from_string(message)
+                            .with_status_code(StatusCode(400)));
+                    }
+                }
+            });
+        }
+        (Method::Post, "/kimi-web-disable") => match crate::kimi_web::disable(&ctx.kimi_home) {
+            Ok(()) => {
+                println!("[mesh] kimi web 服务已停用");
+                let _ = request.respond(Response::from_string("{\"ok\":true}")
+                    .with_status_code(StatusCode(200))
+                    .with_header(json_header()));
+            }
+            Err(message) => {
+                let _ = request.respond(Response::from_string(message)
+                    .with_status_code(StatusCode(400)));
+                }
+        },
         (Method::Post, "/kimi-upgrade") => {
             let source = request
                 .headers()
