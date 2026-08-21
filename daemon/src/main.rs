@@ -40,6 +40,8 @@ enum Command {
     Update,
     /// 停止并移除服务与二进制（需 sudo，配置保留）
     Uninstall,
+    /// 输出 shell 自动补全脚本（bash/zsh/fish/elvish/powershell）
+    Completions { shell: clap_complete::Shell },
 }
 
 fn main() {
@@ -170,5 +172,30 @@ fn main() {
             }
         }
         Command::Uninstall => uninstall::run(),
+        Command::Completions { shell } => {
+            use clap::CommandFactory;
+            // 补全按安装后的命令名 agentpocket 生成，而非当前可执行文件名
+            clap_complete::generate(shell, &mut Cli::command(), "agentpocket", &mut std::io::stdout());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn completions_script_covers_command() {
+        let mut buf = Vec::new();
+        clap_complete::generate(
+            clap_complete::Shell::Bash,
+            &mut Cli::command(),
+            "agentpocket",
+            &mut buf,
+        );
+        let script = String::from_utf8(buf).unwrap();
+        assert!(script.contains("agentpocket"));
+        assert!(script.contains("pull"));
     }
 }

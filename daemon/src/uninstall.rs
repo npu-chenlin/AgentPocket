@@ -5,6 +5,7 @@ use crate::paths;
 
 const BIN_PATH: &str = "/usr/local/bin/agentpocket";
 const SERVICE_PATH: &str = "/etc/systemd/system/agentpocket.service";
+const COMPLETION_PATH: &str = "/usr/share/bash-completion/completions/agentpocket";
 
 /// 停止并移除 systemd 服务与二进制；配置目录保留。
 pub fn run() {
@@ -20,6 +21,7 @@ pub fn run() {
     let _ = Command::new("systemctl").args(["daemon-reload"]).status();
     // Linux 允许删除正在运行的二进制，进程退出后文件才真正释放
     let _ = std::fs::remove_file(BIN_PATH);
+    let _ = std::fs::remove_file(COMPLETION_PATH);
     println!(
         "已卸载 agentpocket（配置目录 {} 保留，可手动删除）",
         config_dir.display()

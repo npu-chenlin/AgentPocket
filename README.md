@@ -157,6 +157,7 @@ curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/script
 | `agentpocket status` | 查看本机所配服务器的在线/版本/活跃会话 |
 | `agentpocket update` | 手动检查更新；服务每 24 小时自动检查，若安装为非 root 服务，按提示执行 `sudo agentpocket update` 完成更新 |
 | `sudo agentpocket uninstall` | 停止并移除服务与二进制（配置目录保留） |
+| `agentpocket completions bash` | 输出 shell 补全脚本（bash 安装时已自动装入 `/usr/share/bash-completion/completions/`，zsh/fish 可重定向到各自的补全目录） |
 
 （若以其他用户登录，用 sudo -u <服务用户> agentpocket …；配置与服务共用同一用户目录）
 

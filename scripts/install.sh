@@ -7,6 +7,7 @@ set -eu
 REPO="npu-chenlin/AgentPocket"
 BIN_PATH="/usr/local/bin/agentpocket"
 SERVICE_PATH="/etc/systemd/system/agentpocket.service"
+COMPLETION_PATH="/usr/share/bash-completion/completions/agentpocket"
 
 if [ "${1:-}" = "--uninstall" ]; then
     # 二进制自带卸载命令，优先委托给它
@@ -15,7 +16,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     fi
     systemctl stop agentpocket 2>/dev/null || true
     systemctl disable agentpocket 2>/dev/null || true
-    rm -f "$SERVICE_PATH" "$BIN_PATH"
+    rm -f "$SERVICE_PATH" "$BIN_PATH" "$COMPLETION_PATH"
     systemctl daemon-reload
     echo "已卸载 agentpocket（配置目录 ~/.local/share/com.local.agentpocket.desktop 保留）"
     exit 0
@@ -71,6 +72,11 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now agentpocket
+
+# bash 补全（新 shell 生效）
+if [ -d /usr/share/bash-completion/completions ]; then
+    "$BIN_PATH" completions bash > "$COMPLETION_PATH" 2>/dev/null || true
+fi
 
 echo "安装完成："
 echo "  状态    systemctl status agentpocket"
