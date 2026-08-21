@@ -18,6 +18,8 @@ pub enum UpdateError {
     Parse(String),
     Io(String),
     AssetMissing,
+    /// GitHub 未认证 API 限额 60 次/小时/IP，撞满后返回 403/429。
+    RateLimited(u16),
 }
 
 impl std::fmt::Display for UpdateError {
@@ -29,7 +31,19 @@ impl std::fmt::Display for UpdateError {
             UpdateError::AssetMissing => {
                 write!(f, "最新 release 未提供本架构资产（{}）", arch_asset_name())
             }
+            UpdateError::RateLimited(code) => write!(
+                f,
+                "GitHub API 限流（HTTP {code}，未认证限额 60 次/小时/IP），下个检查周期自动重试，也可稍后手动 agentpocket update"
+            ),
         }
+    }
+}
+
+/// 403/429 归为限流，其余按一般网络错误。
+fn map_http_error(e: ureq::Error) -> UpdateError {
+    match e {
+        ureq::Error::Status(code @ (403 | 429), _) => UpdateError::RateLimited(code),
+        other => UpdateError::Network(other.to_string()),
     }
 }
 
@@ -187,7 +201,7 @@ fn http_get_string(url: &str, timeout: Duration) -> Result<String, UpdateError> 
         .build()
         .get(url)
         .call()
-        .map_err(|e| UpdateError::Network(e.to_string()))?;
+        .map_err(map_http_error)?;
     response
         .into_string()
         .map_err(|e| UpdateError::Network(e.to_string()))
@@ -199,7 +213,7 @@ fn http_get_bytes(url: &str, timeout: Duration) -> Result<Vec<u8>, UpdateError> 
         .build()
         .get(url)
         .call()
-        .map_err(|e| UpdateError::Network(e.to_string()))?;
+        .map_err(map_http_error)?;
     let mut bytes = Vec::new();
     response
         .into_reader()
@@ -296,6 +310,31 @@ mod tests {
         assert!(matches!(
             fetch_latest(&base, &current, TIMEOUT).unwrap(),
             CheckOutcome::AssetMissing
+        ));
+    }
+
+    #[test]
+    fn fetch_latest_rate_limited_is_distinguished() {
+        // mock GitHub 限流应答 → RateLimited 而非一般网络错误。
+        let server = tiny_http::Server::http(("127.0.0.1", 0)).unwrap();
+        let port = match server.server_addr() {
+            tiny_http::ListenAddr::IP(addr) => addr.port(),
+            other => panic!("unexpected listen addr: {other:?}"),
+        };
+        std::thread::spawn(move || {
+            for request in server.incoming_requests() {
+                let _ = request.respond(
+                    tiny_http::Response::from_string(r#"{"message":"API rate limit exceeded"}"#)
+                        .with_status_code(tiny_http::StatusCode(403)),
+                );
+            }
+        });
+
+        let base = format!("http://127.0.0.1:{port}");
+        let current = semver::Version::new(2, 8, 0);
+        assert!(matches!(
+            fetch_latest(&base, &current, TIMEOUT).unwrap_err(),
+            UpdateError::RateLimited(403)
         ));
     }
 

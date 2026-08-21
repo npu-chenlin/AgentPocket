@@ -34,7 +34,11 @@ esac
 ASSET="agentpocket-${ARCH}-linux-musl"
 
 LATEST_URL="https://api.github.com/repos/${REPO}/releases/latest"
-DOWNLOAD_URL="$(curl -fsSL "$LATEST_URL" | tr ',' '\n' | grep -o "https://[^\"]*${ASSET}" | head -n 1)"
+LATEST_JSON="$(curl -fsSL "$LATEST_URL")" || {
+    echo "查询 GitHub release 失败（未认证 API 限额 60 次/小时/IP，可能临时限流，稍后重试）" >&2
+    exit 1
+}
+DOWNLOAD_URL="$(printf '%s' "$LATEST_JSON" | tr ',' '\n' | grep -o "https://[^\"]*${ASSET}" | head -n 1)"
 if [ -z "$DOWNLOAD_URL" ]; then
     echo "未在最新 release 找到资产 ${ASSET}，请到 https://github.com/${REPO}/releases 手动下载" >&2
     exit 1
