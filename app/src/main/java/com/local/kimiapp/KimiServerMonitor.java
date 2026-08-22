@@ -1,7 +1,5 @@
 package com.local.kimiapp;
 
-import android.os.Handler;
-import android.os.Looper;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -51,13 +49,14 @@ public class KimiServerMonitor extends ServerMonitor {
     private final Map<String, String[]> currentTool = Collections.synchronizedMap(new HashMap<>());
     private long lastActivityNotify;
 
-    // 忙碌细分状态：主 agent 是否仍在回合内（false = 回合已结束，仅剩后台任务），
-    // 以及运行中的后台任务数。由会话详情/任务接口周期性校准，避免虚假转圈。
+    // 忙碌细分状态（全部来自服务器推送，不做周期轮询）：
+    // rawBusy        = work_changed 推送的服务器侧 busy
+    // mainTurnActive = work_changed 推送的 main_turn_active（主 agent 是否在回合内）
+    // bgRunning      = background.task.started/terminated 事件维护的后台任务运行数
+    // 有效忙碌 = rawBusy && (主回合活跃 || 还有后台任务)，避免「主 agent 已完成仍转圈」。
+    private final Map<String, Boolean> rawBusy = Collections.synchronizedMap(new HashMap<>());
     private final Map<String, Boolean> mainTurnActive = Collections.synchronizedMap(new HashMap<>());
     private final Map<String, Integer> bgRunning = Collections.synchronizedMap(new HashMap<>());
-    private static final long DETAIL_REFRESH_MS = 15000;
-    private final Handler pollHandler = new Handler(Looper.getMainLooper());
-    private final Runnable detailPollRunnable = this::pollBusySessionDetails;
 
     public KimiServerMonitor(MonitorHost host, ServerStore.Server server, OkHttpClient client) {
         super(host, server, client);
@@ -154,6 +153,7 @@ public class KimiServerMonitor extends ServerMonitor {
                     synchronized (titleCache) {
                         titleCache.clear();
                         busyBySession.clear();
+                        rawBusy.clear();
                         pendingBySession.clear();
                         activityBySession.clear();
                         toolCommands.clear();
@@ -206,8 +206,6 @@ public class KimiServerMonitor extends ServerMonitor {
                 reconnectDelay = RECONNECT_BASE_MS;
                 setHealth(true);
                 notifySummary();
-                pollHandler.removeCallbacks(detailPollRunnable);
-                pollHandler.postDelayed(detailPollRunnable, DETAIL_REFRESH_MS);
 
                 // client_hello with subscriptions + cursors (required by 0.36+)
                 List<String> ids = new ArrayList<>(titleCache.keySet());
@@ -291,6 +289,12 @@ public class KimiServerMonitor extends ServerMonitor {
                     Log.w(TAG, server.name + " error: " + text);
                     break;
 
+                case "background.task.started":
+                case "background.task.terminated": {
+                    handleBackgroundTaskEvent(type, msg.optString("session_id", ""));
+                    break;
+                }
+
                 case "transcript.ops": {
                     String sessionId = msg.optString("session_id", "");
                     JSONArray ops = msg.optJSONObject("payload") != null
@@ -335,10 +339,9 @@ public class KimiServerMonitor extends ServerMonitor {
                 boolean wasActive = !"idle".equals(previous) && !previous.isEmpty();
                 boolean isActive = !"idle".equals(status);
                 if (!sessionId.isEmpty() && wasActive != isActive) {
-                    busyBySession.put(sessionId, isActive);
-                    if (!isActive) clearActivity(sessionId);
-                    else fetchSessionDetail(sessionId);
-                    activeCount = busyCount();
+                    // 状态跃迁等价于主回合活跃性变化；busy 以 work_changed 推送为准
+                    mainTurnActive.put(sessionId, isActive);
+                    applyEffectiveBusy(sessionId);
                 }
                 notifySummary();
 
@@ -367,15 +370,12 @@ public class KimiServerMonitor extends ServerMonitor {
             }
 
             case "event.session.work_changed": {
-                boolean busy = payload.optBoolean("busy", false);
-                boolean wasBusy = Boolean.TRUE.equals(busyBySession.get(sessionId));
-                busyBySession.put(sessionId, busy);
-                if (!busy) clearActivity(sessionId);
-                else fetchSessionDetail(sessionId);
-                if (busy != wasBusy) {
-                    activeCount = busyCount();
-                    notifySummary();
+                // 推送自带细分字段，直接落状态，不再回查 REST
+                rawBusy.put(sessionId, payload.optBoolean("busy", false));
+                if (payload.has("main_turn_active")) {
+                    mainTurnActive.put(sessionId, payload.optBoolean("main_turn_active", true));
                 }
+                applyEffectiveBusy(sessionId);
 
                 String pending = payload.optString("pending_interaction", "none");
                 String previousPending = pendingBySession.put(sessionId, pending);
@@ -406,10 +406,9 @@ public class KimiServerMonitor extends ServerMonitor {
                         String title = meta != null ? meta.optString("title", "") : "";
                         if (title.isEmpty() || "null".equals(title)) title = "点击查看 Kimi 会话";
                         synchronized (titleCache) { titleCache.put(newId, title); }
-                        busyBySession.put(newId, true);
-                        activeCount = busyCount();
-                        notifySummary();
-                        fetchSessionDetail(newId);
+                        rawBusy.put(newId, true);
+                        mainTurnActive.put(newId, true);
+                        applyEffectiveBusy(newId);
                         if (webSocket != null) {
                             try {
                                 sendJson(webSocket, buildSubscribe(Collections.singletonList(newId)));
@@ -453,7 +452,7 @@ public class KimiServerMonitor extends ServerMonitor {
         }
     }
 
-    /** 会话详情校准：busy 只反映服务器侧总状态，主/后台细分靠 main_turn_active + 任务数。 */
+    /** 启动种子：连接时对忙碌会话取一次详情（含 main_turn_active），之后的状态全靠推送。 */
     private void fetchSessionDetail(String sessionId) {
         HttpUrl url;
         try {
@@ -466,22 +465,18 @@ public class KimiServerMonitor extends ServerMonitor {
                     if (!response.isSuccessful()) return;
                     JSONObject data = new JSONObject(response.body().string()).optJSONObject("data");
                     if (data == null) return;
-                    boolean rawBusy = data.optBoolean("busy", false);
+                    rawBusy.put(sessionId, data.optBoolean("busy", false));
                     boolean mainActive = data.optBoolean("main_turn_active", true);
                     mainTurnActive.put(sessionId, mainActive);
                     pendingBySession.put(sessionId, data.optString("pending_interaction", "none"));
-                    if (mainActive) {
-                        applyEffectiveBusy(sessionId, rawBusy);
-                    } else {
-                        // 主回合已结束：仅当还有后台任务在跑时才算忙碌
-                        fetchRunningTaskCount(sessionId);
-                    }
+                    if (!mainActive) fetchRunningTaskCount(sessionId);
+                    else applyEffectiveBusy(sessionId);
                 } catch (Exception ignored) {}
             }
         });
     }
 
-    /** 统计运行中的后台任务，决定「等后台」还是「已完成」。 */
+    /** 启动种子：主回合已结束的会话，取一次后台任务数作为事件计数的初值。 */
     private void fetchRunningTaskCount(String sessionId) {
         HttpUrl url;
         try {
@@ -504,37 +499,37 @@ public class KimiServerMonitor extends ServerMonitor {
                         if (task != null && "running".equals(task.optString("status"))) running++;
                     }
                     bgRunning.put(sessionId, running);
-                    applyEffectiveBusy(sessionId, running > 0);
+                    applyEffectiveBusy(sessionId);
                 } catch (Exception ignored) {}
             }
         });
     }
 
-    /** 写入有效忙碌状态；由忙碌变空闲时清理活动展示并触发置顶完成链路。 */
-    private void applyEffectiveBusy(String sessionId, boolean effective) {
+    /** 后台任务生命周期事件：增减运行计数后重算有效忙碌。 */
+    private void handleBackgroundTaskEvent(String type, String sessionId) {
+        if (sessionId.isEmpty()) return;
+        int delta = "background.task.started".equals(type) ? 1 : -1;
+        synchronized (bgRunning) {
+            int current = bgRunning.containsKey(sessionId) ? bgRunning.get(sessionId) : 0;
+            bgRunning.put(sessionId, Math.max(0, current + delta));
+        }
+        applyEffectiveBusy(sessionId);
+    }
+
+    /** 有效忙碌 = 服务器报 busy 且（主回合活跃 或 仍有后台任务）；变空闲即触发置顶完成链路。 */
+    private void applyEffectiveBusy(String sessionId) {
+        boolean raw = Boolean.TRUE.equals(rawBusy.get(sessionId));
+        boolean mainActive = !Boolean.FALSE.equals(mainTurnActive.get(sessionId));
+        int running;
+        synchronized (bgRunning) {
+            running = bgRunning.containsKey(sessionId) ? bgRunning.get(sessionId) : 0;
+        }
+        boolean effective = raw && (mainActive || running > 0);
         boolean was = Boolean.TRUE.equals(busyBySession.get(sessionId));
         busyBySession.put(sessionId, effective);
         if (!effective) clearActivity(sessionId);
         if (effective != was) activeCount = busyCount();
         notifySummary();
-    }
-
-    /** 忙碌会话周期性校准（15s）：WS 事件粒度不够时靠这里收敛到真实状态。 */
-    private void pollBusySessionDetails() {
-        if (stopped) return;
-        List<String> busyIds = new ArrayList<>();
-        synchronized (busyBySession) {
-            for (Map.Entry<String, Boolean> entry : busyBySession.entrySet()) {
-                if (Boolean.TRUE.equals(entry.getValue())) busyIds.add(entry.getKey());
-            }
-        }
-        for (String id : busyIds) fetchSessionDetail(id);
-        pollHandler.postDelayed(detailPollRunnable, DETAIL_REFRESH_MS);
-    }
-
-    @Override public void shutdown() {
-        pollHandler.removeCallbacks(detailPollRunnable);
-        super.shutdown();
     }
 
     private void refreshTitleFor(String sessionId) {
@@ -645,6 +640,7 @@ public class KimiServerMonitor extends ServerMonitor {
         activityBySession.remove(sessionId);
         toolCommands.remove(sessionId);
         currentTool.remove(sessionId);
+        rawBusy.remove(sessionId);
         mainTurnActive.remove(sessionId);
         bgRunning.remove(sessionId);
     }
