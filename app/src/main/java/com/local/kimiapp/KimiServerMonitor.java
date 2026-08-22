@@ -208,15 +208,10 @@ public class KimiServerMonitor extends ServerMonitor {
                 notifySummary();
 
                 // client_hello with subscriptions + cursors (required by 0.36+)
+                // 只用基础订阅：相位/工具/任务事件都由它推送，不再订阅 transcript（省流量）
                 List<String> ids = new ArrayList<>(titleCache.keySet());
                 try {
                     sendJson(ws, buildClientHello(ids));
-                    // 订阅 transcript 块粒度流，用于展示会话当前活动（与桌面端一致）
-                    for (String id : ids) {
-                        if (Boolean.TRUE.equals(busyBySession.get(id))) {
-                            sendJson(ws, buildSubscribeV2(id));
-                        }
-                    }
                 } catch (JSONException e) {
                     Log.e(TAG, server.name + " hello failed", e);
                 }
@@ -295,18 +290,22 @@ public class KimiServerMonitor extends ServerMonitor {
                     break;
                 }
 
-                case "transcript.ops": {
+                case "agent.status.updated": {
                     String sessionId = msg.optString("session_id", "");
-                    JSONArray ops = msg.optJSONObject("payload") != null
-                            ? msg.optJSONObject("payload").optJSONArray("ops") : null;
-                    if (!sessionId.isEmpty() && ops != null) { applyActivityOps(sessionId, ops); refreshActivityThrottled(); }
+                    JSONObject phase = msg.optJSONObject("payload") != null
+                            ? msg.optJSONObject("payload").optJSONObject("phase") : null;
+                    if (!sessionId.isEmpty() && phase != null) applyAgentPhase(sessionId, phase);
                     break;
                 }
 
-                case "transcript.reset": {
-                    String sessionId = msg.optString("session_id", "");
-                    JSONObject phase = optPath(msg, "payload", "snapshot", "meta", "agent", "phase");
-                    if (!sessionId.isEmpty() && phase != null) { applyPhase(sessionId, phase); refreshActivityThrottled(); }
+                case "tool.call.started": {
+                    handleToolCallStarted(msg.optString("session_id", ""), msg.optJSONObject("payload"));
+                    break;
+                }
+
+                case "turn.ended": {
+                    // 轮次结束清命令缓存，防止无界增长
+                    toolCommands.remove(msg.optString("session_id", ""));
                     break;
                 }
 
@@ -412,7 +411,6 @@ public class KimiServerMonitor extends ServerMonitor {
                         if (webSocket != null) {
                             try {
                                 sendJson(webSocket, buildSubscribe(Collections.singletonList(newId)));
-                                sendJson(webSocket, buildSubscribeV2(newId));
                             } catch (JSONException e) {}
                         }
                     }
@@ -561,16 +559,7 @@ public class KimiServerMonitor extends ServerMonitor {
         return req.build();
     }
 
-    // --- transcript 活动展示（与桌面端 protocol/kimi.rs 逻辑一致） ---
-
-    private static JSONObject optPath(JSONObject root, String... keys) {
-        JSONObject cur = root;
-        for (String key : keys) {
-            if (cur == null) return null;
-            cur = cur.optJSONObject(key);
-        }
-        return cur;
-    }
+    // --- 活动展示：全部来自基础订阅推送的 agent 事件（相位 + 工具开始） ---
 
     /** 命令预览：取首个非空行并截断到 80 字符，避免把整段脚本塞进界面。 */
     private static String commandPreview(String inputText) {
@@ -584,56 +573,63 @@ public class KimiServerMonitor extends ServerMonitor {
         return firstLine.substring(0, MAX) + "…";
     }
 
-    private void applyPhase(String sessionId, JSONObject phase) {
+    /** 相位事件（基础订阅推送）：更新活动文本，区分思考/输出/工具。 */
+    private void applyAgentPhase(String sessionId, JSONObject phase) {
         String kind = phase.optString("kind", "");
         if ("tool_call".equals(kind)) {
             String toolCallId = phase.optString("toolCallId", "");
             String name = phase.optString("name", "工具");
+            currentTool.put(sessionId, new String[]{ toolCallId, name });
             Map<String, String> cmds = toolCommands.get(sessionId);
             String command = (cmds != null && !toolCallId.isEmpty()) ? cmds.get(toolCallId) : null;
-            String display = command != null ? name + " · " + command : name;
-            currentTool.put(sessionId, new String[]{ toolCallId, name });
-            activityBySession.put(sessionId, display);
+            activityBySession.put(sessionId, toolDisplay(displayName(name), command));
         } else if ("streaming".equals(kind) || "running".equals(kind)) {
             currentTool.remove(sessionId);
-            activityBySession.put(sessionId, "思考中");
+            String stream = phase.optString("stream", "");
+            activityBySession.put(sessionId, "assistant".equals(stream) ? "输出中" : "思考中");
+        } else if ("ended".equals(kind)) {
+            currentTool.remove(sessionId);
         }
+        refreshActivityThrottled();
     }
 
-    private void applyActivityOps(String sessionId, JSONArray ops) {
-        for (int i = 0; i < ops.length(); i++) {
-            JSONObject op = ops.optJSONObject(i);
-            if (op == null) continue;
-            String opType = op.optString("op", "");
-            if ("meta.merge".equals(opType)) {
-                JSONObject phase = optPath(op, "meta", "agent", "phase");
-                if (phase != null) applyPhase(sessionId, phase);
-            } else if ("frame.upsert".equals(opType)) {
-                JSONObject frame = op.optJSONObject("frame");
-                if (frame == null || !"tool".equals(frame.optString("kind", ""))) continue;
-                String toolCallId = frame.optString("toolCallId", "");
-                if (toolCallId.isEmpty()) continue;
-                String inputText = frame.optString("inputText", "");
-                if (!inputText.isEmpty()) {
-                    String preview = commandPreview(inputText);
-                    if (!preview.isEmpty()) {
-                        Map<String, String> cmds = toolCommands.get(sessionId);
-                        if (cmds == null) { cmds = Collections.synchronizedMap(new HashMap<>()); toolCommands.put(sessionId, cmds); }
-                        cmds.put(toolCallId, preview);
-                    }
-                }
-                // 命令到达时若相位正指向该工具，刷新展示文本。
-                String[] cur = currentTool.get(sessionId);
-                if (cur != null && cur[0].equals(toolCallId)) {
-                    Map<String, String> cmds = toolCommands.get(sessionId);
-                    String cmd = cmds != null ? cmds.get(toolCallId) : null;
-                    if (cmd != null) activityBySession.put(sessionId, cur[1] + " · " + cmd);
-                }
-            } else if ("turn.upsert".equals(opType)) {
-                // 新轮次开始，丢弃上一轮命令缓存防止无界增长。
-                toolCommands.remove(sessionId);
-            }
+    /** 工具开始事件（基础订阅推送）：命令预览入缓存；子代理按工具名识别。 */
+    private void handleToolCallStarted(String sessionId, JSONObject payload) {
+        if (payload == null || sessionId.isEmpty()) return;
+        String toolCallId = payload.optString("toolCallId", "");
+        if (toolCallId.isEmpty()) return;
+        String name = payload.optString("name", "");
+        JSONObject display = payload.optJSONObject("display");
+        String command = display != null ? display.optString("command", "") : "";
+        JSONObject args = payload.optJSONObject("args");
+        if (command.isEmpty() && args != null) {
+            command = args.optString("command", "");
+            if (command.isEmpty()) command = args.optString("description", "");
         }
+        String preview = commandPreview(command);
+        if (!preview.isEmpty()) {
+            Map<String, String> cmds = toolCommands.get(sessionId);
+            if (cmds == null) { cmds = Collections.synchronizedMap(new HashMap<>()); toolCommands.put(sessionId, cmds); }
+            cmds.put(toolCallId, preview);
+        }
+        // 相位已指向该工具时刷新展示（相位事件可能先到）
+        String[] cur = currentTool.get(sessionId);
+        if (cur != null && cur[0].equals(toolCallId)) {
+            activityBySession.put(sessionId, toolDisplay(displayName(name.isEmpty() ? cur[1] : name), preview));
+        }
+        refreshActivityThrottled();
+    }
+
+    private static boolean isSubagentTool(String name) {
+        return "Agent".equals(name) || "AgentSwarm".equals(name) || "Task".equals(name);
+    }
+
+    private static String displayName(String name) {
+        return isSubagentTool(name) ? "子代理" : name;
+    }
+
+    private static String toolDisplay(String name, String command) {
+        return command == null || command.isEmpty() ? name : name + " · " + command;
     }
 
     private void clearActivity(String sessionId) {
@@ -652,15 +648,6 @@ public class KimiServerMonitor extends ServerMonitor {
             lastActivityNotify = now;
             notifySummary();
         }
-    }
-
-    private static JSONObject buildSubscribeV2(String sessionId) throws JSONException {
-        return new JSONObject()
-                .put("type", "subscribe_v2")
-                .put("id", UUID.randomUUID().toString())
-                .put("payload", new JSONObject()
-                        .put("session_id", sessionId)
-                        .put("transcript", new JSONObject().put("main", "block")));
     }
 
     private static JSONObject buildClientHello(List<String> sessionIds) throws JSONException {
