@@ -810,6 +810,7 @@ public class MainActivity extends ComponentActivity {
             String serverName = o.optString("serverName", "");
             boolean isPinned = pinnedKeys.contains(serverId + "|" + sessionId);
             boolean done = o.optBoolean("done");
+            String state = o.optString("state", "working");
             String activity = done ? "已完成，等你介入" : o.optString("activity", "");
             ServerStore.Server server = null;
             for (ServerStore.Server s : servers) {
@@ -869,11 +870,19 @@ public class MainActivity extends ComponentActivity {
                 mark.setTextColor(UiKit.BLUE);
                 mark.setGravity(Gravity.CENTER);
                 card.addView(mark, tailParams);
-            } else {
+            } else if ("working".equals(state)) {
                 ProgressBar spinner = new ProgressBar(this);
                 spinner.setIndeterminate(true);
                 spinner.setIndeterminateTintList(ColorStateList.valueOf(UiKit.BLUE));
                 card.addView(spinner, tailParams);
+            } else {
+                // background / approval / question：主 agent 没在干活，不转圈
+                TextView mark = new TextView(this);
+                mark.setText("background".equals(state) ? "⏳" : "!");
+                mark.setTextSize(14);
+                mark.setTextColor(UiKit.TEXT_SECONDARY);
+                mark.setGravity(Gravity.CENTER);
+                card.addView(mark, tailParams);
             }
 
             final String targetServerId = serverId;
