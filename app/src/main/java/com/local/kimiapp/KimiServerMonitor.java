@@ -249,6 +249,12 @@ public class KimiServerMonitor extends ServerMonitor {
             String type = msg.optString("type", "");
             Log.d(TAG, server.name + " << " + type);
 
+            // 只关心主 agent：子代理的回合完成/审批/相位等事件一律忽略，
+            // 避免子代理触发通知、污染忙碌状态与活动行。
+            JSONObject eventPayload = msg.optJSONObject("payload");
+            String agentId = eventPayload != null ? eventPayload.optString("agentId", "") : "";
+            if (!agentId.isEmpty() && !"main".equals(agentId)) return;
+
             switch (type) {
                 case "server_hello":
                     Log.i(TAG, server.name + " subscribed to " + titleCache.size() + " sessions");
