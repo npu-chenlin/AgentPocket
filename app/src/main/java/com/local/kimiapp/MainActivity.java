@@ -77,7 +77,9 @@ import com.local.kimiapp.face.GrokFaceView;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import java.util.regex.Matcher;
@@ -750,10 +752,17 @@ public class MainActivity extends ComponentActivity {
                 1, 14, UiKit.BLUE_RIPPLE));
     }
 
-    /** 活跃会话页：与服务器卡片同款样式，点击跳转到对应会话。 */
+    /** 活跃会话页：与服务器卡片同款样式，点击跳转到对应会话，长按置顶。 */
     private LinearLayout buildSessionsPage(AlertDialog dialog) {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
+        fillSessionsPage(page, dialog);
+        return page;
+    }
+
+    /** 渲染活跃会话列表；置顶状态变化后整体重填。 */
+    private void fillSessionsPage(LinearLayout page, AlertDialog dialog) {
+        page.removeAllViews();
         JSONArray sessions;
         try {
             sessions = new JSONArray(getSharedPreferences(KeepAliveService.HEALTH_PREFS, MODE_PRIVATE)
@@ -762,8 +771,21 @@ public class MainActivity extends ComponentActivity {
             sessions = new JSONArray();
         }
         List<ServerStore.Server> servers = ServerStore.load(this);
+        // 置顶以本地持久化为准（busy_sessions 快照可能还没来得及打标）
+        JSONArray pinned = KeepAliveService.loadPinned(this);
+        Set<String> pinnedKeys = new HashSet<>();
+        for (int i = 0; i < pinned.length(); i++) {
+            JSONObject p = pinned.optJSONObject(i);
+            if (p != null) pinnedKeys.add(p.optString("serverId") + "|" + p.optString("sessionId"));
+        }
 
-        if (sessions.length() == 0) {
+        List<JSONObject> entries = new ArrayList<>();
+        for (int i = 0; i < sessions.length(); i++) {
+            JSONObject o = sessions.optJSONObject(i);
+            if (o != null) entries.add(o);
+        }
+
+        if (entries.isEmpty()) {
             TextView empty = new TextView(this);
             empty.setText("暂无运行中的会话");
             empty.setTextSize(14);
@@ -771,20 +793,24 @@ public class MainActivity extends ComponentActivity {
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(0, dp(24), 0, dp(24));
             page.addView(empty, new LinearLayout.LayoutParams(-1, -2));
-            return page;
+            return;
         }
+
+        // 排序：置顶运行中 → 置顶已完成 → 其余（稳定排序保持原顺序）
+        Collections.sort(entries, (a, b) ->
+                sessionRank(a, pinnedKeys) - sessionRank(b, pinnedKeys));
 
         ScrollView scroll = new ScrollView(this);
         LinearLayout cards = new LinearLayout(this);
         cards.setOrientation(LinearLayout.VERTICAL);
-        for (int i = 0; i < sessions.length(); i++) {
-            JSONObject o = sessions.optJSONObject(i);
-            if (o == null) continue;
+        for (JSONObject o : entries) {
             String serverId = o.optString("serverId");
             String sessionId = o.optString("sessionId");
             String title = o.optString("title", "");
             String serverName = o.optString("serverName", "");
-            String activity = o.optString("activity", "");
+            boolean isPinned = pinnedKeys.contains(serverId + "|" + sessionId);
+            boolean done = o.optBoolean("done");
+            String activity = done ? "已完成，等你介入" : o.optString("activity", "");
             ServerStore.Server server = null;
             for (ServerStore.Server s : servers) {
                 if (s.id.equals(serverId)) { server = s; break; }
@@ -794,7 +820,7 @@ public class MainActivity extends ComponentActivity {
             card.setOrientation(LinearLayout.HORIZONTAL);
             card.setGravity(Gravity.CENTER_VERTICAL);
             card.setPadding(dp(9), dp(8), dp(14), dp(8));
-            card.setBackground(UiKit.cardBackground(this, false));
+            card.setBackground(UiKit.cardBackground(this, isPinned));
 
             ImageView icon = backendIconView(server != null ? server.backend : ServerStore.Server.BACKEND_KIMI);
             LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(26), dp(26));
@@ -826,7 +852,7 @@ public class MainActivity extends ComponentActivity {
                 TextView act = new TextView(this);
                 act.setText(activity);
                 act.setTextSize(12);
-                act.setTextColor(UiKit.TEXT_SECONDARY);
+                act.setTextColor(done ? UiKit.BLUE : UiKit.TEXT_SECONDARY);
                 act.setSingleLine(true);
                 act.setEllipsize(TextUtils.TruncateAt.END);
                 act.setPadding(0, dp(3), 0, 0);
@@ -834,16 +860,26 @@ public class MainActivity extends ComponentActivity {
             }
             card.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
 
-            ProgressBar spinner = new ProgressBar(this);
-            spinner.setIndeterminate(true);
-            spinner.setIndeterminateTintList(ColorStateList.valueOf(UiKit.BLUE));
-            LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(dp(20), dp(20));
-            spinnerParams.setMargins(dp(8), 0, 0, 0);
-            card.addView(spinner, spinnerParams);
+            LinearLayout.LayoutParams tailParams = new LinearLayout.LayoutParams(dp(20), dp(20));
+            tailParams.setMargins(dp(8), 0, 0, 0);
+            if (done) {
+                TextView mark = new TextView(this);
+                mark.setText("✓");
+                mark.setTextSize(15);
+                mark.setTextColor(UiKit.BLUE);
+                mark.setGravity(Gravity.CENTER);
+                card.addView(mark, tailParams);
+            } else {
+                ProgressBar spinner = new ProgressBar(this);
+                spinner.setIndeterminate(true);
+                spinner.setIndeterminateTintList(ColorStateList.valueOf(UiKit.BLUE));
+                card.addView(spinner, tailParams);
+            }
 
             final String targetServerId = serverId;
             final String targetSessionId = sessionId;
             card.setOnClickListener(v -> { dialog.dismiss(); openSession(targetServerId, targetSessionId); });
+            card.setOnLongClickListener(v -> { togglePinned(o, page, dialog); return true; });
 
             card.setMinimumHeight(dp(52));
             LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, -2);
@@ -852,7 +888,55 @@ public class MainActivity extends ComponentActivity {
         }
         scroll.addView(cards, new ViewGroup.LayoutParams(-1, -2));
         page.addView(scroll, new LinearLayout.LayoutParams(-1, -2));
-        return page;
+
+        if (pinnedKeys.isEmpty()) {
+            TextView hint = new TextView(this);
+            hint.setText("长按会话可置顶，完成后会通知你介入");
+            hint.setTextSize(12);
+            hint.setTextColor(UiKit.TEXT_SECONDARY);
+            hint.setGravity(Gravity.CENTER);
+            hint.setPadding(0, dp(4), 0, 0);
+            page.addView(hint, new LinearLayout.LayoutParams(-1, -2));
+        }
+    }
+
+    /** 置顶运行中 0 → 置顶已完成 1 → 其余 2。 */
+    private int sessionRank(JSONObject o, Set<String> pinnedKeys) {
+        boolean pinned = pinnedKeys.contains(o.optString("serverId") + "|" + o.optString("sessionId"));
+        if (!pinned) return 2;
+        return o.optBoolean("done") ? 1 : 0;
+    }
+
+    /** 长按置顶/取消置顶：置顶的会话完成后仍留在列表并推送通知。 */
+    private void togglePinned(JSONObject entry, LinearLayout page, AlertDialog dialog) {
+        String serverId = entry.optString("serverId");
+        String sessionId = entry.optString("sessionId");
+        JSONArray pinned = KeepAliveService.loadPinned(this);
+        int removeAt = -1;
+        for (int i = 0; i < pinned.length(); i++) {
+            JSONObject p = pinned.optJSONObject(i);
+            if (p != null && serverId.equals(p.optString("serverId"))
+                    && sessionId.equals(p.optString("sessionId"))) {
+                removeAt = i;
+                break;
+            }
+        }
+        if (removeAt >= 0) {
+            pinned.remove(removeAt);
+            KeepAliveService.savePinned(this, pinned);
+            Toast.makeText(this, "已取消置顶", Toast.LENGTH_SHORT).show();
+        } else {
+            try {
+                pinned.put(new JSONObject()
+                        .put("serverId", serverId)
+                        .put("serverName", entry.optString("serverName"))
+                        .put("sessionId", sessionId)
+                        .put("title", entry.optString("title")));
+            } catch (Exception ignored) {}
+            KeepAliveService.savePinned(this, pinned);
+            Toast.makeText(this, "已置顶，完成后会通知你", Toast.LENGTH_SHORT).show();
+        }
+        fillSessionsPage(page, dialog);
     }
 
     private class ServerListAdapter extends RecyclerView.Adapter<ServerListAdapter.ViewHolder> {

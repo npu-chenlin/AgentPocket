@@ -6,6 +6,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -22,7 +23,9 @@ import org.json.JSONObject;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.Call;
@@ -188,9 +191,94 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
                 + " 台，监听 " + active + " 个会话";
         getSystemService(NotificationManager.class).notify(SERVICE_ID,
                 serviceNotification(text, busyTitles));
-        getSharedPreferences(HEALTH_PREFS, MODE_PRIVATE).edit()
+
+        // 置顶会话：忙碌时打标，不再忙碌后仍保留在列表（标记 done），
+        // 忙碌 -> 完成的一次性跃迁发通知提醒用户介入。
+        SharedPreferences health = getSharedPreferences(HEALTH_PREFS, MODE_PRIVATE);
+        Set<String> busyKeys = new HashSet<>();
+        for (int i = 0; i < busySessions.length(); i++) {
+            JSONObject o = busySessions.optJSONObject(i);
+            if (o != null) busyKeys.add(o.optString("serverId") + "|" + o.optString("sessionId"));
+        }
+        Set<String> prevBusyKeys = new HashSet<>();
+        try {
+            JSONArray prev = new JSONArray(health.getString("prev_busy_keys", "[]"));
+            for (int i = 0; i < prev.length(); i++) prevBusyKeys.add(prev.optString(i));
+        } catch (Exception ignored) {}
+        JSONArray pinned = loadPinned(this);
+        for (int i = 0; i < pinned.length(); i++) {
+            JSONObject p = pinned.optJSONObject(i);
+            if (p == null) continue;
+            String key = p.optString("serverId") + "|" + p.optString("sessionId");
+            if (busyKeys.contains(key)) {
+                for (int j = 0; j < busySessions.length(); j++) {
+                    JSONObject o = busySessions.optJSONObject(j);
+                    if (o != null && key.equals(o.optString("serverId") + "|" + o.optString("sessionId"))) {
+                        try { o.put("pinned", true); } catch (Exception ignored) {}
+                        break;
+                    }
+                }
+            } else {
+                try {
+                    busySessions.put(new JSONObject()
+                            .put("serverId", p.optString("serverId"))
+                            .put("serverName", p.optString("serverName"))
+                            .put("sessionId", p.optString("sessionId"))
+                            .put("title", p.optString("title"))
+                            .put("activity", "")
+                            .put("pinned", true)
+                            .put("done", true));
+                } catch (Exception ignored) {}
+                if (prevBusyKeys.contains(key)) notifyPinnedFinished(p);
+            }
+        }
+        JSONArray prevKeysOut = new JSONArray();
+        for (String key : busyKeys) prevKeysOut.put(key);
+
+        health.edit()
                 .putInt("active_count", active)
-                .putString("busy_sessions", busySessions.toString()).apply();
+                .putString("busy_sessions", busySessions.toString())
+                .putString("prev_busy_keys", prevKeysOut.toString()).apply();
+    }
+
+    /** 置顶会话清单（MainActivity 长按维护，此处读取合并）。 */
+    static JSONArray loadPinned(Context context) {
+        try {
+            return new JSONArray(context.getSharedPreferences(HEALTH_PREFS, Context.MODE_PRIVATE)
+                    .getString("pinned_sessions", "[]"));
+        } catch (Exception e) {
+            return new JSONArray();
+        }
+    }
+
+    static void savePinned(Context context, JSONArray pinned) {
+        context.getSharedPreferences(HEALTH_PREFS, Context.MODE_PRIVATE).edit()
+                .putString("pinned_sessions", pinned.toString()).apply();
+    }
+
+    /** 置顶会话跑完了：通知用户介入，点击直达该会话。 */
+    private void notifyPinnedFinished(JSONObject pinned) {
+        String serverId = pinned.optString("serverId");
+        for (ServerStore.Server s : ServerStore.load(this)) {
+            if (s.id.equals(serverId)) {
+                String title = pinned.optString("title");
+                String name = isMeaningful(title) ? title : "会话";
+                postTask(s, pinned.optString("sessionId"), "pinned-done-" + pinned.optString("sessionId"),
+                        "会话已完成，等你介入", "「" + name + "」已完成");
+                return;
+            }
+        }
+    }
+
+    /** 与 MainActivity 的占位标题过滤同口径。 */
+    private static boolean isMeaningful(String title) {
+        if (title == null) return false;
+        String trimmed = title.trim();
+        if (trimmed.isEmpty()) return false;
+        return !"会话".equals(trimmed)
+                && !"点击查看会话".equals(trimmed)
+                && !"点击查看 Kimi 会话".equals(trimmed)
+                && !"New Session".equals(trimmed);
     }
 
     private void publishEvent(String event) {
