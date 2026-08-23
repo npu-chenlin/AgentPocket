@@ -263,9 +263,11 @@ fn handle_protocol_event(
             let was_active = !previous.is_empty() && previous != "idle";
             let is_active = status != "idle";
 
+            // 状态跃迁等价于主回合活跃性变化；busy 以 work_changed 推送为准。
+            // 通知不在这里发：完成/失败走 prompt.*，审批/回答走 work_changed，
+            // 单一通路避免一次事件两次提醒。
             if let Some(ref id) = session_id {
                 if was_active != is_active {
-                    // 状态跃迁等价于主回合活跃性变化；busy 以 work_changed 推送为准。
                     if is_active {
                         state.main_turn_inactive.remove(id);
                     } else {
@@ -273,44 +275,6 @@ fn handle_protocol_event(
                     }
                     state.apply_effective_busy(id);
                 }
-            }
-
-            if previous == "running" && status == "idle" {
-                events.push(build_event(
-                    server_id,
-                    session_id,
-                    AgentEventKind::Completed,
-                    event_key(msg, "status-complete"),
-                    now,
-                    state,
-                ));
-            } else if status == "awaiting_approval" {
-                events.push(build_event(
-                    server_id,
-                    session_id,
-                    AgentEventKind::ApprovalRequired,
-                    event_key(msg, "status-approval"),
-                    now,
-                    state,
-                ));
-            } else if status == "awaiting_question" {
-                events.push(build_event(
-                    server_id,
-                    session_id,
-                    AgentEventKind::QuestionRequired,
-                    event_key(msg, "status-question"),
-                    now,
-                    state,
-                ));
-            } else if status == "aborted" {
-                events.push(build_event(
-                    server_id,
-                    session_id,
-                    AgentEventKind::Failed,
-                    event_key(msg, "status-aborted"),
-                    now,
-                    state,
-                ));
             }
         }
 
@@ -323,6 +287,11 @@ fn handle_protocol_event(
                 .get("pending_interaction")
                 .and_then(|v| v.as_str())
                 .unwrap_or("none");
+
+            let prev_pending = session_id
+                .as_ref()
+                .and_then(|id| state.activities.get(id))
+                .and_then(|a| a.pending.clone());
 
             if let Some(ref id) = session_id {
                 // 推送自带细分字段，直接落状态；主回合活跃性缺省视为活跃。
@@ -349,23 +318,28 @@ fn handle_protocol_event(
                 }
             }
 
+            // 仅在待交互状态跃迁时提醒一次，重复推送不刷屏。
             match pending {
-                "approval" => events.push(build_event(
-                    server_id,
-                    session_id,
-                    AgentEventKind::ApprovalRequired,
-                    event_key(msg, "approval"),
-                    now,
-                    state,
-                )),
-                "question" => events.push(build_event(
-                    server_id,
-                    session_id,
-                    AgentEventKind::QuestionRequired,
-                    event_key(msg, "question"),
-                    now,
-                    state,
-                )),
+                "approval" if prev_pending.as_deref() != Some("approval") => events.push(
+                    build_event(
+                        server_id,
+                        session_id,
+                        AgentEventKind::ApprovalRequired,
+                        event_key(msg, "approval"),
+                        now,
+                        state,
+                    ),
+                ),
+                "question" if prev_pending.as_deref() != Some("question") => events.push(
+                    build_event(
+                        server_id,
+                        session_id,
+                        AgentEventKind::QuestionRequired,
+                        event_key(msg, "question"),
+                        now,
+                        state,
+                    ),
+                ),
                 _ => {}
             }
         }
@@ -476,7 +450,9 @@ mod tests {
     }
 
     #[test]
-    fn status_changed_and_prompt_events() {
+    fn status_changed_is_silent_prompts_carry_completion() {
+        // status_changed 只管主回合活跃性，不产通知事件；
+        // 完成/失败由 prompt.* 单一通路产出，避免一次回合两次提醒。
         let mut state = ProtocolState::default();
         state
             .titles
@@ -493,13 +469,34 @@ mod tests {
 
         assert_eq!(
             kinds(input, &mut state),
-            vec![
-                AgentEventKind::Completed,
-                AgentEventKind::ApprovalRequired,
-                AgentEventKind::Completed,
-                AgentEventKind::Failed,
-            ]
+            vec![AgentEventKind::Completed, AgentEventKind::Failed]
         );
+    }
+
+    #[test]
+    fn approval_notified_once_per_pending_transition() {
+        // 同一个待审批状态内重复的 work_changed 只提醒一次；回到 none 再进入才再次提醒。
+        let mut state = ProtocolState::default();
+        let now = Utc::now();
+
+        let approval = r#"{"type":"event.session.work_changed","session_id":"sess-q","payload":{"busy":true,"main_turn_active":true,"pending_interaction":"approval"},"epoch":"1","seq":0}"#;
+        let again = r#"{"type":"event.session.work_changed","session_id":"sess-q","payload":{"busy":true,"main_turn_active":true,"pending_interaction":"approval"},"epoch":"1","seq":5}"#;
+        let none = r#"{"type":"event.session.work_changed","session_id":"sess-q","payload":{"busy":true,"main_turn_active":true,"pending_interaction":"none"},"epoch":"1","seq":6}"#;
+
+        let first = parse_frame("srv-kimi", approval, now, &mut state).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].kind, AgentEventKind::ApprovalRequired);
+
+        assert!(parse_frame("srv-kimi", again, now, &mut state)
+            .unwrap()
+            .is_empty());
+        assert!(parse_frame("srv-kimi", none, now, &mut state)
+            .unwrap()
+            .is_empty());
+
+        let second = parse_frame("srv-kimi", approval, now, &mut state).unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].kind, AgentEventKind::ApprovalRequired);
     }
 
     #[test]
@@ -539,12 +536,12 @@ mod tests {
         let frame = r#"{"type":"event.session.status_changed","session_id":"sess-k1","payload":{"previous_status":"running","status":"idle"},"epoch":"1","seq":10}"#;
 
         let now = Utc::now();
+        // status_changed 不产事件，也不把忙碌计数推成负数。
         let first = parse_frame("srv-kimi", frame, now, &mut state).unwrap();
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].kind, AgentEventKind::Completed);
+        assert!(first.is_empty());
 
         let second = parse_frame("srv-kimi", frame, now, &mut state).unwrap();
-        assert_eq!(second.len(), 1);
+        assert!(second.is_empty());
         assert_eq!(state.busy.len(), 0);
     }
 
@@ -752,12 +749,16 @@ mod tests {
         parse_frame("srv-kimi", start, now, &mut state).unwrap();
         assert!(state.busy.contains("sess-c"));
 
-        // 主回合结束（无后台任务）→ 不再忙碌，完成事件照常产出。
+        // 主回合结束（无后台任务）→ 不再忙碌；完成通知由 prompt.completed 产出。
         let idle = r#"{"type":"event.session.status_changed","session_id":"sess-c","payload":{"previous_status":"running","status":"idle"},"epoch":"1","seq":3}"#;
-        let events = parse_frame("srv-kimi", idle, now, &mut state).unwrap();
+        assert!(parse_frame("srv-kimi", idle, now, &mut state)
+            .unwrap()
+            .is_empty());
+        assert!(!state.busy.contains("sess-c"));
+        let completed = r#"{"type":"prompt.completed","session_id":"sess-c","payload":{"promptId":"p-1"}}"#;
+        let events = parse_frame("srv-kimi", completed, now, &mut state).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, AgentEventKind::Completed);
-        assert!(!state.busy.contains("sess-c"));
 
         // 仍有后台任务 → 重新判定为忙碌。
         let bg_start = r#"{"type":"background.task.started","session_id":"sess-c","payload":{}}"#;

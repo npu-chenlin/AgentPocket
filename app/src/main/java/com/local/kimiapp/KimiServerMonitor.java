@@ -350,26 +350,16 @@ public class KimiServerMonitor extends ServerMonitor {
                 }
                 notifySummary();
 
+                // 通知不在这里发：完成/失败走 prompt.*，审批/回答走 work_changed 的
+                // pending 跃迁——单一通路，避免一次事件两条提醒。悬浮球表情照常切换。
                 if ("running".equals(previous) && "idle".equals(status)) {
                     publishEvent("complete");
-                    if (MainActivity.isVisible) return;
-                    maybeNotify(sessionId, eventKey(msg, "status-complete"),
-                            "Kimi Code · 回合完成", getTitle(sessionId));
                 } else if ("awaiting_approval".equals(status)) {
                     publishEvent("approval");
-                    if (MainActivity.isVisible) return;
-                    maybeNotify(sessionId, eventKey(msg, "status-approval"),
-                            "Kimi Code · 等待审批", getTitle(sessionId));
                 } else if ("awaiting_question".equals(status)) {
                     publishEvent("question");
-                    if (MainActivity.isVisible) return;
-                    maybeNotify(sessionId, eventKey(msg, "status-question"),
-                            "Kimi Code · 待回答", getTitle(sessionId));
                 } else if ("aborted".equals(status)) {
                     publishEvent("aborted");
-                    if (MainActivity.isVisible) return;
-                    maybeNotify(sessionId, eventKey(msg, "status-aborted"),
-                            "Kimi Code · 回合失败", getTitle(sessionId));
                 }
                 break;
             }
