@@ -241,20 +241,20 @@ async fn seed_busy_sessions(
         let Some(text) = fetch_text(client, server, url, token).await else {
             continue;
         };
-        let Some((raw_busy, main_active)) = parse_session_detail(&text) else {
+        let Some(detail) = parse_session_detail(&text) else {
             continue;
         };
-        if raw_busy {
+        if detail.busy {
             state.raw_busy.insert(id.clone());
         } else {
             state.raw_busy.remove(&id);
         }
-        if main_active {
+        if detail.main_turn_active {
             state.main_turn_inactive.remove(&id);
         } else {
             state.main_turn_inactive.insert(id.clone());
         }
-        if !main_active {
+        if !detail.main_turn_active {
             // 主回合已结束：取一次后台任务数作为事件计数的初值。
             if let Ok(tasks_url) = base.join(&format!("/api/v1/sessions/{}/tasks", id)) {
                 if let Some(text) = fetch_text(client, server, tasks_url, token).await {
@@ -268,6 +268,10 @@ async fn seed_busy_sessions(
             }
         }
         state.apply_effective_busy(&id);
+        // 种子阶段同步待交互状态，活动行直接显示「等待审批/等待回答」。
+        if state.busy.contains(&id) {
+            state.activities.entry(id.clone()).or_default().pending = detail.pending.clone();
+        }
     }
 }
 
@@ -290,16 +294,32 @@ async fn fetch_text(
     resp.text().await.ok()
 }
 
-/// 解析会话详情：(服务器侧忙碌, 主回合是否活跃)。
-fn parse_session_detail(text: &str) -> Option<(bool, bool)> {
+/// 会话详情种子：服务器侧忙碌、主回合活跃性与待交互状态。
+#[derive(Debug, PartialEq)]
+struct SessionDetail {
+    busy: bool,
+    main_turn_active: bool,
+    pending: Option<String>,
+}
+
+fn parse_session_detail(text: &str) -> Option<SessionDetail> {
     let value: Value = serde_json::from_str(text).ok()?;
     let data = value.get("data")?;
     let busy = data.get("busy").and_then(|v| v.as_bool()).unwrap_or(false);
-    let main_active = data
+    let main_turn_active = data
         .get("main_turn_active")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    Some((busy, main_active))
+    let pending = data
+        .get("pending_interaction")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .filter(|p| p == "approval" || p == "question");
+    Some(SessionDetail {
+        busy,
+        main_turn_active,
+        pending,
+    })
 }
 
 /// 统计运行中的后台任务，决定「等后台」还是「已完成」。
@@ -570,11 +590,17 @@ mod tests {
 
     #[test]
     fn parse_session_detail_extracts_busy_and_main_turn() {
-        let text = r#"{"data":{"busy":true,"main_turn_active":false,"pending_interaction":"none"}}"#;
-        assert_eq!(parse_session_detail(text), Some((true, false)));
-        // main_turn_active 缺省视为活跃。
-        let missing = r#"{"data":{"busy":true}}"#;
-        assert_eq!(parse_session_detail(missing), Some((true, true)));
+        let text = r#"{"data":{"busy":true,"main_turn_active":false,"pending_interaction":"approval"}}"#;
+        let detail = parse_session_detail(text).unwrap();
+        assert!(detail.busy);
+        assert!(!detail.main_turn_active);
+        assert_eq!(detail.pending.as_deref(), Some("approval"));
+        // main_turn_active 缺省视为活跃；pending 为 none 时记 None。
+        let missing = r#"{"data":{"busy":true,"pending_interaction":"none"}}"#;
+        let detail = parse_session_detail(missing).unwrap();
+        assert!(detail.busy);
+        assert!(detail.main_turn_active);
+        assert_eq!(detail.pending, None);
         assert_eq!(parse_session_detail("{}"), None);
         assert_eq!(parse_session_detail("not json"), None);
     }

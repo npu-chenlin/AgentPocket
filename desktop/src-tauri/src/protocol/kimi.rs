@@ -319,6 +319,10 @@ fn handle_protocol_event(
                 .get("busy")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            let pending = payload
+                .get("pending_interaction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("none");
 
             if let Some(ref id) = session_id {
                 // 推送自带细分字段，直接落状态；主回合活跃性缺省视为活跃。
@@ -336,12 +340,14 @@ fn handle_protocol_event(
                     }
                 }
                 state.apply_effective_busy(id);
+                // 待审批/待回答在活动行优先展示，none 回落相位文本。
+                if state.busy.contains(id) {
+                    state.activities.entry(id.clone()).or_default().pending = match pending {
+                        "approval" | "question" => Some(pending.to_string()),
+                        _ => None,
+                    };
+                }
             }
-
-            let pending = payload
-                .get("pending_interaction")
-                .and_then(|v| v.as_str())
-                .unwrap_or("none");
 
             match pending {
                 "approval" => events.push(build_event(
@@ -693,6 +699,47 @@ mod tests {
         parse_frame("srv-kimi", bg_end, now, &mut state).unwrap();
         assert!(!state.busy.contains("sess-b"));
         assert!(!state.activities.contains_key("sess-b"));
+    }
+
+    #[test]
+    fn pending_interaction_overrides_activity_display() {
+        let mut state = ProtocolState::default();
+        let now = Utc::now();
+
+        // 相位停在思考中，随后服务器推送待审批：展示切「等待审批」。
+        let thinking = r#"{"type":"agent.status.updated","session_id":"sess-p","payload":{"agentId":"main","phase":{"kind":"streaming","stream":"thinking"}}}"#;
+        parse_frame("srv-kimi", thinking, now, &mut state).unwrap();
+        let approval = r#"{"type":"event.session.work_changed","session_id":"sess-p","payload":{"busy":true,"main_turn_active":true,"pending_interaction":"approval"}}"#;
+        parse_frame("srv-kimi", approval, now, &mut state).unwrap();
+        assert_eq!(
+            state
+                .activities
+                .get("sess-p")
+                .and_then(|a| a.effective_display()),
+            Some("等待审批".to_string())
+        );
+
+        // 回到 none 后恢复相位文本。
+        let none = r#"{"type":"event.session.work_changed","session_id":"sess-p","payload":{"busy":true,"main_turn_active":true,"pending_interaction":"none"}}"#;
+        parse_frame("srv-kimi", none, now, &mut state).unwrap();
+        assert_eq!(
+            state
+                .activities
+                .get("sess-p")
+                .and_then(|a| a.effective_display()),
+            Some("思考中".to_string())
+        );
+
+        // 待回答同理。
+        let question = r#"{"type":"event.session.work_changed","session_id":"sess-p","payload":{"busy":true,"main_turn_active":true,"pending_interaction":"question"}}"#;
+        parse_frame("srv-kimi", question, now, &mut state).unwrap();
+        assert_eq!(
+            state
+                .activities
+                .get("sess-p")
+                .and_then(|a| a.effective_display()),
+            Some("等待回答".to_string())
+        );
     }
 
     #[test]

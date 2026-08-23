@@ -53,6 +53,19 @@ pub struct SessionActivity {
     pub current_tool: Option<(String, String)>,
     /// 工具命令预览 (toolCallId -> 首行截断)。
     pub tool_commands: HashMap<String, String>,
+    /// 服务器侧待交互状态（approval / question），展示时优先于相位文本。
+    pub pending: Option<String>,
+}
+
+impl SessionActivity {
+    /// 待审批/待回答优先展示，否则回落到相位文本。
+    pub fn effective_display(&self) -> Option<String> {
+        match self.pending.as_deref() {
+            Some("approval") => Some("等待审批".to_string()),
+            Some("question") => Some("等待回答".to_string()),
+            _ => self.display.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]

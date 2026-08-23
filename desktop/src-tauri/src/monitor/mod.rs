@@ -201,7 +201,7 @@ pub(crate) fn send_status(
             activity: state
                 .activities
                 .get(id)
-                .and_then(|activity| activity.display.clone()),
+                .and_then(|activity| activity.effective_display()),
         })
         .collect();
     // HashSet 遍历顺序不稳定，排序后状态比较才不会因顺序抖动误触发重绘。
