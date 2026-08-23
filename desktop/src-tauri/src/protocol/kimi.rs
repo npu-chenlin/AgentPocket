@@ -708,34 +708,26 @@ mod tests {
         parse_frame("srv-kimi", thinking, now, &mut state).unwrap();
         let approval = r#"{"type":"event.session.work_changed","session_id":"sess-p","payload":{"busy":true,"main_turn_active":true,"pending_interaction":"approval"}}"#;
         parse_frame("srv-kimi", approval, now, &mut state).unwrap();
-        assert_eq!(
-            state
-                .activities
-                .get("sess-p")
-                .and_then(|a| a.effective_display()),
-            Some("等待审批".to_string())
-        );
+        assert_eq!(state.activity_text("sess-p"), Some("等待审批".to_string()));
 
         // 回到 none 后恢复相位文本。
         let none = r#"{"type":"event.session.work_changed","session_id":"sess-p","payload":{"busy":true,"main_turn_active":true,"pending_interaction":"none"}}"#;
         parse_frame("srv-kimi", none, now, &mut state).unwrap();
-        assert_eq!(
-            state
-                .activities
-                .get("sess-p")
-                .and_then(|a| a.effective_display()),
-            Some("思考中".to_string())
-        );
+        assert_eq!(state.activity_text("sess-p"), Some("思考中".to_string()));
 
         // 待回答同理。
         let question = r#"{"type":"event.session.work_changed","session_id":"sess-p","payload":{"busy":true,"main_turn_active":true,"pending_interaction":"question"}}"#;
         parse_frame("srv-kimi", question, now, &mut state).unwrap();
+        assert_eq!(state.activity_text("sess-p"), Some("等待回答".to_string()));
+
+        // 主回合结束、后台任务在跑 → 等后台文本（与手机端一致）。
+        let main_done = r#"{"type":"event.session.work_changed","session_id":"sess-p","payload":{"busy":true,"main_turn_active":false,"pending_interaction":"none"}}"#;
+        parse_frame("srv-kimi", main_done, now, &mut state).unwrap();
+        let bg = r#"{"type":"background.task.started","session_id":"sess-p","payload":{}}"#;
+        parse_frame("srv-kimi", bg, now, &mut state).unwrap();
         assert_eq!(
-            state
-                .activities
-                .get("sess-p")
-                .and_then(|a| a.effective_display()),
-            Some("等待回答".to_string())
+            state.activity_text("sess-p"),
+            Some("主 agent 已完成 · 等 1 个后台任务".to_string())
         );
     }
 

@@ -30,6 +30,25 @@ pub struct ProtocolState {
 }
 
 impl ProtocolState {
+    /// 活动行文本：待审批/待回答 > 等后台 > 相位文本（与手机端 sessionState 一致）。
+    pub fn activity_text(&self, session_id: &str) -> Option<String> {
+        let activity = self.activities.get(session_id);
+        match activity.and_then(|a| a.pending.as_deref()) {
+            Some("approval") => return Some("等待审批".to_string()),
+            Some("question") => return Some("等待回答".to_string()),
+            _ => {}
+        }
+        if self.main_turn_inactive.contains(session_id) {
+            let running = self.bg_running.get(session_id).copied().unwrap_or(0);
+            return Some(if running > 0 {
+                format!("主 agent 已完成 · 等 {} 个后台任务", running)
+            } else {
+                "主 agent 已完成".to_string()
+            });
+        }
+        activity.and_then(|a| a.display.clone())
+    }
+
     /// 有效忙碌 = 服务器报 busy 且（主回合活跃 或 仍有后台任务）；变空闲即清空活动展示。
     pub fn apply_effective_busy(&mut self, session_id: &str) {
         let raw = self.raw_busy.contains(session_id);
@@ -55,17 +74,6 @@ pub struct SessionActivity {
     pub tool_commands: HashMap<String, String>,
     /// 服务器侧待交互状态（approval / question），展示时优先于相位文本。
     pub pending: Option<String>,
-}
-
-impl SessionActivity {
-    /// 待审批/待回答优先展示，否则回落到相位文本。
-    pub fn effective_display(&self) -> Option<String> {
-        match self.pending.as_deref() {
-            Some("approval") => Some("等待审批".to_string()),
-            Some("question") => Some("等待回答".to_string()),
-            _ => self.display.clone(),
-        }
-    }
 }
 
 #[derive(Debug, Error)]

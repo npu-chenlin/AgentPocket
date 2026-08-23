@@ -198,10 +198,7 @@ pub(crate) fn send_status(
                 .filter(|title| !title.is_empty())
                 .cloned()
                 .unwrap_or_else(|| "会话".to_string()),
-            activity: state
-                .activities
-                .get(id)
-                .and_then(|activity| activity.effective_display()),
+            activity: state.activity_text(id),
         })
         .collect();
     // HashSet 遍历顺序不稳定，排序后状态比较才不会因顺序抖动误触发重绘。
