@@ -80,6 +80,9 @@ async fn run_once(
 
     // 1. Fetch baseline session list.
     fetch_baseline(client, server, base.clone(), state, token).await?;
+    // 启动种子：对忙碌会话取一次详情（含 main_turn_active / 后台任务数），
+    // 之后的细分状态全靠推送。
+    seed_busy_sessions(client, server, base.clone(), state, token).await;
     send_status(update_tx, &server.id, false, state, None);
 
     // 2. Connect WebSocket with optional subprotocol header.
@@ -98,22 +101,14 @@ async fn run_once(
 
     send_status(update_tx, &server.id, true, state, None);
 
-    // 3. Send client_hello with subscriptions and cursors.
+    // 3. 只用基础订阅：相位/工具/任务事件都由它推送，不再订阅 transcript（省流量）。
     let session_ids: Vec<String> = state.titles.keys().cloned().collect();
     let hello = client_hello(&session_ids);
     ws_stream
         .send(Message::Text(hello.to_string().into()))
         .await
         .map_err(|e| MonitorError::Ws(e.to_string()))?;
-
-    // 4. Subscribe transcript stream (block granularity) for activity details.
-    for id in &session_ids {
-        ws_stream
-            .send(Message::Text(subscribe_v2(id).to_string().into()))
-            .await
-            .map_err(|e| MonitorError::Ws(e.to_string()))?;
-        state.v2_subscribed.insert(id.clone());
-    }
+    state.subscribed = session_ids.into_iter().collect();
 
     read_loop(client, ws_stream, server, update_tx, state, token).await
 }
@@ -192,6 +187,10 @@ async fn fetch_baseline(
 
     state.titles.clear();
     state.busy.clear();
+    state.raw_busy.clear();
+    state.main_turn_inactive.clear();
+    state.bg_running.clear();
+    state.activities.clear();
 
     for item in items {
         let id = item
@@ -216,12 +215,109 @@ async fn fetch_baseline(
             .and_then(|v| v.as_str())
             .unwrap_or("idle");
         if status != "idle" {
-            state.busy.insert(id.to_string());
+            // 会话列表只有粗粒度状态；主回合活跃性默认视为活跃，由种子校准细化。
+            state.raw_busy.insert(id.to_string());
+            state.apply_effective_busy(id);
         }
     }
 
     state.baseline_complete = true;
     Ok(())
+}
+
+/// 启动种子：对每个忙碌会话取一次详情（含 main_turn_active），之后的状态全靠推送。
+async fn seed_busy_sessions(
+    client: &reqwest::Client,
+    server: &ServerConfig,
+    base: url::Url,
+    state: &mut ProtocolState,
+    token: &CancellationToken,
+) {
+    let ids: Vec<String> = state.busy.iter().cloned().collect();
+    for id in ids {
+        let Some(url) = base.join(&format!("/api/v1/sessions/{}", id)).ok() else {
+            continue;
+        };
+        let Some(text) = fetch_text(client, server, url, token).await else {
+            continue;
+        };
+        let Some((raw_busy, main_active)) = parse_session_detail(&text) else {
+            continue;
+        };
+        if raw_busy {
+            state.raw_busy.insert(id.clone());
+        } else {
+            state.raw_busy.remove(&id);
+        }
+        if main_active {
+            state.main_turn_inactive.remove(&id);
+        } else {
+            state.main_turn_inactive.insert(id.clone());
+        }
+        if !main_active {
+            // 主回合已结束：取一次后台任务数作为事件计数的初值。
+            if let Ok(tasks_url) = base.join(&format!("/api/v1/sessions/{}/tasks", id)) {
+                if let Some(text) = fetch_text(client, server, tasks_url, token).await {
+                    let running = count_running_tasks(&text);
+                    if running > 0 {
+                        state.bg_running.insert(id.clone(), running);
+                    } else {
+                        state.bg_running.remove(&id);
+                    }
+                }
+            }
+        }
+        state.apply_effective_busy(&id);
+    }
+}
+
+async fn fetch_text(
+    client: &reqwest::Client,
+    server: &ServerConfig,
+    url: url::Url,
+    token: &CancellationToken,
+) -> Option<String> {
+    let mut req = client.get(url);
+    if !server.token.is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", server.token));
+    }
+    let resp = cancellable_request(async { req.send().await.map_err(|e| e.to_string()) }, token)
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.text().await.ok()
+}
+
+/// 解析会话详情：(服务器侧忙碌, 主回合是否活跃)。
+fn parse_session_detail(text: &str) -> Option<(bool, bool)> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    let data = value.get("data")?;
+    let busy = data.get("busy").and_then(|v| v.as_bool()).unwrap_or(false);
+    let main_active = data
+        .get("main_turn_active")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    Some((busy, main_active))
+}
+
+/// 统计运行中的后台任务，决定「等后台」还是「已完成」。
+fn count_running_tasks(text: &str) -> u32 {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return 0;
+    };
+    let items = value
+        .pointer("/data/items")
+        .and_then(|v| v.as_array())
+        .or_else(|| value.get("data").and_then(|v| v.as_array()));
+    items
+        .map(|arr| {
+            arr.iter()
+                .filter(|task| task.get("status").and_then(|v| v.as_str()) == Some("running"))
+                .count() as u32
+        })
+        .unwrap_or(0)
 }
 
 fn build_sessions_url(base: url::Url) -> Result<url::Url, MonitorError> {
@@ -255,19 +351,19 @@ async fn read_loop(
                             }
                             Err(e) => return Err(e),
                         }
-                        // 新出现的会话（如 event.session.created）补订 transcript 流。
+                        // 新出现的会话（如 event.session.created）补进基础订阅。
                         let new_ids: Vec<String> = state
                             .titles
                             .keys()
-                            .filter(|id| !state.v2_subscribed.contains(*id))
+                            .filter(|id| !state.subscribed.contains(*id))
                             .cloned()
                             .collect();
-                        for id in new_ids {
+                        if !new_ids.is_empty() {
                             ws_stream
-                                .send(Message::Text(subscribe_v2(&id).to_string().into()))
+                                .send(Message::Text(subscribe(&new_ids).to_string().into()))
                                 .await
                                 .map_err(|e| MonitorError::Ws(e.to_string()))?;
-                            state.v2_subscribed.insert(id);
+                            state.subscribed.extend(new_ids);
                         }
                         send_status(update_tx, &server.id, true, state, None);
                     }
@@ -331,15 +427,17 @@ async fn handle_message(
         }
         "resync_required" => {
             let base = server.base_url().map_err(MonitorError::Config)?;
-            fetch_baseline(client, server, base, state, token)
+            fetch_baseline(client, server, base.clone(), state, token)
                 .await
                 .map_err(|e| MonitorError::Protocol(e.to_string()))?;
+            seed_busy_sessions(client, server, base, state, token).await;
             let ids: Vec<String> = state.titles.keys().cloned().collect();
             let sub = subscribe(&ids);
             ws_stream
                 .send(Message::Text(sub.to_string().into()))
                 .await
                 .map_err(|e| MonitorError::Ws(e.to_string()))?;
+            state.subscribed = ids.into_iter().collect();
             Ok(Vec::new())
         }
         _ => parse_frame(&server.id, text, Utc::now(), state)
@@ -448,18 +546,6 @@ fn subscribe(session_ids: &[String]) -> Value {
     })
 }
 
-/// block 粒度只推结构事件（相位、工具帧），不推 token 流，流量可忽略。
-fn subscribe_v2(session_id: &str) -> Value {
-    json!({
-        "type": "subscribe_v2",
-        "id": uuid::Uuid::new_v4().to_string(),
-        "payload": {
-            "session_id": session_id,
-            "transcript": { "main": "block" },
-        },
-    })
-}
-
 #[derive(Debug, thiserror::Error)]
 enum MonitorError {
     #[error("config error: {0}")]
@@ -481,6 +567,27 @@ mod tests {
     use super::*;
     use crate::model::{Backend, ServerConfig};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn parse_session_detail_extracts_busy_and_main_turn() {
+        let text = r#"{"data":{"busy":true,"main_turn_active":false,"pending_interaction":"none"}}"#;
+        assert_eq!(parse_session_detail(text), Some((true, false)));
+        // main_turn_active 缺省视为活跃。
+        let missing = r#"{"data":{"busy":true}}"#;
+        assert_eq!(parse_session_detail(missing), Some((true, true)));
+        assert_eq!(parse_session_detail("{}"), None);
+        assert_eq!(parse_session_detail("not json"), None);
+    }
+
+    #[test]
+    fn count_running_tasks_counts_only_running() {
+        let text = r#"{"data":{"items":[{"status":"running"},{"status":"completed"},{"status":"running"}]}}"#;
+        assert_eq!(count_running_tasks(text), 2);
+        // 兼容 data 直接是数组的老格式。
+        let arr = r#"{"data":[{"status":"running"},{"status":"failed"}]}"#;
+        assert_eq!(count_running_tasks(arr), 1);
+        assert_eq!(count_running_tasks("not json"), 0);
+    }
 
     #[test]
     fn ws_url_selects_ws_for_http_base_url() {

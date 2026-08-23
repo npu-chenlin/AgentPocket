@@ -13,36 +13,76 @@ pub fn parse_frame(
     let msg: Value = serde_json::from_str(text).map_err(ProtocolError::Json)?;
     let event_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or_default();
 
+    // 只关心主 agent：子代理的回合完成/审批/相位等事件一律忽略，
+    // 避免子代理触发通知、污染忙碌状态与活动行。
+    let agent_id = msg
+        .pointer("/payload/agentId")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if !agent_id.is_empty() && agent_id != "main" {
+        return Ok(Vec::new());
+    }
+
     match event_type {
         "server_hello" | "subscribe_ack" | "ack" | "ping" | "resync_required" | "error" => {
             Ok(Vec::new())
         }
 
-        "transcript.ops" => {
+        // 相位事件（基础订阅推送）：更新活动文本，区分思考/输出/工具。
+        "agent.status.updated" => {
             let session_id = msg
                 .get("session_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            let ops = msg
-                .pointer("/payload/ops")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            if !session_id.is_empty() {
-                apply_activity_ops(session_id, &ops, state);
+            if let Some(phase) = msg.pointer("/payload/phase") {
+                if !session_id.is_empty() {
+                    apply_phase(session_id, phase, state);
+                }
             }
             Ok(Vec::new())
         }
 
-        "transcript.reset" => {
-            // 订阅后的快照：用当前相位补齐已在执行中的活动。
+        // 工具开始事件（基础订阅推送）：命令预览入缓存；子代理按工具名识别。
+        "tool.call.started" => {
             let session_id = msg
                 .get("session_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            if let Some(phase) = msg.pointer("/payload/snapshot/meta/agent/phase") {
+            if !session_id.is_empty() {
+                if let Some(payload) = msg.get("payload") {
+                    handle_tool_call_started(session_id, payload, state);
+                }
+            }
+            Ok(Vec::new())
+        }
+
+        // 轮次结束清命令缓存，防止无界增长。
+        "turn.ended" => {
+            if let Some(session_id) = msg.get("session_id").and_then(|v| v.as_str()) {
+                if let Some(activity) = state.activities.get_mut(session_id) {
+                    activity.tool_commands.clear();
+                }
+            }
+            Ok(Vec::new())
+        }
+
+        // 后台任务生命周期：增减运行计数后重算有效忙碌。
+        "background.task.started" | "background.task.terminated" => {
+            if let Some(session_id) = msg.get("session_id").and_then(|v| v.as_str()) {
                 if !session_id.is_empty() {
-                    apply_phase(session_id, phase, state);
+                    let delta: i32 = if event_type == "background.task.started" { 1 } else { -1 };
+                    let current = state
+                        .bg_running
+                        .get(session_id)
+                        .copied()
+                        .unwrap_or(0) as i32;
+                    let next = (current + delta).max(0) as u32;
+                    if next == 0 {
+                        state.bg_running.remove(session_id);
+                    } else {
+                        state.bg_running.insert(session_id.to_string(), next);
+                    }
+                    state.apply_effective_busy(session_id);
                 }
             }
             Ok(Vec::new())
@@ -88,73 +128,105 @@ fn apply_phase(session_id: &str, phase: &Value, state: &mut ProtocolState) {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
-            let name = phase
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("工具")
-                .to_string();
-            let command = activity
-                .tool_commands
-                .get(&tool_call_id)
-                .map(|cmd| format!(" · {}", cmd));
+            let name = display_name(
+                phase
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("工具"),
+            );
+            let command = activity.tool_commands.get(&tool_call_id).cloned();
             activity.current_tool = Some((tool_call_id, name.clone()));
-            activity.display = Some(format!("{}{}", name, command.unwrap_or_default()));
+            activity.display = Some(tool_display(&name, command.as_deref()));
         }
         "streaming" | "running" => {
+            let stream = phase
+                .get("stream")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             activity.current_tool = None;
-            activity.display = Some("思考中".to_string());
+            activity.display = Some(if stream == "assistant" {
+                "输出中".to_string()
+            } else {
+                "思考中".to_string()
+            });
+        }
+        "ended" => {
+            activity.current_tool = None;
         }
         _ => {}
     }
 }
 
-fn apply_activity_ops(session_id: &str, ops: &[Value], state: &mut ProtocolState) {
-    for op in ops {
-        match op.get("op").and_then(|v| v.as_str()).unwrap_or_default() {
-            "meta.merge" => {
-                if let Some(phase) = op.pointer("/meta/agent/phase") {
-                    apply_phase(session_id, phase, state);
-                }
-            }
-            "frame.upsert" => {
-                let Some(frame) = op.get("frame") else { continue };
-                if frame.get("kind").and_then(|v| v.as_str()) != Some("tool") {
-                    continue;
-                }
-                let Some(activity) = state.activities.get_mut(session_id) else {
-                    continue;
-                };
-                let tool_call_id = frame
-                    .get("toolCallId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                if tool_call_id.is_empty() {
-                    continue;
-                }
-                if let Some(input_text) = frame.get("inputText").and_then(|v| v.as_str()) {
-                    let preview = command_preview(input_text);
-                    if !preview.is_empty() {
-                        activity.tool_commands.insert(tool_call_id.clone(), preview);
-                    }
-                }
-                // 命令到达时若相位正指向该工具，刷新展示文本。
-                if let Some((current_id, name)) = activity.current_tool.clone() {
-                    if current_id == tool_call_id {
-                        if let Some(cmd) = activity.tool_commands.get(&tool_call_id) {
-                            activity.display = Some(format!("{} · {}", name, cmd));
-                        }
-                    }
-                }
-            }
-            "turn.upsert" => {
-                // 新轮次开始，丢弃上一轮的命令缓存防止无界增长。
-                if let Some(activity) = state.activities.get_mut(session_id) {
-                    activity.tool_commands.clear();
-                }
-            }
-            _ => {}
+fn handle_tool_call_started(session_id: &str, payload: &Value, state: &mut ProtocolState) {
+    let tool_call_id = payload
+        .get("toolCallId")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if tool_call_id.is_empty() {
+        return;
+    }
+
+    let name = payload
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let mut command = payload
+        .pointer("/display/command")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if command.is_empty() {
+        command = payload
+            .pointer("/args/command")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+    }
+    if command.is_empty() {
+        command = payload
+            .pointer("/args/description")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+    }
+
+    let preview = command_preview(&command);
+    let activity = state.activities.entry(session_id.to_string()).or_default();
+    if !preview.is_empty() {
+        activity
+            .tool_commands
+            .insert(tool_call_id.to_string(), preview.clone());
+    }
+    // 相位已指向该工具时刷新展示（相位事件可能先到）。
+    if let Some((current_id, current_name)) = activity.current_tool.clone() {
+        if current_id == tool_call_id {
+            let display_name = if name.is_empty() {
+                current_name
+            } else {
+                display_name(&name)
+            };
+            activity.display = Some(tool_display(&display_name, Some(preview.as_str())));
         }
+    }
+}
+
+fn is_subagent_tool(name: &str) -> bool {
+    matches!(name, "Agent" | "AgentSwarm" | "Task")
+}
+
+fn display_name(name: &str) -> String {
+    if is_subagent_tool(name) {
+        "子代理".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+fn tool_display(name: &str, command: Option<&str>) -> String {
+    match command.filter(|c| !c.is_empty()) {
+        Some(cmd) => format!("{} · {}", name, cmd),
+        None => name.to_string(),
     }
 }
 
@@ -192,11 +264,14 @@ fn handle_protocol_event(
             let is_active = status != "idle";
 
             if let Some(ref id) = session_id {
-                if was_active && !is_active {
-                    state.busy.remove(id);
-                    state.activities.remove(id);
-                } else if !was_active && is_active {
-                    state.busy.insert(id.clone());
+                if was_active != is_active {
+                    // 状态跃迁等价于主回合活跃性变化；busy 以 work_changed 推送为准。
+                    if is_active {
+                        state.main_turn_inactive.remove(id);
+                    } else {
+                        state.main_turn_inactive.insert(id.clone());
+                    }
+                    state.apply_effective_busy(id);
                 }
             }
 
@@ -246,13 +321,21 @@ fn handle_protocol_event(
                 .unwrap_or(false);
 
             if let Some(ref id) = session_id {
-                let was_busy = state.busy.contains(id);
-                if busy && !was_busy {
-                    state.busy.insert(id.clone());
-                } else if !busy && was_busy {
-                    state.busy.remove(id);
-                    state.activities.remove(id);
+                // 推送自带细分字段，直接落状态；主回合活跃性缺省视为活跃。
+                if busy {
+                    state.raw_busy.insert(id.clone());
+                } else {
+                    state.raw_busy.remove(id);
                 }
+                if let Some(main_active) = payload.get("main_turn_active").and_then(|v| v.as_bool())
+                {
+                    if main_active {
+                        state.main_turn_inactive.remove(id);
+                    } else {
+                        state.main_turn_inactive.insert(id.clone());
+                    }
+                }
+                state.apply_effective_busy(id);
             }
 
             let pending = payload
@@ -299,7 +382,9 @@ fn handle_protocol_event(
                         title
                     };
                     state.titles.insert(id.clone(), title.to_string());
-                    state.busy.insert(id.clone());
+                    state.raw_busy.insert(id.clone());
+                    state.main_turn_inactive.remove(id);
+                    state.apply_effective_busy(id);
                 }
             }
         }
@@ -372,6 +457,7 @@ fn event_key(msg: &Value, prefix: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::SessionActivity;
 
     fn kinds(text: &str, state: &mut ProtocolState) -> Vec<AgentEventKind> {
         let now = Utc::now();
@@ -465,40 +551,171 @@ mod tests {
             .is_empty());
     }
 
+    fn display_of(state: &ProtocolState, session_id: &str) -> Option<String> {
+        state
+            .activities
+            .get(session_id)
+            .and_then(|a| a.display.clone())
+    }
+
     #[test]
-    fn transcript_ops_build_activity_display() {
+    fn subagent_events_are_ignored() {
         let mut state = ProtocolState::default();
         let now = Utc::now();
 
-        // 相位进入 tool_call，此时命令还没到。
-        let phase = r#"{"type":"transcript.ops","session_id":"sess-a","payload":{"agent_id":"main","ops":[{"op":"meta.merge","meta":{"agent":{"phase":{"kind":"tool_call","turnId":1,"step":2,"toolCallId":"toolu_1","name":"Bash"}}}}]}}"#;
-        parse_frame("srv-kimi", phase, now, &mut state).unwrap();
-        assert_eq!(
-            state.activities.get("sess-a").and_then(|a| a.display.clone()),
-            Some("Bash".to_string())
-        );
+        // 子代理的回合完成不触发通知事件。
+        let sub = r#"{"type":"prompt.completed","session_id":"sess-s","payload":{"promptId":"p1","agentId":"agent-sub"}}"#;
+        assert!(parse_frame("srv-kimi", sub, now, &mut state)
+            .unwrap()
+            .is_empty());
 
-        // 工具帧补上命令，展示文本刷新为 "工具 · 命令首行"。
-        let tool_frame = r#"{"type":"transcript.ops","session_id":"sess-a","payload":{"agent_id":"main","ops":[{"op":"frame.upsert","turnId":"t1","stepId":"t1.1","frame":{"kind":"tool","frameId":"f1","toolCallId":"toolu_1","name":"Bash","state":"running","inputText":"git push origin main\nsecond line"}}]}}"#;
-        parse_frame("srv-kimi", tool_frame, now, &mut state).unwrap();
+        // 子代理的相位不写活动行。
+        let sub_phase = r#"{"type":"agent.status.updated","session_id":"sess-s","payload":{"agentId":"agent-sub","phase":{"kind":"streaming","stream":"thinking"}}}"#;
+        assert!(parse_frame("srv-kimi", sub_phase, now, &mut state)
+            .unwrap()
+            .is_empty());
+        assert!(!state.activities.contains_key("sess-s"));
+
+        // 主 agent 事件照常生效。
+        let main = r#"{"type":"prompt.completed","session_id":"sess-s","payload":{"promptId":"p2","agentId":"main"}}"#;
+        let events = parse_frame("srv-kimi", main, now, &mut state).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AgentEventKind::Completed);
+    }
+
+    #[test]
+    fn agent_status_updated_drives_activity_display() {
+        let mut state = ProtocolState::default();
+        let now = Utc::now();
+
+        // 思考流 → 思考中。
+        let thinking = r#"{"type":"agent.status.updated","session_id":"sess-a","payload":{"agentId":"main","phase":{"kind":"streaming","stream":"thinking"}}}"#;
+        parse_frame("srv-kimi", thinking, now, &mut state).unwrap();
+        assert_eq!(display_of(&state, "sess-a"), Some("思考中".to_string()));
+
+        // 助手流 → 输出中。
+        let assistant = r#"{"type":"agent.status.updated","session_id":"sess-a","payload":{"agentId":"main","phase":{"kind":"streaming","stream":"assistant"}}}"#;
+        parse_frame("srv-kimi", assistant, now, &mut state).unwrap();
+        assert_eq!(display_of(&state, "sess-a"), Some("输出中".to_string()));
+
+        // 子代理工具改名展示。
+        let tool = r#"{"type":"agent.status.updated","session_id":"sess-a","payload":{"agentId":"main","phase":{"kind":"tool_call","toolCallId":"toolu_9","name":"Agent"}}}"#;
+        parse_frame("srv-kimi", tool, now, &mut state).unwrap();
+        assert_eq!(display_of(&state, "sess-a"), Some("子代理".to_string()));
+
+        // ended 只清当前工具指向，不清展示文本。
+        let ended = r#"{"type":"agent.status.updated","session_id":"sess-a","payload":{"agentId":"main","phase":{"kind":"ended"}}}"#;
+        parse_frame("srv-kimi", ended, now, &mut state).unwrap();
+        assert_eq!(display_of(&state, "sess-a"), Some("子代理".to_string()));
+        assert_eq!(state.activities.get("sess-a").unwrap().current_tool, None);
+    }
+
+    #[test]
+    fn tool_call_started_fills_command_preview() {
+        let mut state = ProtocolState::default();
+        let now = Utc::now();
+
+        // 相位先指向工具，随后 tool.call.started 补上命令。
+        let phase = r#"{"type":"agent.status.updated","session_id":"sess-a","payload":{"agentId":"main","phase":{"kind":"tool_call","toolCallId":"toolu_1","name":"Bash"}}}"#;
+        parse_frame("srv-kimi", phase, now, &mut state).unwrap();
+        assert_eq!(display_of(&state, "sess-a"), Some("Bash".to_string()));
+
+        let started = r#"{"type":"tool.call.started","session_id":"sess-a","payload":{"agentId":"main","toolCallId":"toolu_1","name":"Bash","display":{"command":"git push origin main\nsecond line"}}}"#;
+        parse_frame("srv-kimi", started, now, &mut state).unwrap();
         assert_eq!(
-            state.activities.get("sess-a").and_then(|a| a.display.clone()),
+            display_of(&state, "sess-a"),
             Some("Bash · git push origin main".to_string())
         );
 
-        // 相位回到 streaming，展示思考中。
-        let streaming = r#"{"type":"transcript.ops","session_id":"sess-a","payload":{"agent_id":"main","ops":[{"op":"meta.merge","meta":{"agent":{"phase":{"kind":"streaming","turnId":1,"step":2,"stream":"thinking"}}}}]}}"#;
-        parse_frame("srv-kimi", streaming, now, &mut state).unwrap();
+        // 无 display.command 时退回 args.command。
+        let phase2 = r#"{"type":"agent.status.updated","session_id":"sess-a","payload":{"agentId":"main","phase":{"kind":"tool_call","toolCallId":"toolu_2","name":"Edit"}}}"#;
+        parse_frame("srv-kimi", phase2, now, &mut state).unwrap();
+        let started2 = r#"{"type":"tool.call.started","session_id":"sess-a","payload":{"agentId":"main","toolCallId":"toolu_2","name":"Edit","args":{"command":"apply patch"}}}"#;
+        parse_frame("srv-kimi", started2, now, &mut state).unwrap();
         assert_eq!(
-            state.activities.get("sess-a").and_then(|a| a.display.clone()),
-            Some("思考中".to_string())
+            display_of(&state, "sess-a"),
+            Some("Edit · apply patch".to_string())
         );
 
-        // 会话转空闲后活动清空。
-        let idle = r#"{"type":"event.session.work_changed","session_id":"sess-a","payload":{"busy":false,"pending_interaction":"none"}}"#;
-        state.busy.insert("sess-a".to_string());
-        parse_frame("srv-kimi", idle, now, &mut state).unwrap();
-        assert!(state.activities.get("sess-a").is_none());
+        // 子代理工具：名字改「子代理」，命令退回 args.description。
+        let phase3 = r#"{"type":"agent.status.updated","session_id":"sess-a","payload":{"agentId":"main","phase":{"kind":"tool_call","toolCallId":"toolu_3","name":"Agent"}}}"#;
+        parse_frame("srv-kimi", phase3, now, &mut state).unwrap();
+        let started3 = r#"{"type":"tool.call.started","session_id":"sess-a","payload":{"agentId":"main","toolCallId":"toolu_3","name":"Agent","args":{"description":"explore repo"}}}"#;
+        parse_frame("srv-kimi", started3, now, &mut state).unwrap();
+        assert_eq!(
+            display_of(&state, "sess-a"),
+            Some("子代理 · explore repo".to_string())
+        );
+    }
+
+    #[test]
+    fn turn_ended_clears_command_cache() {
+        let mut state = ProtocolState::default();
+        let now = Utc::now();
+
+        let phase = r#"{"type":"agent.status.updated","session_id":"sess-a","payload":{"agentId":"main","phase":{"kind":"tool_call","toolCallId":"toolu_1","name":"Bash"}}}"#;
+        parse_frame("srv-kimi", phase, now, &mut state).unwrap();
+        let started = r#"{"type":"tool.call.started","session_id":"sess-a","payload":{"agentId":"main","toolCallId":"toolu_1","name":"Bash","display":{"command":"ls -la"}}}"#;
+        parse_frame("srv-kimi", started, now, &mut state).unwrap();
+        assert_eq!(display_of(&state, "sess-a"), Some("Bash · ls -la".to_string()));
+
+        // 轮次结束清命令缓存；同一 toolCallId 再次进入相位时只剩工具名。
+        let ended = r#"{"type":"turn.ended","session_id":"sess-a","payload":{}}"#;
+        parse_frame("srv-kimi", ended, now, &mut state).unwrap();
+        parse_frame("srv-kimi", phase, now, &mut state).unwrap();
+        assert_eq!(display_of(&state, "sess-a"), Some("Bash".to_string()));
+    }
+
+    #[test]
+    fn effective_busy_requires_main_turn_or_background_task() {
+        let mut state = ProtocolState::default();
+        let now = Utc::now();
+
+        // 服务器报 busy 但主回合已结束：不转圈。
+        let idle_main = r#"{"type":"event.session.work_changed","session_id":"sess-b","payload":{"busy":true,"main_turn_active":false,"pending_interaction":"none"}}"#;
+        parse_frame("srv-kimi", idle_main, now, &mut state).unwrap();
+        assert!(!state.busy.contains("sess-b"));
+
+        // 后台任务启动 → 忙碌。
+        let bg_start = r#"{"type":"background.task.started","session_id":"sess-b","payload":{}}"#;
+        parse_frame("srv-kimi", bg_start, now, &mut state).unwrap();
+        assert!(state.busy.contains("sess-b"));
+
+        // 后台任务结束 → 回空闲并清空活动展示。
+        state.activities.insert(
+            "sess-b".to_string(),
+            SessionActivity {
+                display: Some("思考中".to_string()),
+                ..Default::default()
+            },
+        );
+        let bg_end = r#"{"type":"background.task.terminated","session_id":"sess-b","payload":{}}"#;
+        parse_frame("srv-kimi", bg_end, now, &mut state).unwrap();
+        assert!(!state.busy.contains("sess-b"));
+        assert!(!state.activities.contains_key("sess-b"));
+    }
+
+    #[test]
+    fn status_changed_tracks_main_turn_activity() {
+        let mut state = ProtocolState::default();
+        let now = Utc::now();
+
+        // 种子：忙碌且主回合活跃。
+        let start = r#"{"type":"event.session.work_changed","session_id":"sess-c","payload":{"busy":true,"main_turn_active":true,"pending_interaction":"none"}}"#;
+        parse_frame("srv-kimi", start, now, &mut state).unwrap();
+        assert!(state.busy.contains("sess-c"));
+
+        // 主回合结束（无后台任务）→ 不再忙碌，完成事件照常产出。
+        let idle = r#"{"type":"event.session.status_changed","session_id":"sess-c","payload":{"previous_status":"running","status":"idle"},"epoch":"1","seq":3}"#;
+        let events = parse_frame("srv-kimi", idle, now, &mut state).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AgentEventKind::Completed);
+        assert!(!state.busy.contains("sess-c"));
+
+        // 仍有后台任务 → 重新判定为忙碌。
+        let bg_start = r#"{"type":"background.task.started","session_id":"sess-c","payload":{}}"#;
+        parse_frame("srv-kimi", bg_start, now, &mut state).unwrap();
+        assert!(state.busy.contains("sess-c"));
     }
 
     #[test]
