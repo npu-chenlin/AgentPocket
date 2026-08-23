@@ -125,6 +125,14 @@ npm run tauri dev
 npm run tauri build -- --bundles appimage,deb
 ```
 
+若只产出二进制（不打安装包），必须启用 `custom-protocol`：
+
+```shell
+npm run build && cargo build --release --features tauri/custom-protocol
+```
+
+不带该 feature 的二进制是 dev 模式：不嵌入前端资源，启动后加载 `localhost:1420`（未运行 dev server 时报 Connection refused）。
+
 产物分别位于：
 
 - `desktop/src-tauri/target/release/bundle/appimage/`
