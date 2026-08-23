@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.UUID;
 
 import okhttp3.Call;
@@ -42,6 +43,8 @@ public class DshServerMonitor extends ServerMonitor {
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     private final Map<String, Boolean> busyBySession = Collections.synchronizedMap(new HashMap<>());
+    /** 每次建立连接递增；旧 WebSocket 的回调不得影响当前连接。 */
+    private final AtomicLong socketGeneration = new AtomicLong();
 
     public DshServerMonitor(MonitorHost host, ServerStore.Server server, OkHttpClient client) {
         super(host, server, client);
@@ -106,11 +109,14 @@ public class DshServerMonitor extends ServerMonitor {
 
     private void connectWebSocket() {
         if (stopped) return;
+        final long generation = socketGeneration.incrementAndGet();
+        if (webSocket != null) webSocket.cancel();
         String wsUrl = server.baseUrl().replace("http://", "ws://").replace("https://", "wss://")
                 + "/api/events.mux";
 
         webSocket = client.newWebSocket(new Request.Builder().url(wsUrl).build(), new WebSocketListener() {
             @Override public void onOpen(WebSocket ws, Response response) {
+                if (!isCurrentSocket(ws, generation)) return;
                 Log.i(TAG, server.name + " mux open");
                 connected = true;
                 reconnectDelay = RECONNECT_BASE_MS;
@@ -119,10 +125,11 @@ public class DshServerMonitor extends ServerMonitor {
             }
 
             @Override public void onMessage(WebSocket ws, String text) {
-                handleFrame(text);
+                if (isCurrentSocket(ws, generation)) handleFrame(text);
             }
 
             @Override public void onClosed(WebSocket ws, int code, String reason) {
+                if (!isCurrentSocket(ws, generation)) return;
                 Log.i(TAG, server.name + " mux closed: " + code + " " + reason);
                 connected = false;
                 setHealth(false);
@@ -131,6 +138,7 @@ public class DshServerMonitor extends ServerMonitor {
             }
 
             @Override public void onFailure(WebSocket ws, Throwable t, Response response) {
+                if (!isCurrentSocket(ws, generation)) return;
                 Log.w(TAG, server.name + " mux failure: " + t.getMessage());
                 connected = false;
                 setHealth(false);
@@ -138,6 +146,10 @@ public class DshServerMonitor extends ServerMonitor {
                 scheduleReconnect();
             }
         });
+    }
+
+    private boolean isCurrentSocket(WebSocket ws, long generation) {
+        return !stopped && generation == socketGeneration.get() && webSocket == ws;
     }
 
     private void handleFrame(String text) {

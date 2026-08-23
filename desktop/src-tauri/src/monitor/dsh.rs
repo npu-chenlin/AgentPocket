@@ -17,6 +17,8 @@ use crate::monitor::{
 use crate::protocol::dsh::{parse_frame, parse_session_list};
 use crate::protocol::ProtocolState;
 
+const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub async fn run(
     server: ServerConfig,
     update_tx: mpsc::Sender<MonitorUpdate>,
@@ -110,9 +112,13 @@ async fn run_once(
 
     // 2. Connect WebSocket.
     let ws_url = ws_url(server)?;
-    let (ws_stream, _) = connect_async(ws_url.to_string())
-        .await
-        .map_err(|e| MonitorError::Ws(e.to_string()))?;
+    let connect = tokio::time::timeout(WS_CONNECT_TIMEOUT, connect_async(ws_url.to_string()));
+    let (ws_stream, _) = tokio::select! {
+        () = token.cancelled() => return Err(MonitorError::Ws("cancelled".to_string())),
+        result = connect => result
+            .map_err(|_| MonitorError::Ws("websocket connect timed out".to_string()))?
+            .map_err(|e| MonitorError::Ws(e.to_string()))?,
+    };
 
     send_status(update_tx, &server.id, true, state, None);
     read_loop(ws_stream, server, update_tx, state, token).await

@@ -9,7 +9,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 
 import okhttp3.Call;
@@ -117,7 +116,7 @@ public final class SyncClient {
                     }
                     int count = merge(context, items);
                     if (count == 0) {
-                        postError(callback, "电脑配置中没有可用服务器");
+                        postError(callback, "电脑配置中没有可用服务连接");
                     } else {
                         mainHandler.post(() -> callback.onMerged(count));
                     }
@@ -132,7 +131,7 @@ public final class SyncClient {
     public static void upload(OkHttpClient client, Context context, SyncLink link, UploadCallback callback) {
         List<ServerStore.Server> servers = ServerStore.load(context);
         if (servers.isEmpty()) {
-            mainHandler.post(() -> callback.onError("还没有服务器可上传"));
+            mainHandler.post(() -> callback.onError("还没有服务连接可发送"));
             return;
         }
         JSONArray items = new JSONArray();
@@ -172,37 +171,7 @@ public final class SyncClient {
      * 跳过 host 为空或端口非法的条目，返回实际合并条数。
      */
     private static int merge(Context context, JSONArray items) {
-        List<ServerStore.Server> servers = new ArrayList<>(ServerStore.load(context));
-        int count = 0;
-        for (int i = 0; i < items.length(); i++) {
-            JSONObject item = items.optJSONObject(i);
-            if (item == null) continue;
-            String host = item.optString("host", "");
-            int port = item.optInt("port", 0);
-            if (host.isEmpty() || port < 1 || port > 65535) continue;
-            String id = item.optString("id", "");
-            if (id.isEmpty()) id = ServerStore.newId();
-            String name = item.optString("name", "");
-            if (name.isEmpty()) name = host + ":" + port;
-            String token = item.optString("token", "");
-            String backend = item.optString("backend", "");
-            if (backend.isEmpty()) backend = ServerStore.Server.BACKEND_KIMI;
-            ServerStore.Server incoming = new ServerStore.Server(id, name, host, port, token, backend);
-            int existing = -1;
-            for (int j = 0; j < servers.size(); j++) {
-                if (servers.get(j).id.equals(id)) { existing = j; break; }
-            }
-            if (existing >= 0) servers.set(existing, incoming);
-            else servers.add(incoming);
-            count++;
-        }
-        if (count > 0) {
-            // 之前没有选中服务器时，默认选中第一台。
-            String activeId = ServerStore.activeId(context);
-            if (activeId.isEmpty()) activeId = servers.get(0).id;
-            ServerStore.save(context, servers, activeId);
-        }
-        return count;
+        return ServerStore.merge(context, items);
     }
 
     /** 切回主线程上报错误。 */

@@ -45,6 +45,48 @@ public final class ServerStore {
     }
 
     public static synchronized void save(Context context, List<Server> servers, String activeId) {
+        writeState(context, servers, activeId);
+    }
+
+    /**
+     * 在同一把锁内完成读取、合并和保存，避免同步回调与用户编辑互相覆盖。
+     * 返回实际处理的有效条目数。
+     */
+    public static synchronized int merge(Context context, JSONArray items) {
+        State state = readState(context);
+        List<Server> servers = new ArrayList<>(state.servers);
+        int count = 0;
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject item = items.optJSONObject(i);
+            if (item == null) continue;
+            String host = item.optString("host", "");
+            int port = item.optInt("port", 0);
+            if (host.isEmpty() || port < 1 || port > 65535) continue;
+            String id = item.optString("id", "");
+            if (id.isEmpty()) id = newId();
+            String name = item.optString("name", "");
+            if (name.isEmpty()) name = host + ":" + port;
+            String backend = item.optString("backend", "");
+            if (backend.isEmpty()) backend = Server.BACKEND_KIMI;
+            Server incoming = new Server(id, name, host, port,
+                    item.optString("token", ""), backend);
+            int existing = -1;
+            for (int j = 0; j < servers.size(); j++) {
+                if (servers.get(j).id.equals(id)) { existing = j; break; }
+            }
+            if (existing >= 0) servers.set(existing, incoming);
+            else servers.add(incoming);
+            count++;
+        }
+        if (count > 0) {
+            String activeId = state.activeId;
+            if (activeId == null || activeId.isEmpty()) activeId = servers.get(0).id;
+            writeState(context, servers, activeId);
+        }
+        return count;
+    }
+
+    private static void writeState(Context context, List<Server> servers, String activeId) {
         JSONArray items = new JSONArray();
         for (Server server : servers) try { items.put(server.json()); } catch (Exception ignored) {}
         JSONObject doc = new JSONObject();

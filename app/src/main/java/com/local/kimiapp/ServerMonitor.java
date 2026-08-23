@@ -44,7 +44,7 @@ public abstract class ServerMonitor {
     private final Runnable reconnectRunnable = this::runReconnect;
 
     protected final Map<String, String> titleCache = Collections.synchronizedMap(new HashMap<>());
-    protected WebSocket webSocket;
+    protected volatile WebSocket webSocket;
     protected volatile boolean connected;
     protected volatile int activeCount;
     protected volatile boolean stopped;
@@ -113,9 +113,11 @@ public abstract class ServerMonitor {
 
     protected void maybeNotify(String sessionId, String status, String title, String body) {
         String key = server.id + ":" + sessionId + ":" + status;
-        if (!notifiedKeys.add(key)) {
-            Log.d(TAG, server.name + " dedup: " + key);
-            return;
+        synchronized (notifiedKeys) {
+            if (!notifiedKeys.add(key)) {
+                Log.d(TAG, server.name + " dedup: " + key);
+                return;
+            }
         }
         Log.i(TAG, server.name + " notify: " + key);
         host.postTask(server.id, sessionId, key, title, body);

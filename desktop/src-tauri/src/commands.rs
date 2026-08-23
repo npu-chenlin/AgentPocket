@@ -33,6 +33,10 @@ pub struct AppState {
     pub statuses: RwLock<HashMap<String, ServerStatus>>,
     pub store: ConfigStore,
     pub monitors: tokio::sync::Mutex<MonitorManager>,
+    /// Serializes config read-modify-write transactions, including import and
+    /// autostart side effects. Without this, two commands can both start from
+    /// the same snapshot and overwrite one another.
+    pub config_mutation: tokio::sync::Mutex<()>,
     pub import_previews: Mutex<HashMap<Uuid, PendingImport>>,
     pub sync_server: Mutex<Option<crate::sync::SyncServerHandle>>,
     pub explicit_exit: AtomicBool,
@@ -46,6 +50,7 @@ impl AppState {
             statuses: RwLock::new(HashMap::new()),
             store,
             monitors: tokio::sync::Mutex::new(monitors),
+            config_mutation: tokio::sync::Mutex::new(()),
             import_previews: Mutex::new(HashMap::new()),
             sync_server: Mutex::new(None),
             explicit_exit: AtomicBool::new(false),
@@ -193,7 +198,7 @@ pub async fn save_server(
     }
     server.validate()?;
 
-    mutate_config(&state, &app, |config| {
+    mutate_config(&state, &app, move |config| {
         if let Some(index) = config.servers.iter().position(|s| s.id == server.id) {
             config.servers[index] = server.clone();
         } else {
@@ -209,7 +214,7 @@ pub async fn delete_server(
     app: AppHandle,
     id: String,
 ) -> Result<AppView, CommandError> {
-    mutate_config(&state, &app, |config| {
+    mutate_config(&state, &app, move |config| {
         config.servers.retain(|s| s.id != id);
         if config.active_id.as_deref() == Some(&id) {
             config.active_id = config.servers.first().map(|s| s.id.clone());
@@ -224,7 +229,7 @@ pub async fn update_settings(
     app: AppHandle,
     settings: DesktopSettings,
 ) -> Result<AppView, CommandError> {
-    mutate_config(&state, &app, |config| {
+    mutate_config(&state, &app, move |config| {
         config.settings = settings.clone();
     })
     .await
@@ -251,6 +256,7 @@ pub async fn reconnect_all(state: State<'_, Arc<AppState>>) -> Result<(), Comman
     };
     let mut monitors = state.monitors.lock().await;
     monitors.sync_servers(&servers).await;
+    monitors.reconnect_all(Duration::from_secs(3)).await;
     Ok(())
 }
 
@@ -297,19 +303,15 @@ pub async fn apply_import(
     import_id: String,
     mode: ImportModeArg,
 ) -> Result<AppView, CommandError> {
+    let _mutation = state.config_mutation.lock().await;
     let import_id = Uuid::parse_str(&import_id).map_err(|_| CommandError::InvalidImportId)?;
     let data = remove_preview(&state, import_id)?;
 
-    let current = {
-        let config = state
-            .config
-            .read()
-            .map_err(|_| CommandError::Config("config lock poisoned".to_string()))?;
-        config.clone()
-    };
-
-    let new_config = state.store.apply_import(&current, data, mode.into())?;
-    state.store.save(&new_config)?;
+    let store = state.store.clone();
+    let mode = mode.into();
+    let new_config = tokio::task::spawn_blocking(move || store.apply_import_and_save(data, mode))
+        .await
+        .map_err(|error| CommandError::Config(format!("config import task failed: {error}")))??;
 
     {
         let mut config = state
@@ -317,10 +319,6 @@ pub async fn apply_import(
             .write()
             .map_err(|_| CommandError::Config("config lock poisoned".to_string()))?;
         *config = new_config.clone();
-    }
-
-    if current.settings.autostart != new_config.settings.autostart {
-        update_autostart(&app, new_config.settings.autostart).await?;
     }
 
     sync_monitors(&state).await?;
@@ -364,6 +362,11 @@ pub fn build_app_view(state: &AppState) -> AppView {
         .statuses
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let statuses: HashMap<String, ServerStatus> = statuses
+        .iter()
+        .filter(|(id, _)| config.servers.iter().any(|server| &server.id == *id))
+        .map(|(id, status)| (id.clone(), status.clone()))
+        .collect();
     AppView {
         revision: state.revision.load(Ordering::SeqCst),
         settings: config.settings.clone(),
@@ -393,8 +396,9 @@ pub(crate) async fn mutate_config<R, F>(
 ) -> Result<AppView, CommandError>
 where
     R: tauri::Runtime,
-    F: FnOnce(&mut AppConfig),
+    F: Fn(&mut AppConfig) + Send + 'static,
 {
+    let _mutation = state.config_mutation.lock().await;
     let old_config = {
         let config = state
             .config
@@ -407,21 +411,33 @@ where
     mutate(&mut new_config);
     validate_config(&new_config)?;
 
-    // Step 3: persist atomically before mutating memory.
-    state.store.save(&new_config)?;
+    // Apply the external side effect first. If it fails, neither the file nor
+    // in-memory config changes. If persistence fails afterwards, compensate by
+    // restoring the previous autostart state.
+    if old_config.settings.autostart != new_config.settings.autostart {
+        update_autostart(app, new_config.settings.autostart).await?;
+    }
 
-    // Step 4: replace in-memory config.
+    let store = state.store.clone();
+    let persisted = tokio::task::spawn_blocking(move || store.update(mutate))
+        .await
+        .map_err(|error| CommandError::Config(format!("config update task failed: {error}")))?;
+    let new_config = match persisted {
+        Ok(config) => config,
+        Err(error) => {
+            if old_config.settings.autostart != new_config.settings.autostart {
+                let _ = update_autostart(app, old_config.settings.autostart).await;
+            }
+            return Err(error.into());
+        }
+    };
+
     {
         let mut config = state
             .config
             .write()
             .map_err(|_| CommandError::Config("config lock poisoned".to_string()))?;
         *config = new_config.clone();
-    }
-
-    // Step 5: update autostart if the setting changed.
-    if old_config.settings.autostart != new_config.settings.autostart {
-        update_autostart(app, new_config.settings.autostart).await?;
     }
 
     // Step 6: sync affected monitors.
@@ -485,6 +501,14 @@ pub(crate) async fn sync_monitors(state: &Arc<AppState>) -> Result<(), CommandEr
     };
     let mut monitors = state.monitors.lock().await;
     monitors.sync_servers(&servers).await;
+    drop(monitors);
+    let server_ids: std::collections::HashSet<&str> =
+        servers.iter().map(|server| server.id.as_str()).collect();
+    state
+        .statuses
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .retain(|id, _| server_ids.contains(id.as_str()));
     Ok(())
 }
 
@@ -609,6 +633,16 @@ pub async fn run_monitor_coordinator(
     while let Some(update) = update_rx.recv().await {
         match update {
             MonitorUpdate::Status { server_id, status } => {
+                let is_configured = state
+                    .config
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .servers
+                    .iter()
+                    .any(|server| server.id == server_id);
+                if !is_configured {
+                    continue;
+                }
                 let changed = {
                     let mut statuses = state
                         .statuses
@@ -726,6 +760,22 @@ mod tests {
     }
 
     #[test]
+    fn app_view_omits_status_for_deleted_server() {
+        let state = sample_state();
+        state.statuses.write().unwrap().insert(
+            "deleted".to_string(),
+            ServerStatus {
+                connected: true,
+                active_count: 99,
+                ..Default::default()
+            },
+        );
+
+        let view = build_app_view(&state);
+        assert!(!view.statuses.contains_key("deleted"));
+    }
+
+    #[test]
     fn server_for_edit_returns_token_only_for_exact_id() {
         let state = sample_state();
 
@@ -789,12 +839,10 @@ mod tests {
         // apply_import needs an AppHandle; we cannot create one in a unit test,
         // so exercise the core logic directly.
         let data = remove_preview(&state, import_id).unwrap();
-        let current = state.config.read().unwrap().clone();
         let new_config = state
             .store
-            .apply_import(&current, data, ImportMode::Merge)
+            .apply_import_and_save(data, ImportMode::Merge)
             .unwrap();
-        state.store.save(&new_config).unwrap();
         *state.config.write().unwrap() = new_config;
 
         assert_eq!(state.config.read().unwrap().servers.len(), 1);

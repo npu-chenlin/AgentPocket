@@ -13,6 +13,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -48,6 +49,8 @@ public class KimiServerMonitor extends ServerMonitor {
     private final Map<String, Map<String, String>> toolCommands = Collections.synchronizedMap(new HashMap<>());
     private final Map<String, String[]> currentTool = Collections.synchronizedMap(new HashMap<>());
     private long lastActivityNotify;
+    /** 每次建立连接递增；旧 WebSocket 的回调不得影响当前连接。 */
+    private final AtomicLong socketGeneration = new AtomicLong();
 
     // 忙碌细分状态（全部来自服务器推送，不做周期轮询）：
     // rawBusy        = work_changed 推送的服务器侧 busy
@@ -190,6 +193,8 @@ public class KimiServerMonitor extends ServerMonitor {
 
     private void connectWebSocket() {
         if (stopped) return;
+        final long generation = socketGeneration.incrementAndGet();
+        if (webSocket != null) webSocket.cancel();
         String wsUrl = server.baseUrl().replace("http://", "ws://").replace("https://", "wss://")
                 + "/api/v1/ws";
         Request.Builder req = new Request.Builder().url(wsUrl);
@@ -201,6 +206,7 @@ public class KimiServerMonitor extends ServerMonitor {
 
         webSocket = client.newWebSocket(req.build(), new WebSocketListener() {
             @Override public void onOpen(WebSocket ws, Response response) {
+                if (!isCurrentSocket(ws, generation)) return;
                 Log.i(TAG, server.name + " WS open");
                 connected = true;
                 reconnectDelay = RECONNECT_BASE_MS;
@@ -218,15 +224,17 @@ public class KimiServerMonitor extends ServerMonitor {
             }
 
             @Override public void onMessage(WebSocket ws, String text) {
-                handleMessage(text);
+                if (isCurrentSocket(ws, generation)) handleMessage(ws, generation, text);
             }
 
             @Override public void onClosing(WebSocket ws, int code, String reason) {
+                if (!isCurrentSocket(ws, generation)) return;
                 Log.i(TAG, server.name + " WS closing: " + code + " " + reason);
                 ws.close(code, reason);
             }
 
             @Override public void onClosed(WebSocket ws, int code, String reason) {
+                if (!isCurrentSocket(ws, generation)) return;
                 connected = false;
                 setHealth(false);
                 notifySummary();
@@ -234,6 +242,7 @@ public class KimiServerMonitor extends ServerMonitor {
             }
 
             @Override public void onFailure(WebSocket ws, Throwable t, Response response) {
+                if (!isCurrentSocket(ws, generation)) return;
                 Log.w(TAG, server.name + " WS failure: " + t.getMessage());
                 connected = false;
                 setHealth(false);
@@ -243,7 +252,11 @@ public class KimiServerMonitor extends ServerMonitor {
         });
     }
 
-    private void handleMessage(String text) {
+    private boolean isCurrentSocket(WebSocket ws, long generation) {
+        return !stopped && generation == socketGeneration.get() && webSocket == ws;
+    }
+
+    private void handleMessage(WebSocket ws, long generation, String text) {
         try {
             JSONObject msg = new JSONObject(text);
             String type = msg.optString("type", "");
@@ -268,8 +281,8 @@ public class KimiServerMonitor extends ServerMonitor {
                     break;
 
                 case "ping":
-                    if (webSocket != null) {
-                        sendJson(webSocket, new JSONObject()
+                    if (isCurrentSocket(ws, generation)) {
+                        sendJson(ws, new JSONObject()
                                 .put("type", "pong")
                                 .put("payload", new JSONObject().put("nonce", msg.optJSONObject("payload") != null ? msg.optJSONObject("payload").opt("nonce") : UUID.randomUUID().toString())));
                     }
@@ -278,9 +291,9 @@ public class KimiServerMonitor extends ServerMonitor {
                 case "resync_required":
                     Log.i(TAG, server.name + " resync");
                     fetchSessionList(() -> {
-                        if (webSocket != null && !titleCache.isEmpty()) {
+                        if (isCurrentSocket(ws, generation) && !titleCache.isEmpty()) {
                             try {
-                                sendJson(webSocket, buildSubscribe(new ArrayList<>(titleCache.keySet())));
+                                sendJson(ws, buildSubscribe(new ArrayList<>(titleCache.keySet())));
                             } catch (JSONException e) {}
                         }
                     });
@@ -317,7 +330,7 @@ public class KimiServerMonitor extends ServerMonitor {
 
                 default:
                     if (type.startsWith("event.session.")) {
-                        handleProtocolEvent(msg);
+                        handleProtocolEvent(msg, ws, generation);
                     } else if (type.equals("prompt.submitted") || type.equals("prompt.completed") || type.equals("prompt.aborted")) {
                         handleAgentEvent(msg);
                     }
@@ -328,7 +341,7 @@ public class KimiServerMonitor extends ServerMonitor {
         }
     }
 
-    private void handleProtocolEvent(JSONObject msg) {
+    private void handleProtocolEvent(JSONObject msg, WebSocket ws, long generation) {
         String type = msg.optString("type", "");
         String sessionId = msg.optString("session_id", "");
         JSONObject payload = msg.optJSONObject("payload");
@@ -404,9 +417,9 @@ public class KimiServerMonitor extends ServerMonitor {
                         rawBusy.put(newId, true);
                         mainTurnActive.put(newId, true);
                         applyEffectiveBusy(newId);
-                        if (webSocket != null) {
+                        if (isCurrentSocket(ws, generation)) {
                             try {
-                                sendJson(webSocket, buildSubscribe(Collections.singletonList(newId)));
+                                sendJson(ws, buildSubscribe(Collections.singletonList(newId)));
                             } catch (JSONException e) {}
                         }
                     }

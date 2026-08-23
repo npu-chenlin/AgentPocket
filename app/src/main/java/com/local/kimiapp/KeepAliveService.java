@@ -58,7 +58,7 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
     @Override public void onCreate() {
         super.onCreate();
         createChannels();
-        startForeground(SERVICE_ID, serviceNotification("正在连接服务器…", null));
+        startForeground(SERVICE_ID, serviceNotification("正在连接 Agent 服务…", null));
         acquireWakeLock();
 
         client = new OkHttpClient.Builder()
@@ -190,7 +190,7 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
             }
         }
         String text = "已连接 " + connected + "/" + monitors.size()
-                + " 台，监听 " + active + " 个会话";
+                + " 个 Agent 服务，监听 " + active + " 个会话";
         getSystemService(NotificationManager.class).notify(SERVICE_ID,
                 serviceNotification(text, busyTitles));
 

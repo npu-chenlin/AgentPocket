@@ -52,32 +52,40 @@ pub struct KimiSyncResult {
 pub async fn discover_mesh_peers(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<MeshPeerView>, CommandError> {
-    Ok(discover_peers(&state))
+    discover_peers(&state).await
 }
 
 #[tauri::command]
 pub async fn mesh_pull(host: String) -> Result<KimiSyncResult, CommandError> {
     let home = kimi_config::home_dir();
-    mesh_pull_at(&home, &host, MESH_PORT)
+    tokio::task::spawn_blocking(move || mesh_pull_at(&home, &host, MESH_PORT))
+        .await
+        .map_err(|error| CommandError::Mesh(format!("mesh pull task failed: {error}")))?
 }
 
 #[tauri::command]
 pub async fn mesh_push(host: String) -> Result<KimiSyncResult, CommandError> {
     let home = kimi_config::home_dir();
-    mesh_push_at(&home, &host, MESH_PORT)
+    tokio::task::spawn_blocking(move || mesh_push_at(&home, &host, MESH_PORT))
+        .await
+        .map_err(|error| CommandError::Mesh(format!("mesh push task failed: {error}")))?
 }
 
 /// 远端 Kimi Code CLI 升级（daemon /kimi-upgrade，含 npm 归一化；耗时放宽到 11 分钟）。
 #[tauri::command]
 pub async fn mesh_kimi_upgrade(host: String) -> Result<String, CommandError> {
-    let response = mesh_client::post(
-        &host,
-        MESH_PORT,
-        "/kimi-upgrade",
-        &[],
-        "",
-        Duration::from_secs(660),
-    )?;
+    let response = tokio::task::spawn_blocking(move || {
+        mesh_client::post(
+            &host,
+            MESH_PORT,
+            "/kimi-upgrade",
+            &[],
+            "",
+            Duration::from_secs(660),
+        )
+    })
+    .await
+    .map_err(|error| CommandError::Mesh(format!("mesh upgrade task failed: {error}")))??;
     if response.status != 200 {
         return Err(CommandError::Mesh(format!(
             "对方返回 HTTP {}：{}",
@@ -99,8 +107,18 @@ pub async fn mesh_kimi_upgrade(host: String) -> Result<String, CommandError> {
 #[tauri::command]
 pub async fn mesh_kimi_web_restart(host: String, force: bool) -> Result<String, CommandError> {
     let body = serde_json::json!({ "force": force }).to_string();
-    let response =
-        mesh_client::post(&host, MESH_PORT, "/kimi-web-restart", &[], &body, RESTART_TIMEOUT)?;
+    let response = tokio::task::spawn_blocking(move || {
+        mesh_client::post(
+            &host,
+            MESH_PORT,
+            "/kimi-web-restart",
+            &[],
+            &body,
+            RESTART_TIMEOUT,
+        )
+    })
+    .await
+    .map_err(|error| CommandError::Mesh(format!("mesh restart task failed: {error}")))??;
     if response.status != 200 {
         // daemon 拒绝原因（如活跃会话保护）原样透传给前端
         return Err(CommandError::Mesh(response.body));
@@ -111,19 +129,49 @@ pub async fn mesh_kimi_web_restart(host: String, force: bool) -> Result<String, 
 /// 发现 peer：tailscale 在线设备 + 手动 peer 合并探测，未应答的手动 peer
 /// 补 online:false 行（对端 daemon 可能暂时离线，仍需展示以便推送配置）。
 /// 在线 peer 追加一次 /kimi-info 探测，补齐 Kimi CLI 版本与 web 服务状态。
-fn discover_peers(state: &AppState) -> Vec<MeshPeerView> {
+async fn discover_peers(state: &AppState) -> Result<Vec<MeshPeerView>, CommandError> {
     let manual = manual_peers(state);
-    let mut candidates = discovery::tailscale_candidates(discovery::find_tailscale_binary().as_deref());
-    candidates.extend(manual.iter().map(|peer| (peer.host.clone(), peer.name.clone())));
-    let probed = discovery::probe_candidates(&candidates, PROBE_TIMEOUT);
-    let mut views = merge_views(&manual, probed);
-    for view in views.iter_mut().filter(|v| v.online) {
-        let (kimi_version, web_active, web_port) = fetch_kimi_info(&view.host);
-        view.kimi_version = kimi_version;
-        view.web_active = web_active;
-        view.web_port = web_port;
+    let views = tokio::task::spawn_blocking(move || {
+        let mut candidates =
+            discovery::tailscale_candidates(discovery::find_tailscale_binary().as_deref());
+        candidates.extend(
+            manual
+                .iter()
+                .map(|peer| (peer.host.clone(), peer.name.clone())),
+        );
+        let probed = discovery::probe_candidates(&candidates, PROBE_TIMEOUT);
+        merge_views(&manual, probed)
+    })
+    .await
+    .map_err(|error| CommandError::Mesh(format!("peer discovery task failed: {error}")))?;
+
+    // /kimi-info is a synchronous core client. Probe a bounded batch at a time
+    // so one slow peer cannot occupy the async runtime or create an unbounded
+    // number of worker threads.
+    let mut views = views;
+    let online_indices: Vec<usize> = views
+        .iter()
+        .enumerate()
+        .filter_map(|(index, view)| view.online.then_some(index))
+        .collect();
+    for batch in online_indices.chunks(4) {
+        let jobs: Vec<_> = batch
+            .iter()
+            .map(|&index| {
+                let host = views[index].host.clone();
+                tokio::task::spawn_blocking(move || (index, fetch_kimi_info(&host)))
+            })
+            .collect();
+        for job in jobs {
+            let (index, (kimi_version, web_active, web_port)) = job
+                .await
+                .map_err(|error| CommandError::Mesh(format!("peer info task failed: {error}")))?;
+            views[index].kimi_version = kimi_version;
+            views[index].web_active = web_active;
+            views[index].web_port = web_port;
+        }
     }
-    views
+    Ok(views)
 }
 
 fn fetch_kimi_info(host: &str) -> (Option<String>, bool, Option<u16>) {
@@ -212,7 +260,10 @@ pub(crate) fn mesh_pull_at(
     }
     let backed_up = kimi_config::config_path(home).exists();
     kimi_config::write(home, &response.body).map_err(CommandError::Mesh)?;
-    Ok(KimiSyncResult { bytes: response.body.len(), backed_up })
+    Ok(KimiSyncResult {
+        bytes: response.body.len(),
+        backed_up,
+    })
 }
 
 /// 把本地 config.toml 推送到对端。port 参数便于测试注入 mock 端点。
@@ -237,7 +288,10 @@ pub(crate) fn mesh_push_at(
             response.status, response.body
         )));
     }
-    Ok(KimiSyncResult { bytes: text.len(), backed_up: false })
+    Ok(KimiSyncResult {
+        bytes: text.len(),
+        backed_up: false,
+    })
 }
 
 // ------------------------------------------------------------------
@@ -247,7 +301,6 @@ pub(crate) fn mesh_push_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read as _;
     use std::sync::Mutex;
     use tempfile::tempdir;
 

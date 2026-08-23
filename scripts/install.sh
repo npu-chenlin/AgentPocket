@@ -1,5 +1,5 @@
 #!/bin/sh
-# AgentPocket mesh 守护进程一键安装：下载二进制 + systemd 服务 + 自启动。
+# AgentPocket 节点守护进程一键安装：下载二进制 + systemd 服务 + 自启动。
 # 用法：curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/scripts/install.sh | sudo bash
 # 卸载：sudo agentpocket uninstall（或同命令加 --uninstall）
 set -eu
@@ -46,8 +46,16 @@ if [ -z "$DOWNLOAD_URL" ]; then
 fi
 
 echo "下载 ${DOWNLOAD_URL} …"
-curl -fsSL -o "$BIN_PATH" "$DOWNLOAD_URL"
-chmod 755 "$BIN_PATH"
+DOWNLOAD_TMP="$(mktemp "${BIN_PATH}.download.XXXXXX")"
+cleanup_download() {
+    rm -f "$DOWNLOAD_TMP"
+}
+trap cleanup_download EXIT INT TERM
+curl -fsSL -o "$DOWNLOAD_TMP" "$DOWNLOAD_URL"
+chmod 755 "$DOWNLOAD_TMP"
+# 下载失败或原子替换失败时保留当前可用版本，避免直接截断 /usr/local/bin/agentpocket。
+mv -f "$DOWNLOAD_TMP" "$BIN_PATH"
+trap - EXIT INT TERM
 
 RUN_USER="${SUDO_USER:-root}"
 HOME_DIR="$(getent passwd "$RUN_USER" | cut -d: -f6)"
@@ -56,7 +64,7 @@ RUN_UID="$(id -u "$RUN_USER")"
 
 cat > "$SERVICE_PATH" <<EOF
 [Unit]
-Description=AgentPocket mesh daemon
+Description=AgentPocket node daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -95,6 +103,6 @@ fi
 echo "安装完成："
 echo "  状态    systemctl status agentpocket"
 echo "  日志    journalctl -u agentpocket -f"
-echo "  发现    sudo -u ${RUN_USER} ${BIN_PATH} peers"
-echo "  同步    sudo -u ${RUN_USER} ${BIN_PATH} pull <桌面机IP或MagicDNS名>"
+echo "  节点    sudo -u ${RUN_USER} ${BIN_PATH} peers"
+echo "  取配置  sudo -u ${RUN_USER} ${BIN_PATH} pull <节点IP或MagicDNS名>"
 echo "  卸载    sudo ${BIN_PATH} uninstall"

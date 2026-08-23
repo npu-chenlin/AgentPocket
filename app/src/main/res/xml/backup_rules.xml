@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- ServerStore contains API tokens and must not leave this device via backup. -->
+    <exclude domain="sharedpref" path="kimi_servers.xml" />
+</full-backup-content>

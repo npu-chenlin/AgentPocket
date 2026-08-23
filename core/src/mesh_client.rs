@@ -5,6 +5,8 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
+const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
 #[derive(Debug)]
 pub enum ClientError {
     Io(String),
@@ -56,14 +58,17 @@ pub fn request(
     timeout: Duration,
 ) -> Result<ClientResponse, ClientError> {
     let addr = resolve(host, port)?;
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)
+    let mut stream =
+        TcpStream::connect_timeout(&addr, timeout).map_err(|e| ClientError::Io(e.to_string()))?;
+    stream
+        .set_read_timeout(Some(timeout))
         .map_err(|e| ClientError::Io(e.to_string()))?;
-    stream.set_read_timeout(Some(timeout)).map_err(|e| ClientError::Io(e.to_string()))?;
-    stream.set_write_timeout(Some(timeout)).map_err(|e| ClientError::Io(e.to_string()))?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|e| ClientError::Io(e.to_string()))?;
 
-    let mut raw = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n"
-    );
+    let mut raw =
+        format!("{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n");
     for (key, value) in headers {
         raw.push_str(&format!("{key}: {value}\r\n"));
     }
@@ -74,10 +79,21 @@ pub fn request(
     if let Some(body) = body {
         raw.push_str(body);
     }
-    stream.write_all(raw.as_bytes()).map_err(|e| ClientError::Io(e.to_string()))?;
+    stream
+        .write_all(raw.as_bytes())
+        .map_err(|e| ClientError::Io(e.to_string()))?;
 
     let mut bytes = Vec::new();
-    stream.read_to_end(&mut bytes).map_err(|e| ClientError::Io(e.to_string()))?;
+    stream
+        .take((MAX_RESPONSE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|e| ClientError::Io(e.to_string()))?;
+    if bytes.len() > MAX_RESPONSE_BYTES {
+        return Err(ClientError::Parse(format!(
+            "响应超过 {} 字节上限",
+            MAX_RESPONSE_BYTES
+        )));
+    }
     parse_response(&bytes)
 }
 
@@ -91,10 +107,19 @@ fn resolve(host: &str, port: u16) -> Result<SocketAddr, ClientError> {
 
 /// 解析响应：状态行 + Content-Length 或 EOF 截断的 body。不支持 chunked（自家端点不用）。
 pub fn parse_response(bytes: &[u8]) -> Result<ClientResponse, ClientError> {
-    let text = String::from_utf8_lossy(bytes);
-    let (head, body) = text
-        .split_once("\r\n\r\n")
+    if bytes.len() > MAX_RESPONSE_BYTES {
+        return Err(ClientError::Parse(format!(
+            "响应超过 {} 字节上限",
+            MAX_RESPONSE_BYTES
+        )));
+    }
+    let separator = b"\r\n\r\n";
+    let separator_start = bytes
+        .windows(separator.len())
+        .position(|window| window == separator)
         .ok_or_else(|| ClientError::Parse("响应缺少头部分隔".to_string()))?;
+    let head = String::from_utf8_lossy(&bytes[..separator_start]);
+    let body = &bytes[separator_start + separator.len()..];
     let status = head
         .lines()
         .next()
@@ -104,16 +129,27 @@ pub fn parse_response(bytes: &[u8]) -> Result<ClientResponse, ClientError> {
 
     let content_length = head.lines().skip(1).find_map(|line| {
         let (name, value) = line.split_once(':')?;
-        name.trim().eq_ignore_ascii_case("content-length")
+        name.trim()
+            .eq_ignore_ascii_case("content-length")
             .then(|| value.trim().parse::<usize>().ok())
             .flatten()
     });
     let body = match content_length {
-        Some(length) => body
-            .chars()
-            .take(length)
-            .collect::<String>(),
-        None => body.to_string(),
+        Some(length) => {
+            if length > MAX_RESPONSE_BYTES {
+                return Err(ClientError::Parse(format!(
+                    "响应 body 超过 {} 字节上限",
+                    MAX_RESPONSE_BYTES
+                )));
+            }
+            if body.len() < length {
+                return Err(ClientError::Parse(
+                    "响应 body 短于 Content-Length".to_string(),
+                ));
+            }
+            String::from_utf8_lossy(&body[..length]).into_owned()
+        }
+        None => String::from_utf8_lossy(body).into_owned(),
     };
     Ok(ClientResponse { status, body })
 }
@@ -144,6 +180,13 @@ mod tests {
     #[test]
     fn rejects_garbage_response() {
         assert!(parse_response(b"not http").is_err());
+    }
+
+    #[test]
+    fn content_length_counts_bytes_not_characters() {
+        let raw = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n你";
+        let response = parse_response(raw.as_bytes()).unwrap();
+        assert_eq!(response.body, "你");
     }
 
     #[test]

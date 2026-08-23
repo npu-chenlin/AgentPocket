@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- ServerStore contains API tokens and must not leave this device via backup. -->
+        <exclude domain="sharedpref" path="kimi_servers.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <!-- ServerStore contains API tokens and must not be copied to another device. -->
+        <exclude domain="sharedpref" path="kimi_servers.xml" />
+    </device-transfer>
+</data-extraction-rules>

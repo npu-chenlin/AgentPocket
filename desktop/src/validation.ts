@@ -11,7 +11,7 @@ export function validateServerDraft(
   const host = draft.host.trim();
 
   if (!name) {
-    errors.name = "请输入服务器名称";
+    errors.name = "请输入服务连接名称";
   }
 
   if (

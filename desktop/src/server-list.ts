@@ -132,9 +132,9 @@ export function renderServerList(view: AppView, expanded: ReadonlySet<string> = 
     return `
       <div class="empty-state">
         <div class="empty-state__icon" aria-hidden="true">⌁</div>
-        <h2>还没有服务器</h2>
-        <p>添加 Kimi 或 dsh 服务器后，AgentPocket 会在后台持续监听。</p>
-        <button class="primary-button" type="button" data-action="add">添加第一台服务器</button>
+        <h2>还没有服务连接</h2>
+        <p>添加 Kimi 或 dsh Agent 服务后，AgentPocket 会在后台持续监听。</p>
+        <button class="primary-button" type="button" data-action="add">添加第一个服务连接</button>
       </div>`;
   }
 

@@ -17,6 +17,8 @@ use crate::monitor::{
 use crate::protocol::kimi::parse_frame;
 use crate::protocol::ProtocolState;
 
+const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub async fn run(
     server: ServerConfig,
     update_tx: mpsc::Sender<MonitorUpdate>,
@@ -87,9 +89,13 @@ async fn run_once(
 
     // 2. Connect WebSocket with optional subprotocol header.
     let ws_url = ws_url(server)?;
-    let (mut ws_stream, response) = connect_ws(&ws_url, server)
-        .await
-        .map_err(|e| MonitorError::Ws(e.to_string()))?;
+    let connect = tokio::time::timeout(WS_CONNECT_TIMEOUT, connect_ws(&ws_url, server));
+    let (mut ws_stream, response) = tokio::select! {
+        () = token.cancelled() => return Err(MonitorError::Ws("cancelled".to_string())),
+        result = connect => result
+            .map_err(|_| MonitorError::Ws("websocket connect timed out".to_string()))?
+            .map_err(|e| MonitorError::Ws(e.to_string()))?,
+    };
 
     // Preserve server-selected subprotocol if any.
     let selected_protocol = response
@@ -127,8 +133,8 @@ async fn fetch_version(
     if !server.token.is_empty() {
         req = req.header("Authorization", format!("Bearer {}", server.token));
     }
-    let Ok(resp) = cancellable_request(async { req.send().await.map_err(|e| e.to_string()) }, token)
-        .await
+    let Ok(resp) =
+        cancellable_request(async { req.send().await.map_err(|e| e.to_string()) }, token).await
     else {
         return;
     };

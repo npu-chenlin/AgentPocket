@@ -13,7 +13,7 @@ use agentpocket_core::discovery;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "agentpocket", about = "AgentPocket mesh 守护进程")]
+#[command(name = "agentpocket", about = "AgentPocket 节点守护进程")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -21,7 +21,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum KimiWebAction {
-    /// 生成并启动 kimi web 服务，同时注册进本机 AgentPocket 服务器列表
+    /// 生成并启动 Kimi Web，同时注册为本机 Agent 服务连接
     Enable {
         /// 监听端口
         #[arg(long, default_value_t = kimi_web::DEFAULT_PORT)]
@@ -41,22 +41,22 @@ enum KimiWebAction {
 
 #[derive(Subcommand)]
 enum Command {
-    /// 前台运行：mesh 端点 + 自动更新（systemd 拉起此命令）
+    /// 前台运行：节点端点 + 自动更新（systemd 拉起此命令）
     Serve,
     /// 打印版本
     Version,
-    /// 从 peer 拉取 ~/.kimi-code/config.toml（覆盖本地，旧文件备份为 .bak）
+    /// 从节点获取 ~/.kimi-code/config.toml（覆盖本地，旧文件备份为 .bak）
     Pull {
         host: String,
         /// 只打印预览，不落盘
         #[arg(long)]
         dry_run: bool,
     },
-    /// 把本地 ~/.kimi-code/config.toml 推送给 peer
+    /// 把本地 ~/.kimi-code/config.toml 发送给节点
     Push { host: String },
-    /// 发现并列出 mesh peer
+    /// 发现并列出 AgentPocket 节点
     Peers,
-    /// 一次性探测已配置服务器状态
+    /// 一次性探测已配置 Agent 服务的状态
     Status,
     /// 手动检查并更新
     Update,
@@ -129,7 +129,7 @@ fn main() {
         Command::Peers => {
             let tailscale = discovery::find_tailscale_binary();
             if tailscale.is_none() {
-                eprintln!("未找到 tailscale CLI，仅探测手动 peer");
+                eprintln!("未找到 tailscale CLI，仅探测手动添加的节点");
             }
             let peers = discovery::discover(
                 &paths::default_config_dir(),
@@ -137,7 +137,7 @@ fn main() {
                 Duration::from_secs(3),
             );
             if peers.is_empty() {
-                println!("未发现 AgentPocket peer");
+                println!("未发现 AgentPocket 节点");
             }
             for peer in peers {
                 println!(
@@ -158,7 +158,7 @@ fn main() {
                 }
             };
             if outcome.config.servers.is_empty() {
-                println!("尚未配置任何服务器（可 agentpocket pull <host> 先同步配置）");
+                println!("尚未配置任何 Agent 服务");
             }
             // 并发探测全部已配置服务器，每个线程一个 5s 超时
             std::thread::scope(|scope| {

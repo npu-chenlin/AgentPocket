@@ -1,183 +1,97 @@
 # AgentPocket
 
-一个非官方 Android 客户端，通过 Tailscale 在手机上使用电脑中的编码 Agent Web 服务（Kimi Code、DeepSeek Harness 等），并在后台接收任务状态通知。
+AgentPocket 是一个通过 Tailscale 连接 Coding Agent 的多端工具：用 Android 或桌面端访问远程 Agent 服务、关注任务状态，并在多台节点之间维护 Kimi Code 环境。
 
-<p align="center">
-  <img src="docs/demo.jpg" alt="AgentPocket 使用效果" width="52%">
-  <img src="docs/notify-preview.jpg" alt="AgentPocket 后台任务通知" width="26%">
-</p>
+AgentPocket 不运行 Coding Agent 本身，也不替代 Kimi Code 或 DeepSeek Harness；它负责连接、提醒、配置同步和节点维护。
 
-<p align="center">
-  <img src="docs/model-selection.jpg" alt="dsh 模型选择" width="52%">
-  <img src="docs/multi-server.jpg" alt="AgentPocket 多服务器选择" width="26%">
-</p>
+## 核心用户旅程
 
-## 使用前提
+1. 在运行 Kimi Code 或 DeepSeek Harness Web 的电脑上安装并登录 Tailscale。
+2. 启动 Agent 服务，将它绑定到手机可访问的地址。
+3. 在 Android 或 Desktop 中添加一个“服务连接”（主机、端口、后端和可选 token）。
+4. 从手机或桌面打开 Agent 服务中的会话；Agent 任务完成、失败、等待回答或等待审批时，查看通知并回到对应会话。
+5. 有多台电脑时，在节点管理中发现节点，并按需分发 Kimi 配置。
 
-1. 在电脑和 Android 手机上安装 [Tailscale](https://tailscale.com/download)，并登录同一个 Tailnet。
-2. 在电脑上安装任一种编码 Agent 的 Web 服务：
+## 功能地图
 
-   **Kimi Code**（macOS / Linux）：
+| 功能域 | 解决的问题 | 包含能力 |
+| --- | --- | --- |
+| 使用 Agent | 随时进入远程 Coding Agent | 打开 Kimi/dsh、切换服务连接、进入活跃会话 |
+| 关注任务 | 任务有结果或需要介入时及时回来 | 后台监听、在线与活动状态、完成/失败/回答/审批通知 |
+| 管理连接 | 减少重复填写地址和凭据 | 服务连接增删改、后端识别、导入导出、手机配对 |
+| 管理节点 | 维护多台运行 Kimi 的机器 | 节点发现、Kimi 配置分发、CLI 升级、Kimi Web 管理 |
+| 应用维护 | 让各端可靠常驻和更新 | 托盘、开机启动、应用更新、daemon 安装与自更新 |
 
-   ```shell
-   curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
-   ```
+## 三个组件
 
-   Windows PowerShell：
+| 组件 | 适合谁 | 主要能力 |
+| --- | --- | --- |
+| Android | 需要移动访问的人 | 内嵌 Agent Web、多服务连接、后台状态监听、任务通知、悬浮入口、扫码同步服务连接 |
+| Desktop | 需要在电脑上常驻管理的人 | 系统托盘、状态监控、通知、浏览器跳转、服务连接导入导出、手机配对、节点管理 |
+| Daemon | 管理无显示器或多台 Linux 机器的人 | 节点发现、Kimi 配置分发、Kimi CLI 管理、Kimi Web 生命周期、自更新 |
 
-   ```powershell
-   irm https://code.kimi.com/kimi-code/install.ps1 | iex
-   ```
+术语和边界见 [概念与术语](docs/concepts.md)，各端具体能力见 [功能矩阵](docs/feature-matrix.md)。
 
-   **DeepSeek Harness**（需要 Node.js 18+）：
+## 快速开始
 
-   ```shell
-   npx -y @deepseek-ai/dsh web --trusted-host <Tailscale IP>
-   ```
+### 前提
 
-   国内网络可换镜像源：
+电脑和 Android 手机需要安装 [Tailscale](https://tailscale.com/download)，并登录同一个 Tailnet。电脑上还需要安装并启动一种 Agent 服务。
 
-   ```shell
-   npx -y --registry=https://registry.npmmirror.com @deepseek-ai/dsh web --trusted-host <Tailscale IP>
-   ```
-
-3. 启动 Web 服务并允许网络访问。
-
-   Kimi Code：
-
-   ```shell
-   kimi web --dangerous-bypass-auth --host 0.0.0.0 --port 58627
-   ```
-
-   此参数会关闭访问认证，请仅在可信的 Tailscale 网络中使用。
-
-   DeepSeek Harness（dsh）只监听 `127.0.0.1`，手机访问需在电脑上做一次本地转发（socat）：
-
-   ```shell
-   socat TCP-LISTEN:3080,bind=<Tailscale IP>,reuseaddr,fork TCP:127.0.0.1:3080
-   ```
-
-   dsh 模型调用需要配置 API Key，二选一：
-
-   - 启动前 `export DEEPSEEK_API_KEY=...`
-   - 在电脑浏览器打开 `http://127.0.0.1:3080`，在 Models 页面写入凭据
-
-4. 在 AgentPocket 中添加服务器并连接。
-
-## 功能
-
-- 在 Android 上使用 Kimi Code Web 与 DeepSeek Harness Web
-- 管理多台服务器，后台监听任务状态，接收完成、待回答、审批和失败通知
-- 扫码同步配置：手机与桌面端通过二维码互相同步服务器列表
-
-## 使用
-
-首次启动时添加服务器，填写电脑上 Web 服务的地址与端口：
-
-- Kimi：`http://<Tailscale IP>:58627`
-- dsh：`http://<Tailscale IP>:3080`
-
-之后可通过屏幕侧边的悬浮入口切换或管理服务器；后台会同时监听所有已添加的服务器。
-
-### 扫码同步配置
-
-桌面端与手机端在同一 Tailscale 网络中时，可扫码互相同步服务器列表：
-
-1. 在桌面端主界面点击头部「同步」按钮，弹出二维码。
-2. 在手机端侧边悬浮球 → 服务器面板底部点击「扫码同步」，扫描该二维码。
-3. 按需选择「获取电脑配置」（将电脑端服务器列表合并到手机）或「上传手机配置」（将手机端服务器列表发给电脑，电脑端会弹确认导入框）。
-
-用系统相机或其他扫码工具扫描，也可直接拉起手机 App 进入同步。
-
-### DeepSeek Harness 注意事项
-
-- 手机端**不支持新建工作区**：请在电脑浏览器中创建，手机端可正常使用已有会话与工作区。
-
-## Desktop（Linux）
-
-<p align="center">
-  <img src="docs/desktop.jpg" alt="AgentPocket 桌面端" width="60%">
-</p>
-
-`desktop/` 提供轻量托盘控制中心。它可以同时监听多台 Kimi/dsh 服务器，在任务完成、失败或中断、等待审批、等待回答时发送系统通知；点击服务器即可在系统浏览器中打开（Kimi 自动携带登录态），有任务运行时点击状态行可展开运行中会话并直接跳转。关闭窗口后，监听仍在托盘中继续运行。
-
-Releases 页面提供 Android APK 与 Linux 桌面端安装包（`.deb` / AppImage）。
-
-### 开发与构建
-
-需要 Node.js 22、Rust stable，以及 Tauri 在 Linux 上所需的 WebKitGTK、AppIndicator、OpenSSL 和构建工具。Ubuntu 22.04 可安装：
+Kimi Code（macOS / Linux）：
 
 ```shell
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
+kimi web --dangerous-bypass-auth --host 0.0.0.0 --port 58627
 ```
 
-安装依赖并启动开发版：
+`--dangerous-bypass-auth` 会关闭 Agent 服务自己的访问认证，只应在可信的 Tailscale 网络中使用。
+
+DeepSeek Harness（需要 Node.js 18+）：
 
 ```shell
-cd desktop
-npm ci
-npm run tauri dev
+npx -y @deepseek-ai/dsh web --trusted-host <Tailscale IP>
 ```
 
-构建 AppImage 与 `.deb`：
+国内网络可使用 npm 镜像：
 
 ```shell
-npm run tauri build -- --bundles appimage,deb
+npx -y --registry=https://registry.npmmirror.com @deepseek-ai/dsh web --trusted-host <Tailscale IP>
 ```
 
-若只产出二进制（不打安装包），必须启用 `custom-protocol`：
+dsh 默认只监听 `127.0.0.1`。若手机不能直接访问，请在电脑上将 Tailscale 地址转发到本地端口，例如：
 
 ```shell
-npm run build && cargo build --release --features tauri/custom-protocol
+socat TCP-LISTEN:3080,bind=<Tailscale IP>,reuseaddr,fork TCP:127.0.0.1:3080
 ```
 
-不带该 feature 的二进制是 dev 模式：不嵌入前端资源，启动后加载 `localhost:1420`（未运行 dev server 时报 Connection refused）。
+在 AgentPocket 中添加服务连接，例如 Kimi 使用 `http://<Tailscale IP>:58627`，dsh 使用 `http://<Tailscale IP>:3080`。
 
-产物分别位于：
+### 安装与构建
 
-- `desktop/src-tauri/target/release/bundle/appimage/`
-- `desktop/src-tauri/target/release/bundle/deb/`
+预构建安装包可从 [GitHub Releases](https://github.com/npu-chenlin/AgentPocket/releases) 下载。Android 的使用和构建说明见 [Android](docs/android.md)；Desktop 的安装与构建见 [Desktop](docs/desktop.md)；节点守护进程见 [Daemon](docs/daemon.md)。
 
-### 使用说明
+## 配置同步的两个含义
 
-- 在设置窗口中添加服务器时，主机地址只填写域名或 IP，不包含 `http://`、端口或路径。
-- 可以导入完整桌面配置或 Android 导出的服务器 JSON；导出时可选择完整配置或 Android 兼容列表。
-- 点击头部「同步」可生成二维码与手机端互传配置；多网卡时可在弹窗中选择 Tailscale 或局域网地址（手机需能访问所选地址），详见上文「扫码同步配置」。
-- **导出文件包含服务器访问凭据，请勿公开分享。**
-- 服务器监听地址、可信网络、端口转发和防火墙仍需由用户自行配置。
-- Windows 与 macOS 尚未进行正式发布验证。
+- **手机配对 / 服务连接同步**：Android 与 Desktop 通过二维码互传保存的服务连接列表。导出文件可能包含 token，不要公开分享。
+- **节点间 Kimi 配置分发**：Daemon 或 Desktop 节点面板在 Tailnet 内拉取/推送 `~/.kimi-code/config.toml`。它不等于手机配对，也不会同步 Android 的服务连接列表。
 
-## 服务器端（mesh 守护进程）
+## 安全边界
 
-在没有显示器的服务器上一键安装 AgentPocket 守护进程，让 Kimi Code 配置（`~/.kimi-code/config.toml`）在所有机器间流动：
+- AgentPocket 是非官方客户端，与 Moonshot AI/Kimi、DeepSeek 官方无隶属关系。
+- Tailscale 只解决网络可达性；AgentPocket 不替用户配置防火墙、端口转发或可信网络。
+- Kimi 的 `--dangerous-bypass-auth`、Daemon 的节点端点和 Kimi 配置分发依赖 Tailnet 的信任边界。节点间 mesh 端点使用明文 HTTP 且无独立鉴权，只在可信 Tailnet 中使用。
+- 服务连接导出、桌面配置和二维码可能包含访问凭据，请按密钥处理；不要提交到公开仓库或发送给不可信的人。
+- Daemon 安装脚本会安装 systemd 服务并使用 sudo；使用前请检查脚本内容、发布资产和目标机器。
+- Windows 与 macOS Desktop 尚未进行正式发布验证。
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/scripts/install.sh | sudo bash
-```
+## 文档
 
-安装后自动启动并开机自启。常用命令（`agentpocket …`）：
-
-| 命令 | 作用 |
-|---|---|
-| `agentpocket peers` | 发现 tailnet 内的 AgentPocket 节点 |
-| `agentpocket pull <IP或MagicDNS名>` | 拉取远端 `~/.kimi-code/config.toml` 覆盖本地（`--dry-run` 预览，旧文件备份为 `.bak`） |
-| `agentpocket push <IP或MagicDNS名>` | 把本机 `config.toml` 推送给某节点 |
-| `agentpocket status` | 查看本机所配服务器的在线/版本/活跃会话 |
-| `agentpocket update` | 手动检查更新；服务每 24 小时自动检查，若安装为非 root 服务，按提示执行 `sudo agentpocket update` 完成更新 |
-| `sudo agentpocket uninstall` | 停止并移除服务与二进制（配置目录保留） |
-| `agentpocket completions bash` | 输出 shell 补全脚本（bash 安装时已自动装入 `/usr/share/bash-completion/completions/`，zsh/fish 可重定向到各自的补全目录） |
-| `agentpocket kimi [host]` | 查询本机（或某节点）的 Kimi Code CLI 版本，含 npm 安装探测 |
-| `agentpocket kimi [host] --upgrade` | 归一化到官方版：发现 npm 安装（nvm/全局前缀）先移除，再执行官方安装脚本 |
-
-（若以其他用户登录，用 sudo -u <服务用户> agentpocket …；配置与服务共用同一用户目录）
-
-守护进程与桌面端共用 `~/.local/share/com.local.agentpocket.desktop/config.json`，同机安装互不冲突。
-
-mesh 端点仅在你的 Tailscale 网络内可达（Tailscale 网段之外一律拒绝）；节点间无鉴权，信任边界即你的 tailnet。
-
-## 说明
-
-本项目是非官方客户端，与 Moonshot AI/Kimi、DeepSeek 官方无隶属关系。请仅在可信网络中使用。
+- [概念与术语](docs/concepts.md)：节点、Agent 服务、服务连接、会话、任务/回合和两种同步
+- [Android](docs/android.md)：移动端使用、通知、悬浮入口、扫码和构建
+- [Desktop](docs/desktop.md)：托盘、状态监控、服务连接管理、手机配对、节点面板和构建
+- [Daemon](docs/daemon.md)：Linux 节点安装、命令、Kimi 管理和安全边界
+- [功能矩阵](docs/feature-matrix.md)：Android、Desktop、Daemon 的能力边界
 
 ## License
 
