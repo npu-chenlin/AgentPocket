@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "agentpocket-desktop"
-version = "2.9.0"
+version = "2.13.0"
 dependencies = [
  "agentpocket-core",
  "base64 0.22.1",
