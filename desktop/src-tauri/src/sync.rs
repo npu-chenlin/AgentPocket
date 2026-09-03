@@ -381,7 +381,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = ConfigStore::new(dir.path().to_path_buf());
         let (tx, _) = mpsc::channel(4);
-        Arc::new(AppState::new(config, store, MonitorManager::new(tx)))
+        Arc::new(AppState::new(
+            config,
+            store,
+            MonitorManager::new(tx, crate::monitor::PinnedSessions::default()),
+            crate::monitor::PinnedSessions::default(),
+        ))
     }
 
     /// 发送一个原始 HTTP 请求，返回 (状态码, body)。

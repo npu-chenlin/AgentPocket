@@ -16,7 +16,7 @@ use crate::model::{
     AppConfig, AppView, Backend, DesktopSettings, ServerConfig, ServerForEdit, ServerStatus,
     ServerSummary, ValidationError,
 };
-use crate::monitor::{probe_backend as probe, MonitorManager, MonitorUpdate, ProbeError};
+use crate::monitor::{probe_backend as probe, MonitorManager, MonitorUpdate, PinnedSessions, ProbeError};
 use crate::notification::NotificationCoordinator;
 use crate::opener::{open_saved_server, OpenerError};
 
@@ -39,12 +39,19 @@ pub struct AppState {
     pub config_mutation: tokio::sync::Mutex<()>,
     pub import_previews: Mutex<HashMap<Uuid, PendingImport>>,
     pub sync_server: Mutex<Option<crate::sync::SyncServerHandle>>,
+    /// 用户置顶的会话集合（"server_id|session_id"），与监控任务共享。
+    pub pinned: PinnedSessions,
     pub explicit_exit: AtomicBool,
     pub revision: AtomicU64,
 }
 
 impl AppState {
-    pub fn new(config: AppConfig, store: ConfigStore, monitors: MonitorManager) -> Self {
+    pub fn new(
+        config: AppConfig,
+        store: ConfigStore,
+        monitors: MonitorManager,
+        pinned: PinnedSessions,
+    ) -> Self {
         Self {
             config: RwLock::new(config),
             statuses: RwLock::new(HashMap::new()),
@@ -53,6 +60,7 @@ impl AppState {
             config_mutation: tokio::sync::Mutex::new(()),
             import_previews: Mutex::new(HashMap::new()),
             sync_server: Mutex::new(None),
+            pinned,
             explicit_exit: AtomicBool::new(false),
             revision: AtomicU64::new(0),
         }
@@ -214,13 +222,93 @@ pub async fn delete_server(
     app: AppHandle,
     id: String,
 ) -> Result<AppView, CommandError> {
-    mutate_config(&state, &app, move |config| {
+    let purge_id = id.clone();
+    let result = mutate_config(&state, &app, move |config| {
         config.servers.retain(|s| s.id != id);
         if config.active_id.as_deref() == Some(&id) {
             config.active_id = config.servers.first().map(|s| s.id.clone());
         }
     })
-    .await
+    .await;
+    if result.is_ok() {
+        purge_server_pins(&state, &purge_id);
+    }
+    result
+}
+
+/// 服务器被删除后，清掉它名下的置顶会话，避免残留 key 永远留在共享集合里。
+fn purge_server_pins(state: &AppState, server_id: &str) {
+    let prefix = format!("{}|", server_id);
+    state
+        .pinned
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .retain(|key| !key.starts_with(&prefix));
+}
+
+/// 置顶切换的结果：新的置顶状态 + 最新视图（前端立即重绘并提示）。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinToggleResult {
+    pub pinned: bool,
+    pub view: AppView,
+}
+
+#[tauri::command]
+pub fn toggle_session_pin(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    session_id: String,
+) -> Result<PinToggleResult, CommandError> {
+    let pinned = toggle_pin_inner(&state, &id, &session_id);
+    state.revision.fetch_add(1, Ordering::SeqCst);
+    let view = build_app_view(&state);
+    emit_app_state_changed(&app, &view);
+    request_tray_rebuild(&app);
+    Ok(PinToggleResult { pinned, view })
+}
+
+/// 切换置顶并即时修补状态表，不必等下一帧 monitor 上报：
+/// 置顶忙碌会话打标；取消置顶时已完成行直接移除、运行中行去掉标记。
+pub(crate) fn toggle_pin_inner(state: &AppState, server_id: &str, session_id: &str) -> bool {
+    let key = format!("{}|{}", server_id, session_id);
+    let now_pinned = {
+        let mut pinned = state
+            .pinned
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if pinned.contains(&key) {
+            pinned.remove(&key);
+            false
+        } else {
+            pinned.insert(key);
+            true
+        }
+    };
+    let mut statuses = state
+        .statuses
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(status) = statuses.get_mut(server_id) {
+        if now_pinned {
+            for session in &mut status.sessions {
+                if session.id == session_id {
+                    session.pinned = true;
+                }
+            }
+        } else {
+            status
+                .sessions
+                .retain(|session| !(session.id == session_id && session.done));
+            for session in &mut status.sessions {
+                if session.id == session_id {
+                    session.pinned = false;
+                }
+            }
+        }
+    }
+    now_pinned
 }
 
 #[tauri::command]
@@ -733,7 +821,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = ConfigStore::new(dir.path().to_path_buf());
         let (tx, _) = mpsc::channel(4);
-        Arc::new(AppState::new(config, store, MonitorManager::new(tx)))
+        Arc::new(AppState::new(
+            config,
+            store,
+            MonitorManager::new(tx, PinnedSessions::default()),
+            PinnedSessions::default(),
+        ))
     }
 
     #[test]
@@ -796,7 +889,8 @@ mod tests {
         let state = Arc::new(AppState::new(
             AppConfig::default(),
             store,
-            MonitorManager::new(tx),
+            MonitorManager::new(tx, PinnedSessions::default()),
+            PinnedSessions::default(),
         ));
 
         let content = r#"{"schema":1,"servers":[{"id":"a","name":"A","host":"host","port":3080,"token":"top-secret","backend":"dsh"},{"name":"Bad","host":"http://host","port":0,"backend":"dsh"}]}"#;
@@ -828,7 +922,8 @@ mod tests {
         let state = Arc::new(AppState::new(
             AppConfig::default(),
             store,
-            MonitorManager::new(tx),
+            MonitorManager::new(tx, PinnedSessions::default()),
+            PinnedSessions::default(),
         ));
 
         let content = r#"{"schema":1,"servers":[{"id":"a","name":"A","host":"host","port":3080,"token":"top-secret","backend":"dsh"}]}"#;
@@ -873,6 +968,90 @@ mod tests {
     }
 
     #[test]
+    fn toggle_pin_marks_busy_session_and_unpin_removes_done_row() {
+        let state = sample_state();
+        state.statuses.write().unwrap().insert(
+            "s1".to_string(),
+            ServerStatus {
+                connected: true,
+                active_count: 2,
+                sessions: vec![
+                    crate::model::SessionSummary {
+                        id: "run".to_string(),
+                        title: "运行中".to_string(),
+                        activity: None,
+                        pinned: false,
+                        done: false,
+                    },
+                    crate::model::SessionSummary {
+                        id: "fin".to_string(),
+                        title: "已完成".to_string(),
+                        activity: Some("已完成，等你介入".to_string()),
+                        pinned: true,
+                        done: true,
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+        // "fin" 的置顶标记来自 monitor；共享集合里先补上，模拟已置顶状态。
+        state
+            .pinned
+            .write()
+            .unwrap()
+            .insert("s1|fin".to_string());
+
+        // 置顶运行中的会话：打标并保留在列表。
+        assert!(toggle_pin_inner(&state, "s1", "run"));
+        // 读锁守卫不能经 let 引用绑定延长生命周期，否则同线程后续
+        // toggle_pin_inner 拿写锁会自死锁；断言内联成语句即随语句释放。
+        assert!(
+            state.statuses.read().unwrap()["s1"]
+                .sessions
+                .iter()
+                .find(|s| s.id == "run")
+                .unwrap()
+                .pinned
+        );
+
+        // 取消已完成会话的置顶：该行直接从列表移除。
+        assert!(!toggle_pin_inner(&state, "s1", "fin"));
+        assert!(
+            state.statuses.read().unwrap()["s1"]
+                .sessions
+                .iter()
+                .all(|s| s.id != "fin")
+        );
+
+        // 取消运行中会话的置顶：只去标记，行保留。
+        assert!(!toggle_pin_inner(&state, "s1", "run"));
+        assert!(
+            !state.statuses.read().unwrap()["s1"]
+                .sessions
+                .iter()
+                .find(|s| s.id == "run")
+                .unwrap()
+                .pinned
+        );
+        assert!(state.pinned.read().unwrap().is_empty());
+    }
+
+    #[test]
+    fn purge_server_pins_removes_only_that_servers_keys() {
+        let state = sample_state();
+        {
+            let mut pinned = state.pinned.write().unwrap();
+            pinned.insert("s1|a".to_string());
+            pinned.insert("s1|b".to_string());
+            pinned.insert("s2|c".to_string());
+        }
+        purge_server_pins(&state, "s1");
+        let pinned = state.pinned.read().unwrap();
+        assert_eq!(pinned.len(), 1);
+        assert!(pinned.contains("s2|c"));
+    }
+
+    #[test]
     fn same_status_ignores_last_checked_at_refresh() {
         let base = ServerStatus {
             connected: true,
@@ -900,6 +1079,8 @@ mod tests {
                 id: "s1".to_string(),
                 title: "会话".to_string(),
                 activity: None,
+                pinned: false,
+                done: false,
             }],
             ..base.clone()
         };

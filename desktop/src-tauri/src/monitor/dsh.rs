@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::model::ServerConfig;
 use crate::monitor::{
     cancellable_request, cancellable_sleep, emit_events, send_status, MonitorUpdate,
-    ReconnectBackoff,
+    PinnedSessions, PinTracker, ReconnectBackoff,
 };
 use crate::protocol::dsh::{parse_frame, parse_session_list};
 use crate::protocol::ProtocolState;
@@ -23,6 +23,7 @@ pub async fn run(
     server: ServerConfig,
     update_tx: mpsc::Sender<MonitorUpdate>,
     token: CancellationToken,
+    pinned: PinnedSessions,
 ) {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -36,6 +37,7 @@ pub async fn run(
                 false,
                 &ProtocolState::default(),
                 Some(e.to_string()),
+                &PinnedSessions::default(),
             );
             return;
         }
@@ -43,18 +45,27 @@ pub async fn run(
 
     let mut backoff = ReconnectBackoff::default();
     let mut state = ProtocolState::default();
+    // 置顶会话跟踪：跨重连保留，保证「完成」跃迁只通知一次。
+    let mut pins = PinTracker::new(pinned);
 
     loop {
         if token.is_cancelled() {
             break;
         }
 
-        match run_once(&client, &server, &update_tx, &mut state, &token).await {
+        match run_once(&client, &server, &update_tx, &mut state, &token, &mut pins).await {
             Ok(()) => {
                 backoff.reset();
             }
             Err(e) => {
-                send_status(&update_tx, &server.id, false, &state, Some(e.to_string()));
+                send_status(
+                    &update_tx,
+                    &server.id,
+                    false,
+                    &state,
+                    Some(e.to_string()),
+                    &pins.pinned,
+                );
             }
         }
 
@@ -65,7 +76,7 @@ pub async fn run(
         }
     }
 
-    send_status(&update_tx, &server.id, false, &state, None);
+    send_status(&update_tx, &server.id, false, &state, None, &pins.pinned);
 }
 
 async fn run_once(
@@ -74,6 +85,7 @@ async fn run_once(
     update_tx: &mpsc::Sender<MonitorUpdate>,
     state: &mut ProtocolState,
     token: &CancellationToken,
+    pins: &mut PinTracker,
 ) -> Result<(), MonitorError> {
     let base = server.base_url().map_err(MonitorError::Config)?;
 
@@ -108,7 +120,9 @@ async fn run_once(
         return Err(MonitorError::Http(format!("HTTP {}", status)));
     }
     parse_session_list(&text, state).map_err(|e| MonitorError::Protocol(e.to_string()))?;
-    send_status(update_tx, &server.id, false, state, None);
+    // 重连间隙里跑完的置顶会话，在列表校准后补一次完成跃迁检测。
+    pins.emit_finished(update_tx, &server.id, state).await;
+    send_status(update_tx, &server.id, false, state, None, &pins.pinned);
 
     // 2. Connect WebSocket.
     let ws_url = ws_url(server)?;
@@ -120,8 +134,8 @@ async fn run_once(
             .map_err(|e| MonitorError::Ws(e.to_string()))?,
     };
 
-    send_status(update_tx, &server.id, true, state, None);
-    read_loop(ws_stream, server, update_tx, state, token).await
+    send_status(update_tx, &server.id, true, state, None, &pins.pinned);
+    read_loop(ws_stream, server, update_tx, state, token, pins).await
 }
 
 async fn read_loop(
@@ -130,6 +144,7 @@ async fn read_loop(
     update_tx: &mpsc::Sender<MonitorUpdate>,
     state: &mut ProtocolState,
     token: &CancellationToken,
+    pins: &mut PinTracker,
 ) -> Result<(), MonitorError> {
     // 定期主动发送 ping，避免服务端/中间设备因空闲断开连接。
     let mut keepalive = tokio::time::interval(Duration::from_secs(20));
@@ -147,7 +162,9 @@ async fn read_loop(
                                 return Err(MonitorError::Protocol(e.to_string()));
                             }
                         }
-                        send_status(update_tx, &server.id, true, state, None);
+                        // 置顶会话「忙碌 -> 空闲」跃迁：发出一次性的完成事件。
+                        pins.emit_finished(update_tx, &server.id, state).await;
+                        send_status(update_tx, &server.id, true, state, None, &pins.pinned);
                     }
                     Some(Ok(Message::Close(_))) | None => {
                         return Ok(());

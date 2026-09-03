@@ -16,8 +16,8 @@ function viewFixture(): AppView {
         connected: true,
         activeCount: 2,
         sessions: [
-          { id: "sess-a", title: "重构登录模块", activity: "Bash · npm test" },
-          { id: "sess-b", title: "修复 <b> 注入", activity: null },
+          { id: "sess-a", title: "重构登录模块", activity: "Bash · npm test", pinned: false, done: false },
+          { id: "sess-b", title: "修复 <b> 注入", activity: null, pinned: false, done: false },
         ],
         serverVersion: null,
         lastCheckedAt: null,
@@ -123,7 +123,7 @@ describe("renderServerList", () => {
     view.statuses["kimi-1"] = {
       connected: false,
       activeCount: 1,
-      sessions: [{ id: "s", title: "离线会话", activity: null }],
+      sessions: [{ id: "s", title: "离线会话", activity: null, pinned: false, done: false }],
       serverVersion: null,
       lastCheckedAt: null,
       error: null,
@@ -149,5 +149,36 @@ describe("renderServerList", () => {
   it("omits the version segment when the server reports none", () => {
     const html = renderServerList(viewFixture());
     expect(html).not.toContain("server-version");
+  });
+
+  it("renders a pin toggle for every session row", () => {
+    const html = renderServerList(viewFixture(), new Set(["dsh-1"]));
+    expect(html).toContain('data-action="toggle-pin"');
+    expect(html).toContain('aria-label="置顶 重构登录模块"');
+  });
+
+  it("marks pinned rows as active pins", () => {
+    const view = viewFixture();
+    view.statuses["dsh-1"].sessions[0].pinned = true;
+    const html = renderServerList(view, new Set(["dsh-1"]));
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain("session-row--pinned");
+  });
+
+  it("shows a done mark instead of a spinner for pinned finished sessions", () => {
+    const view = viewFixture();
+    view.statuses["dsh-1"].sessions[1] = {
+      id: "sess-b",
+      title: "修复 <b> 注入",
+      activity: "已完成，等你介入",
+      pinned: true,
+      done: true,
+    };
+    const html = renderServerList(view, new Set(["dsh-1"]));
+    expect(html).toContain("session-row--done");
+    expect(html).toContain("已完成，等你介入");
+    const doneRow = html.split("sess-b")[1]?.split("</li>")[0] ?? "";
+    expect(doneRow).not.toContain("session-spinner");
+    expect(doneRow).toContain("session-done-mark");
   });
 });

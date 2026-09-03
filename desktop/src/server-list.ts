@@ -55,7 +55,22 @@ function renderExpander(
     </span>`;
 }
 
-/** 展开后的运行中会话列表，整行铺在卡片底部。 */
+/** 会话行尾的置顶按钮：svg 图钉，置顶后高亮。 */
+function renderPinButton(
+  serverId: string,
+  sessionId: string,
+  title: string,
+  pinned: boolean,
+): string {
+  return `
+          <button class="session-pin${pinned ? " session-pin--active" : ""}" type="button"
+            data-action="toggle-pin" data-id="${serverId}" data-session-id="${sessionId}"
+            aria-pressed="${pinned}" aria-label="置顶 ${title}" title="${pinned ? "取消置顶" : "置顶，完成后会通知你"}">
+            <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z" fill="currentColor"/></svg>
+          </button>`;
+}
+
+/** 展开后的运行中会话列表，整行铺在卡片底部；置顶会话完成后仍保留提醒介入。 */
 function renderSessionRows(
   server: ServerSummary,
   status: ServerStatus | undefined,
@@ -66,20 +81,33 @@ function renderSessionRows(
   const id = escapeHtml(server.id);
   return `
     <ul class="session-list">${sessions
-      .map(
-        (session) => `
+      .map((session) => {
+        const rowTitle = escapeHtml(session.title);
+        const rowClasses = [
+          "session-row",
+          session.pinned ? "session-row--pinned" : "",
+          session.done ? "session-row--done" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const lead = session.done
+          ? `<span class="session-done-mark" aria-label="已完成">✓</span>`
+          : `<span class="session-spinner" aria-hidden="true"></span>`;
+        return `
       <li>
-        <button class="session-row" type="button" data-action="open-session"
-          data-id="${id}" data-session-id="${escapeHtml(session.id)}"
-          aria-label="打开会话 ${escapeHtml(session.title)}">
-          <span class="session-spinner" aria-hidden="true"></span>
-          <span class="session-copy">
-            <span class="session-title">${escapeHtml(session.title)}</span>
-            ${session.activity ? `<span class="session-activity">${escapeHtml(session.activity)}</span>` : ""}
-          </span>
-        </button>
-      </li>`,
-      )
+        <div class="${rowClasses}">
+          <button class="session-main" type="button" data-action="open-session"
+            data-id="${id}" data-session-id="${escapeHtml(session.id)}"
+            aria-label="打开会话 ${rowTitle}">
+            ${lead}
+            <span class="session-copy">
+              <span class="session-title">${rowTitle}</span>
+              ${session.activity ? `<span class="session-activity${session.done ? " session-activity--done" : ""}">${escapeHtml(session.activity)}</span>` : ""}
+            </span>
+          </button>${renderPinButton(id, escapeHtml(session.id), rowTitle, session.pinned)}
+        </div>
+      </li>`;
+      })
       .join("")}</ul>`;
 }
 

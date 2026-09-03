@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::model::{AgentEvent, ServerConfig};
 use crate::monitor::{
     cancellable_request, cancellable_sleep, emit_events, send_status, MonitorUpdate,
-    ReconnectBackoff,
+    PinnedSessions, PinTracker, ReconnectBackoff,
 };
 use crate::protocol::kimi::parse_frame;
 use crate::protocol::ProtocolState;
@@ -23,6 +23,7 @@ pub async fn run(
     server: ServerConfig,
     update_tx: mpsc::Sender<MonitorUpdate>,
     token: CancellationToken,
+    pinned: PinnedSessions,
 ) {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -36,6 +37,7 @@ pub async fn run(
                 false,
                 &ProtocolState::default(),
                 Some(e.to_string()),
+                &PinnedSessions::default(),
             );
             return;
         }
@@ -43,18 +45,27 @@ pub async fn run(
 
     let mut backoff = ReconnectBackoff::default();
     let mut state = ProtocolState::default();
+    // 置顶会话跟踪：跨重连保留，保证「完成」跃迁只通知一次。
+    let mut pins = PinTracker::new(pinned);
 
     loop {
         if token.is_cancelled() {
             break;
         }
 
-        match run_once(&client, &server, &update_tx, &mut state, &token).await {
+        match run_once(&client, &server, &update_tx, &mut state, &token, &mut pins).await {
             Ok(()) => {
                 backoff.reset();
             }
             Err(e) => {
-                send_status(&update_tx, &server.id, false, &state, Some(e.to_string()));
+                send_status(
+                    &update_tx,
+                    &server.id,
+                    false,
+                    &state,
+                    Some(e.to_string()),
+                    &pins.pinned,
+                );
             }
         }
 
@@ -65,7 +76,7 @@ pub async fn run(
         }
     }
 
-    send_status(&update_tx, &server.id, false, &state, None);
+    send_status(&update_tx, &server.id, false, &state, None, &pins.pinned);
 }
 
 async fn run_once(
@@ -74,6 +85,7 @@ async fn run_once(
     update_tx: &mpsc::Sender<MonitorUpdate>,
     state: &mut ProtocolState,
     token: &CancellationToken,
+    pins: &mut PinTracker,
 ) -> Result<(), MonitorError> {
     let base = server.base_url().map_err(MonitorError::Config)?;
 
@@ -85,7 +97,9 @@ async fn run_once(
     // 启动种子：对忙碌会话取一次详情（含 main_turn_active / 后台任务数），
     // 之后的细分状态全靠推送。
     seed_busy_sessions(client, server, base.clone(), state, token).await;
-    send_status(update_tx, &server.id, false, state, None);
+    // 重连间隙里跑完的置顶会话，在种子校准后补一次完成跃迁检测。
+    pins.emit_finished(update_tx, &server.id, state).await;
+    send_status(update_tx, &server.id, false, state, None, &pins.pinned);
 
     // 2. Connect WebSocket with optional subprotocol header.
     let ws_url = ws_url(server)?;
@@ -105,7 +119,7 @@ async fn run_once(
         .map(String::from);
     let _ = selected_protocol;
 
-    send_status(update_tx, &server.id, true, state, None);
+    send_status(update_tx, &server.id, true, state, None, &pins.pinned);
 
     // 3. 只用基础订阅：相位/工具/任务事件都由它推送，不再订阅 transcript（省流量）。
     let session_ids: Vec<String> = state.titles.keys().cloned().collect();
@@ -116,7 +130,7 @@ async fn run_once(
         .map_err(|e| MonitorError::Ws(e.to_string()))?;
     state.subscribed = session_ids.into_iter().collect();
 
-    read_loop(client, ws_stream, server, update_tx, state, token).await
+    read_loop(client, ws_stream, server, update_tx, state, token, pins).await
 }
 
 async fn fetch_version(
@@ -361,6 +375,7 @@ async fn read_loop(
     update_tx: &mpsc::Sender<MonitorUpdate>,
     state: &mut ProtocolState,
     token: &CancellationToken,
+    pins: &mut PinTracker,
 ) -> Result<(), MonitorError> {
     // 定期主动发送 ping，避免服务端/中间设备因空闲断开连接。
     let mut keepalive = tokio::time::interval(Duration::from_secs(20));
@@ -377,6 +392,8 @@ async fn read_loop(
                             }
                             Err(e) => return Err(e),
                         }
+                        // 置顶会话「忙碌 -> 空闲」跃迁：发出一次性的完成事件。
+                        pins.emit_finished(update_tx, &server.id, state).await;
                         // 新出现的会话（如 event.session.created）补进基础订阅。
                         let new_ids: Vec<String> = state
                             .titles
@@ -391,7 +408,7 @@ async fn read_loop(
                                 .map_err(|e| MonitorError::Ws(e.to_string()))?;
                             state.subscribed.extend(new_ids);
                         }
-                        send_status(update_tx, &server.id, true, state, None);
+                        send_status(update_tx, &server.id, true, state, None, &pins.pinned);
                     }
                     Some(Ok(Message::Close(_))) | None => {
                         return Ok(());

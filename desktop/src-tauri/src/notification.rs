@@ -167,6 +167,7 @@ fn is_notifiable_kind(kind: &AgentEventKind) -> bool {
             | AgentEventKind::Failed
             | AgentEventKind::ApprovalRequired
             | AgentEventKind::QuestionRequired
+            | AgentEventKind::PinnedFinished
     )
 }
 
@@ -189,6 +190,7 @@ fn notification_title(backend: Backend, kind: &AgentEventKind) -> String {
         AgentEventKind::Failed => "任务失败",
         AgentEventKind::ApprovalRequired => "等待审批",
         AgentEventKind::QuestionRequired => "待回答",
+        AgentEventKind::PinnedFinished => "等你介入",
     };
     format!("{} · {}", prefix, action)
 }
@@ -370,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn only_four_kinds_map_to_notifications() {
+    fn only_five_kinds_map_to_notifications() {
         let started = Utc::now();
         let now = started + chrono::Duration::seconds(1);
         let mut policy = NotificationPolicy::default();
@@ -380,6 +382,7 @@ mod tests {
             AgentEventKind::Failed,
             AgentEventKind::ApprovalRequired,
             AgentEventKind::QuestionRequired,
+            AgentEventKind::PinnedFinished,
         ];
 
         for (i, kind) in kinds.iter().enumerate() {
@@ -448,6 +451,31 @@ mod tests {
             )
             .unwrap();
         assert_eq!(note.title, "DeepSeek Harness · 等待审批");
+    }
+
+    #[test]
+    fn pinned_finished_maps_to_intervention_title() {
+        let mut coord = NotificationCoordinator::new();
+        let started = Utc::now();
+        let now = started + chrono::Duration::seconds(1);
+
+        let evt = event(
+            "srv",
+            Some("sess"),
+            "pinned-done-sess",
+            AgentEventKind::PinnedFinished,
+            now,
+        );
+        let note = coord
+            .handle_event(
+                &evt,
+                &server(Backend::Kimi),
+                started,
+                now,
+                &DesktopSettings::default(),
+            )
+            .unwrap();
+        assert_eq!(note.title, "Kimi Code · 等你介入");
     }
 
     #[test]

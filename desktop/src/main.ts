@@ -15,6 +15,7 @@ import {
   type ImportPreview,
   type KimiSyncResult,
   type MeshPeerView,
+  type PinToggleResult,
   type ServerDraft,
   type ServerForEdit,
   type SyncInfo,
@@ -361,6 +362,16 @@ serverList.addEventListener("click", async (event) => {
     }
     if (currentView) {
       serverList.innerHTML = renderServerList(currentView, expandedServers);
+    }
+  } else if (id && action === "toggle-pin") {
+    const sessionId = button.dataset.sessionId;
+    if (!sessionId) return;
+    try {
+      const result = await invoke<PinToggleResult>(commands.toggleSessionPin, { id, sessionId });
+      applyView(result.view);
+      setMessage(result.pinned ? "已置顶，完成后会通知你" : "已取消置顶", "success");
+    } catch (error) {
+      setMessage(`置顶失败：${errorMessage(error)}`, "error");
     }
   } else if (id && action === "open-session") {
     try {

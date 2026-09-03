@@ -53,8 +53,9 @@ pub fn run() {
             });
 
             let (update_tx, update_rx) = mpsc::channel(256);
-            let monitors = MonitorManager::new(update_tx);
-            let state = Arc::new(AppState::new(loaded.config, store, monitors));
+            let pinned = crate::monitor::PinnedSessions::default();
+            let monitors = MonitorManager::new(update_tx, pinned.clone());
+            let state = Arc::new(AppState::new(loaded.config, store, monitors, pinned));
             let state_for_coordinator = Arc::clone(&state);
             app.manage(Arc::clone(&state));
 
@@ -131,6 +132,7 @@ pub fn run() {
             commands::reconnect_all,
             commands::open_server,
             commands::set_always_on_top,
+            commands::toggle_session_pin,
             commands::preview_import_text,
             commands::apply_import,
             commands::export_config,

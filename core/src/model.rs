@@ -143,7 +143,7 @@ impl From<&ServerConfig> for ServerSummary {
     }
 }
 
-/// 正在运行的会话摘要（仅忙碌会话；标题缺失时用占位文案）。
+/// 正在运行的会话摘要（忙碌会话 + 已置顶的完成会话；标题缺失时用占位文案）。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSummary {
@@ -151,6 +151,10 @@ pub struct SessionSummary {
     pub title: String,
     /// 当前正在执行的活动，如 "Bash · git push"；未知时为 None。
     pub activity: Option<String>,
+    /// 用户置顶的会话：完成后仍留在列表中提醒介入。
+    pub pinned: bool,
+    /// 置顶会话已全部完成（主回合与后台任务都结束），等待用户介入。
+    pub done: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -172,6 +176,8 @@ pub enum AgentEventKind {
     Failed,
     ApprovalRequired,
     QuestionRequired,
+    /// 置顶会话真正跑完（主回合与后台任务都结束），提醒用户介入收尾。
+    PinnedFinished,
 }
 
 #[derive(Clone, Debug, PartialEq)]

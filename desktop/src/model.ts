@@ -42,6 +42,16 @@ export interface SessionSummary {
   title: string;
   /** 当前正在执行的活动（如 "Bash · git push"）；未知为 null。 */
   activity: string | null;
+  /** 用户置顶的会话：完成后仍留在列表中提醒介入。 */
+  pinned: boolean;
+  /** 置顶会话已全部完成，等待用户介入。 */
+  done: boolean;
+}
+
+/** 置顶切换结果：新状态 + 最新视图。 */
+export interface PinToggleResult {
+  pinned: boolean;
+  view: AppView;
 }
 
 export interface ServerStatus {
@@ -109,6 +119,7 @@ export const commands = {
   reconnectAll: "reconnect_all",
   openServer: "open_server",
   setAlwaysOnTop: "set_always_on_top",
+  toggleSessionPin: "toggle_session_pin",
   previewImportText: "preview_import_text",
   applyImport: "apply_import",
   exportConfig: "export_config",

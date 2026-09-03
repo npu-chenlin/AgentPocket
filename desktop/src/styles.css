@@ -511,18 +511,67 @@ p {
 .session-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 5px 8px;
-  border: 0;
+  gap: 2px;
   border-radius: 8px;
+}
+
+.session-row:hover,
+.session-row--pinned {
+  background: var(--accent-soft);
+}
+
+/* 打开会话的主体按钮；置顶按钮是行尾独立按钮，不能嵌套。 */
+.session-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 4px 5px 8px;
+  border: 0;
   background: transparent;
   color: inherit;
   text-align: left;
 }
 
-.session-row:hover {
-  background: var(--accent-soft);
+/* 行尾置顶按钮：hover 行时浮现，已置顶常亮。 */
+.session-pin {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.session-row:hover .session-pin,
+.session-pin--active,
+.session-pin:focus-visible {
+  opacity: 1;
+}
+
+.session-pin:hover {
+  background: var(--border);
+  color: var(--accent);
+}
+
+.session-pin--active {
+  color: var(--accent);
+}
+
+.session-done-mark {
+  flex: none;
+  width: 15px;
+  color: var(--accent);
+  font-size: 0.8rem;
+  text-align: center;
 }
 
 .session-copy {
@@ -546,6 +595,10 @@ p {
   font-size: 0.7rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-activity--done {
+  color: var(--accent);
 }
 
 .session-spinner {

@@ -1,18 +1,23 @@
 pub mod dsh;
 pub mod kimi;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
-use crate::model::{AgentEvent, Backend, ServerConfig, ServerStatus, SessionSummary};
-use crate::protocol::ProtocolState;
+use crate::model::{AgentEvent, AgentEventKind, Backend, ServerConfig, ServerStatus, SessionSummary};
+use crate::protocol::{build_event, ProtocolState};
+
+/// 用户置顶的会话集合，键为 "server_id|session_id"。
+/// 由 AppState（命令层读写）与各监控任务（只读）共享。
+pub type PinnedSessions = Arc<RwLock<HashSet<String>>>;
 
 pub enum MonitorUpdate {
     Status {
@@ -25,6 +30,7 @@ pub enum MonitorUpdate {
 pub struct MonitorManager {
     tasks: HashMap<String, MonitorTask>,
     update_tx: mpsc::Sender<MonitorUpdate>,
+    pinned: PinnedSessions,
 }
 
 struct MonitorTask {
@@ -35,10 +41,11 @@ struct MonitorTask {
 }
 
 impl MonitorManager {
-    pub fn new(update_tx: mpsc::Sender<MonitorUpdate>) -> Self {
+    pub fn new(update_tx: mpsc::Sender<MonitorUpdate>, pinned: PinnedSessions) -> Self {
         Self {
             tasks: HashMap::new(),
             update_tx,
+            pinned,
         }
     }
 
@@ -57,10 +64,11 @@ impl MonitorManager {
                     let token = CancellationToken::new();
                     let child_token = token.child_token();
                     let update_tx = self.update_tx.clone();
+                    let pinned = self.pinned.clone();
                     let server = server.clone();
                     let config = server.clone();
                     let handle = tokio::spawn(async move {
-                        run_single_server(server, update_tx, child_token).await;
+                        run_single_server(server, update_tx, child_token, pinned).await;
                     });
                     self.tasks.insert(
                         id,
@@ -105,9 +113,10 @@ impl MonitorManager {
             let token = CancellationToken::new();
             let child_token = token.child_token();
             let update_tx = self.update_tx.clone();
+            let pinned = self.pinned.clone();
             let config_for_task = config.clone();
             let handle = tokio::spawn(async move {
-                run_single_server(config_for_task, update_tx, child_token).await;
+                run_single_server(config_for_task, update_tx, child_token, pinned).await;
             });
             self.tasks.insert(
                 id,
@@ -151,10 +160,11 @@ async fn run_single_server(
     server: ServerConfig,
     update_tx: mpsc::Sender<MonitorUpdate>,
     token: CancellationToken,
+    pinned: PinnedSessions,
 ) {
     match server.backend {
-        Backend::Dsh => dsh::run(server, update_tx, token).await,
-        Backend::Kimi => kimi::run(server, update_tx, token).await,
+        Backend::Dsh => dsh::run(server, update_tx, token, pinned).await,
+        Backend::Kimi => kimi::run(server, update_tx, token, pinned).await,
     }
 }
 
@@ -193,23 +203,54 @@ pub(crate) fn send_status(
     connected: bool,
     state: &ProtocolState,
     error: Option<String>,
+    pinned: &PinnedSessions,
 ) {
+    let pinned = pinned_read(pinned);
+    let pin_key = |session_id: &str| format!("{}|{}", server_id, session_id);
+    let title_of = |id: &String| {
+        state
+            .titles
+            .get(id)
+            .filter(|title| !title.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "会话".to_string())
+    };
     let mut sessions: Vec<SessionSummary> = state
         .busy
         .iter()
         .map(|id| SessionSummary {
             id: id.clone(),
-            title: state
-                .titles
-                .get(id)
-                .filter(|title| !title.is_empty())
-                .cloned()
-                .unwrap_or_else(|| "会话".to_string()),
+            title: title_of(id),
             activity: state.activity_text(id),
+            pinned: pinned.contains(&pin_key(id)),
+            done: false,
         })
         .collect();
-    // HashSet 遍历顺序不稳定，排序后状态比较才不会因顺序抖动误触发重绘。
-    sessions.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id)));
+    // 置顶但已不忙碌的会话：仍以完成行留在列表中提醒用户介入（对齐手机端语义）。
+    for key in pinned.iter() {
+        let Some((key_server, session_id)) = key.split_once('|') else {
+            continue;
+        };
+        if key_server != server_id || state.busy.contains(session_id) {
+            continue;
+        }
+        let session_id = session_id.to_string();
+        sessions.push(SessionSummary {
+            title: title_of(&session_id),
+            activity: Some("已完成，等你介入".to_string()),
+            id: session_id,
+            pinned: true,
+            done: true,
+        });
+    }
+    // 排序：置顶运行中 → 置顶已完成 → 其余；同级按标题排序，
+    // 保证稳定，状态比较才不会因顺序抖动误触发重绘。
+    sessions.sort_by(|a, b| {
+        session_rank(a)
+            .cmp(&session_rank(b))
+            .then_with(|| a.title.cmp(&b.title))
+            .then_with(|| a.id.cmp(&b.id))
+    });
     let status = ServerStatus {
         connected,
         active_count: state.busy.len() as u32,
@@ -224,10 +265,89 @@ pub(crate) fn send_status(
     });
 }
 
+/// 置顶运行中 0 → 置顶已完成 1 → 其余 2（与手机端 sessionRank 一致）。
+fn session_rank(session: &SessionSummary) -> u8 {
+    if !session.pinned {
+        2
+    } else if session.done {
+        1
+    } else {
+        0
+    }
+}
+
+/// 置顶会话「忙碌 -> 空闲」跃迁检测：每次状态变化后调用。
+/// prev_busy 由监控任务持有、跨重连保留，保证一次跃迁只发一个事件；
+/// 取消置顶的会话会被移出跟踪，不再补发。
+pub(crate) fn pinned_finished_events(
+    server_id: &str,
+    state: &ProtocolState,
+    pinned: &HashSet<String>,
+    prev_busy: &mut HashSet<String>,
+    now: DateTime<Utc>,
+) -> Vec<AgentEvent> {
+    let prefix = format!("{}|", server_id);
+    prev_busy.retain(|id| pinned.contains(&format!("{}{}", prefix, id)));
+    let mut events = Vec::new();
+    for key in pinned.iter().filter(|key| key.starts_with(&prefix)) {
+        let session_id = &key[prefix.len()..];
+        if state.busy.contains(session_id) {
+            prev_busy.insert(session_id.to_string());
+        } else if prev_busy.remove(session_id) {
+            events.push(build_event(
+                server_id,
+                Some(session_id.to_string()),
+                AgentEventKind::PinnedFinished,
+                format!("pinned-done-{}", session_id),
+                now,
+                state,
+            ));
+        }
+    }
+    events
+}
+
 pub(crate) async fn emit_events(update_tx: &mpsc::Sender<MonitorUpdate>, events: Vec<AgentEvent>) {
     for event in events {
         let _ = update_tx.try_send(MonitorUpdate::Event(event));
     }
+}
+
+/// 监控任务持有的置顶跟踪器：共享置顶集合 + 本服务器会话的忙碌快照。
+/// prev_busy 跨重连保留，保证「完成」跃迁只通知一次。
+pub(crate) struct PinTracker {
+    pinned: PinnedSessions,
+    prev_busy: HashSet<String>,
+}
+
+impl PinTracker {
+    pub(crate) fn new(pinned: PinnedSessions) -> Self {
+        Self {
+            pinned,
+            prev_busy: HashSet::new(),
+        }
+    }
+
+    /// 检测置顶会话的完成跃迁并发出事件；每次状态刷新后调用。
+    pub(crate) async fn emit_finished(
+        &mut self,
+        update_tx: &mpsc::Sender<MonitorUpdate>,
+        server_id: &str,
+        state: &ProtocolState,
+    ) {
+        let events = {
+            let guard = pinned_read(&self.pinned);
+            pinned_finished_events(server_id, state, &guard, &mut self.prev_busy, Utc::now())
+        };
+        emit_events(update_tx, events).await;
+    }
+}
+
+/// 读共享置顶集合；锁中毒时取回内部值（只读场景无需因中毒失败）。
+pub(crate) fn pinned_read(
+    pinned: &PinnedSessions,
+) -> std::sync::RwLockReadGuard<'_, HashSet<String>> {
+    pinned.read().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 pub(crate) async fn cancellable_sleep(duration: Duration, token: &CancellationToken) {
@@ -343,6 +463,146 @@ async fn probe_kimi(server: &ServerConfig) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::AgentEventKind;
+    use std::collections::HashSet;
+
+    fn pinned_set(keys: &[&str]) -> HashSet<String> {
+        keys.iter().map(|k| k.to_string()).collect()
+    }
+
+    fn shared_pins(keys: &[&str]) -> PinnedSessions {
+        Arc::new(RwLock::new(pinned_set(keys)))
+    }
+
+    fn state_with(busy: &[&str], titles: &[(&str, &str)]) -> ProtocolState {
+        let mut state = ProtocolState::default();
+        for (id, title) in titles {
+            state.titles.insert(id.to_string(), title.to_string());
+        }
+        for id in busy {
+            state.busy.insert(id.to_string());
+        }
+        state
+    }
+
+    fn recv_status(rx: &mut mpsc::Receiver<MonitorUpdate>) -> ServerStatus {
+        match rx.try_recv() {
+            Ok(MonitorUpdate::Status { status, .. }) => status,
+            other => panic!("expected status update, got {:?}", other.is_ok()),
+        }
+    }
+
+    #[test]
+    fn send_status_marks_busy_pinned_session() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let state = state_with(&["a"], &[("a", "写代码")]);
+        let pinned = shared_pins(&["srv|a"]);
+
+        send_status(&tx, "srv", true, &state, None, &pinned);
+
+        let status = recv_status(&mut rx);
+        assert_eq!(status.active_count, 1);
+        assert_eq!(status.sessions.len(), 1);
+        assert!(status.sessions[0].pinned);
+        assert!(!status.sessions[0].done);
+    }
+
+    #[test]
+    fn send_status_keeps_pinned_idle_session_as_done() {
+        let (tx, mut rx) = mpsc::channel(4);
+        // 会话 b 已不忙碌但被置顶：仍以 done 行留在列表里提醒介入。
+        let state = state_with(&["a"], &[("a", "写代码"), ("b", "跑测试")]);
+        let pinned = shared_pins(&["srv|b"]);
+
+        send_status(&tx, "srv", true, &state, None, &pinned);
+
+        let status = recv_status(&mut rx);
+        // active_count 只统计真正忙碌的会话。
+        assert_eq!(status.active_count, 1);
+        assert_eq!(status.sessions.len(), 2);
+        let done_row = status.sessions.iter().find(|s| s.id == "b").unwrap();
+        assert!(done_row.pinned);
+        assert!(done_row.done);
+        assert_eq!(done_row.activity.as_deref(), Some("已完成，等你介入"));
+    }
+
+    #[test]
+    fn send_status_orders_pinned_running_then_done_then_rest() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let state = state_with(
+            &["busy-pinned", "busy-plain"],
+            &[
+                ("busy-pinned", "甲"),
+                ("busy-plain", "乙"),
+                ("done-pinned", "丙"),
+            ],
+        );
+        let pinned = shared_pins(&["srv|busy-pinned", "srv|done-pinned"]);
+
+        send_status(&tx, "srv", true, &state, None, &pinned);
+
+        let status = recv_status(&mut rx);
+        let order: Vec<&str> = status.sessions.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(order, vec!["busy-pinned", "done-pinned", "busy-plain"]);
+    }
+
+    #[test]
+    fn pinned_finished_events_fire_once_on_busy_to_idle_transition() {
+        let pinned = pinned_set(&["srv|a"]);
+        let mut prev_busy = HashSet::new();
+        let now = Utc::now();
+
+        // 忙碌中：只记录，不发事件。
+        let state = state_with(&["a"], &[("a", "写代码")]);
+        let events = pinned_finished_events("srv", &state, &pinned, &mut prev_busy, now);
+        assert!(events.is_empty());
+
+        // 忙碌 -> 空闲：发一次 PinnedFinished，带上会话标题。
+        let state = state_with(&[], &[("a", "写代码")]);
+        let events = pinned_finished_events("srv", &state, &pinned, &mut prev_busy, now);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AgentEventKind::PinnedFinished);
+        assert_eq!(events[0].session_id.as_deref(), Some("a"));
+        assert_eq!(events[0].session_title.as_deref(), Some("写代码"));
+
+        // 再次空闲：不重复发。
+        let events = pinned_finished_events("srv", &state, &pinned, &mut prev_busy, now);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn pinned_finished_events_ignore_unpinned_and_unpin_drops_tracking() {
+        let pinned = pinned_set(&[]);
+        let mut prev_busy = HashSet::new();
+        let now = Utc::now();
+
+        // 未置顶会话的忙碌->空闲不产事件。
+        let state = state_with(&["a"], &[("a", "写代码")]);
+        assert!(pinned_finished_events("srv", &state, &pinned, &mut prev_busy, now).is_empty());
+        let state = state_with(&[], &[("a", "写代码")]);
+        assert!(pinned_finished_events("srv", &state, &pinned, &mut prev_busy, now).is_empty());
+
+        // 先置顶并记录忙碌，完成后取消置顶：不再补发事件，跟踪状态被清除。
+        let pinned = pinned_set(&["srv|a"]);
+        let state = state_with(&["a"], &[("a", "写代码")]);
+        assert!(pinned_finished_events("srv", &state, &pinned, &mut prev_busy, now).is_empty());
+        let pinned = pinned_set(&[]);
+        let state = state_with(&[], &[("a", "写代码")]);
+        assert!(pinned_finished_events("srv", &state, &pinned, &mut prev_busy, now).is_empty());
+        assert!(prev_busy.is_empty());
+    }
+
+    // 其他服务器的置顶 key 不影响本服务器的跃迁检测。
+    #[test]
+    fn pinned_finished_events_scoped_to_server() {
+        let pinned = pinned_set(&["other|a"]);
+        let mut prev_busy = HashSet::new();
+        let now = Utc::now();
+
+        let state = state_with(&["a"], &[("a", "写代码")]);
+        assert!(pinned_finished_events("srv", &state, &pinned, &mut prev_busy, now).is_empty());
+        assert!(prev_busy.is_empty());
+    }
 
     #[test]
     fn backoff_sequence_caps_and_resets() {
@@ -366,7 +626,7 @@ mod tests {
     #[tokio::test]
     async fn removing_one_server_cancels_only_its_task() {
         let (tx, mut rx) = mpsc::channel(64);
-        let mut manager = MonitorManager::new(tx);
+        let mut manager = MonitorManager::new(tx, PinnedSessions::default());
 
         let servers = vec![
             ServerConfig::new("s1", "One", "127.0.0.1", 1, "", Backend::Dsh),
@@ -397,7 +657,7 @@ mod tests {
     #[tokio::test]
     async fn changing_one_server_restarts_only_that_server() {
         let (tx, _rx) = mpsc::channel(64);
-        let mut manager = MonitorManager::new(tx);
+        let mut manager = MonitorManager::new(tx, PinnedSessions::default());
 
         let server_v1 = ServerConfig::new("s1", "One", "127.0.0.1", 1, "", Backend::Dsh);
         manager.sync_servers(&[server_v1]).await;
@@ -642,7 +902,9 @@ mod tests {
         let (update_tx, mut update_rx) = mpsc::channel(64);
         let token = CancellationToken::new();
         let task_token = token.child_token();
-        let _task = tokio::spawn(async move { dsh::run(server, update_tx, task_token).await });
+        let _task = tokio::spawn(async move {
+            dsh::run(server, update_tx, task_token, PinnedSessions::default()).await
+        });
 
         // Wait for at least two WebSocket connections (initial + reconnect).
         let _ = timeout(Duration::from_secs(2), connect_rx.recv()).await;
@@ -699,7 +961,9 @@ mod tests {
         let (update_tx, mut update_rx) = mpsc::channel(64);
         let token = CancellationToken::new();
         let task_token = token.child_token();
-        let _task = tokio::spawn(async move { kimi::run(server, update_tx, task_token).await });
+        let _task = tokio::spawn(async move {
+            kimi::run(server, update_tx, task_token, PinnedSessions::default()).await
+        });
 
         let _ = timeout(Duration::from_secs(2), connect_rx.recv()).await;
         let _ = timeout(Duration::from_secs(2), connect_rx.recv()).await;
