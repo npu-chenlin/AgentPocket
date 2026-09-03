@@ -40,7 +40,7 @@ npm run tauri dev
 
 ```shell
 npm test
-npm run tauri build -- --bundles appimage,deb
+npm run tauri build
 ```
 
 若只产出二进制（不打安装包），必须启用 `custom-protocol`：
