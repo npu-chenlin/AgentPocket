@@ -27,7 +27,7 @@
 - 群聊 UI（cc-connect 式聚合界面）
 - @时自动新建 session
 - 文件/附件转传
-- GUI 别名管理页（CLI 先行，留扩展点）
+- 独立 GUI 别名管理页（仅在现有会话下拉菜单挂一个"设为 @别名"动作）
 
 ## 3. 架构（方案 A：daemon 路由 + MCP 工具）
 
@@ -63,16 +63,20 @@ agent 调用 MCP 工具 relay_ask            │
   本机别名可省 server 前缀；跨机写 `@gpu/refine`。
   CLI 维护：`agentpocket relay add/list/rm`。
 
-  session_id 的获取（按常用度分层，add 时均校验存在并回显标题确认）：
-  1. `agentpocket relay add <alias>` 不带 `--session`：交互选择——拉
-     `GET /sessions` 按 `updated_at` 倒序列出（标题 + busy 标记 + 短 id），
-     输序号选定；
-  2. `--session` 接受完整 URL（`http://host:58627/sessions/session_xxx`）
-     或裸 `session_xxx`，自动解析；
-  3. `--latest`：注册最近活跃 session——可在目标会话内让 agent 自己执行
-     `agentpocket relay add <alias> --latest` 完成注册；
-  4. `--title <子串>`：标题模糊匹配，唯一命中才通过，歧义报错。
-  （P2 跨机：mesh 增只读端点 `GET /relay/sessions`，picker 支持列对端。）
+  **交付原则：用户只在 web 对话中说自然语言，不接触 CLI。** 别名表是
+  可选的覆盖层（改名/固定标题/消歧），不是必经注册步骤：
+
+  - **零注册默认**：`relay_ask` 的 target 解析顺序为——别名表精确命中 →
+    本机 session 标题子串匹配 → （P2）peer 标题匹配；唯一命中即投递，
+    歧义时把候选（标题+短id+状态）返回给 agent 转问用户。
+  - **会话内注册**：MCP 工具 `relay_register(alias)`（见 4.2），用户在
+    目标会话里说"把你注册成 @xxx"，agent 调工具完成。
+  - **AgentPocket 菜单**：桌面/手机"活跃会话"下拉菜单加"设为 @别名"
+    （复用现有会话菜单，调 daemon 同一接口）。
+  - CLI 仅面向服务器脚本场景保留。session_id 获取（CLI/内部路径）：
+    `--session` 接受完整 URL（`http://host:58627/sessions/session_xxx`）
+    或裸 `session_xxx`；`--latest` 取最近活跃 session；`--title <子串>`
+    模糊匹配；add 均校验存在并回显标题。
 
 - **pending 表**（同目录 `relay-pending.json`）：每条投递记录
   `{delivery_id, from_peer, from_session, to_alias, to_session, wait, hops,
@@ -82,12 +86,18 @@ agent 调用 MCP 工具 relay_ask            │
 
 ### 4.2 MCP 工具（daemon 监听 127.0.0.1 streamable HTTP MCP 端点）
 
-- `relay_list()`：列出全部别名及目标状态（idle / 忙碌 / peer 离线）。
+- `relay_list()`：按解析顺序列出可 @ 的目标（别名 + 未绑定的会话标题），
+  及各自状态（idle / 忙碌 / peer 离线）。
 - `relay_ask(target, text, wait=true, timeout_secs=600)`：
   - 工具描述中写明约定：**用户消息出现 `@别名` 时，把内容通过本工具转发**。
   - `wait` 由 agent 自行决定（与 Bash 工具 `run_in_background` 同一心智模型）。
+  - target 即 4.1 的解析顺序；歧义时返回候选列表。
+- `relay_register(alias)`：注册**调用方 session 自身**——daemon 以最近活跃
+  session（`main_turn_active=true` 优先，`updated_at` 最新）判定调用方，
+  因工具调用发生时调用方会话必然正在写入。
 - MCP 注册写入 kimi config（具体配置格式在实现首日对齐，参考本机
-  amap-maps-streamableHTTP 的 http transport）。
+  amap-maps-streamableHTTP 的 http transport）。MCP 的自描述性使 agent
+  从工具列表自行发现 relay 能力，无需系统提示注入。
 
 ### 4.3 mesh 端点扩展（`mesh.rs`）
 
@@ -117,7 +127,8 @@ agent 调用 MCP 工具 relay_ask            │
 
 | 场景 | 行为 |
 |------|------|
-| 别名不存在 | `relay_ask` 立即报错，提示 agent 调 `relay_list` 纠正 |
+| target 无命中 | `relay_ask` 报错并返回 `relay_list` 摘要，提示 agent 转问用户 |
+| target 歧义（多标题命中） | 返回候选列表（标题+短id+状态）由 agent 转问用户 |
 | 对端 daemon 不可达 | 返回 "peer 离线" |
 | 目标 session 不存在 | 返回 kimi 原始错误码与信息 |
 | daemon 重启 | pending 表持久化，恢复后继续轮询 |
