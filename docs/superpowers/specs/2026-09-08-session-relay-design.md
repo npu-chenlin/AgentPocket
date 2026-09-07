@@ -66,9 +66,16 @@ agent 调用 MCP 工具 relay_ask            │
   **交付原则：用户只在 web 对话中说自然语言，不接触 CLI。** 别名表是
   可选的覆盖层（改名/固定标题/消歧），不是必经注册步骤：
 
-  - **零注册默认**：`relay_ask` 的 target 解析顺序为——别名表精确命中 →
-    本机 session 标题子串匹配 → （P2）peer 标题匹配；唯一命中即投递，
-    歧义时把候选（标题+短id+状态）返回给 agent 转问用户。
+  - **寻址三层语法**：
+    - `@<机器别名>`（如 `@gpu`）——该机器的**默认 session**（见下），
+      跨机冷启动零知识要求，等价于 cc-connect 中"每机一个 bot"；
+    - `@<别名|标题子串>`——本机优先，`relay_ask` 的 target 解析顺序为：
+      别名表精确命中 → 本机 session 标题子串匹配 →（P2）peer 标题匹配；
+      唯一命中即投递，歧义时把候选（标题+短id+状态）返回给 agent 转问用户；
+    - `@<机器别名>/<别名|标题>`——跨机特定会话。
+  - **默认 session**：daemon find-or-create——session `metadata` 打标
+    `relay_default: true`，命中即复用；无则在本机 HOME 工作区创建，
+    标题固定 `[relay] <机器别名>`。作为该机器对外的"前台"。
   - **会话内注册**：MCP 工具 `relay_register(alias)`（见 4.2），用户在
     目标会话里说"把你注册成 @xxx"，agent 调工具完成。
   - **AgentPocket 菜单**：桌面/手机"活跃会话"下拉菜单加"设为 @别名"
@@ -111,11 +118,14 @@ agent 调用 MCP 工具 relay_ask            │
 
 ## 5. 关键行为
 
+- **投递 prompt 模板（来源标识 + hop 计数）**：
+  `[relay hop=N from=@<机器别名>/<会话标识>] <text>`——B 一眼可知谁在
+  说话、自己在第几跳，可对等回话；hop≥3 拒绝逻辑直接读取该头部。
 - **同步（wait=true）**：工具阻塞至 B 回合完成，返回 B 最终回复；
   默认超时 10 分钟，超时返回"B 仍在运行（delivery_id=xx），可等待回投"。
 - **异步（wait=false）**：立即返回回执；B 完成后回调注入 A，注入格式：
-  `[relay] @gpu/refine 回复了你（delivery_id=xx）：\n\n<最终回复>`，
-  触发 A 新一轮，agent 自然接手。
+  `[relay hop=N from=@<机器别名>/<会话标识> delivery_id=xx] 回复：\n\n
+  <最终回复>`，触发 A 新一轮，agent 自然接手。
 - **目标正忙**：kimi 自动排队，照常等待。
 - **B 等待人工审批**：超时后明确告知 A "B 在等人工审批"，不无限挂起。
 - **循环防护**：
@@ -150,3 +160,5 @@ agent 调用 MCP 工具 relay_ask            │
 
 - kimi config 注册 streamable HTTP MCP server 的准确配置段格式。
 - `GET /prompts` 在 queued 状态下的返回细节（决定轮询状态机的转移条件）。
+- 创建 session 的 API（`POST /api/v1/sessions` 的请求形状）及 HOME 工作区
+  的信任要求——默认 session 的 find-or-create 依赖这两点。
