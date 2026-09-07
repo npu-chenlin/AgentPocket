@@ -76,6 +76,9 @@ agent 调用 MCP 工具 relay_ask            │
   - **默认 session**：daemon find-or-create——session `metadata` 打标
     `relay_default: true`，命中即复用；无则在本机 HOME 工作区创建，
     标题固定 `[relay] <机器别名>`。作为该机器对外的"前台"。
+  - **机器别名来源**：默认取 tailscale 主机名（mesh peer 表已有），
+    `relay.toml` 可覆盖。跨机投递依赖 tailscale 在线（mesh 信任边界为
+    100.x 网段），对端离线即报 "peer 离线"。
   - **会话内注册**：MCP 工具 `relay_register(alias)`（见 4.2），用户在
     目标会话里说"把你注册成 @xxx"，agent 调工具完成。
   - **AgentPocket 菜单**：桌面/手机"活跃会话"下拉菜单加"设为 @别名"
@@ -93,15 +96,25 @@ agent 调用 MCP 工具 relay_ask            │
 
 ### 4.2 MCP 工具（daemon 监听 127.0.0.1 streamable HTTP MCP 端点）
 
+端点仅绑定 127.0.0.1，与本机 kimi API 同信任模型（本机进程皆可调用，
+接受此边界）。
+
 - `relay_list()`：按解析顺序列出可 @ 的目标（别名 + 未绑定的会话标题），
   及各自状态（idle / 忙碌 / peer 离线）。
 - `relay_ask(target, text, wait=true, timeout_secs=600)`：
   - 工具描述中写明约定：**用户消息出现 `@别名` 时，把内容通过本工具转发**。
   - `wait` 由 agent 自行决定（与 Bash 工具 `run_in_background` 同一心智模型）。
   - target 即 4.1 的解析顺序；歧义时返回候选列表。
+- `relay_check(delivery_id)`：查询投递状态/取回最终回复。**恢复路径**：
+  kimi 侧 MCP 调用可能有自己的超时，wait=true 的长阻塞若被掐断，pending
+  仍在 daemon 侧存活，agent 调本工具轮询即可拿回结果——工具描述中写明。
 - `relay_register(alias)`：注册**调用方 session 自身**——daemon 以最近活跃
   session（`main_turn_active=true` 优先，`updated_at` 最新）判定调用方，
-  因工具调用发生时调用方会话必然正在写入。
+  因工具调用发生时调用方会话必然正在写入（并发双活跃会话时小概率认错，
+  注册回执回显标题，认错可见可改）。
+- **调用方识别**：`relay_ask` 的 from 同样用上述启发式；from 标识优先用
+  别名、无别名用标题（保证对端可回达；回话解析失败时错误信息引导对端
+  agent 调 `relay_list`）。
 - MCP 注册写入 kimi config（具体配置格式在实现首日对齐，参考本机
   amap-maps-streamableHTTP 的 http transport）。MCP 的自描述性使 agent
   从工具列表自行发现 relay 能力，无需系统提示注入。
@@ -128,10 +141,18 @@ agent 调用 MCP 工具 relay_ask            │
   <最终回复>`，触发 A 新一轮，agent 自然接手。
 - **目标正忙**：kimi 自动排队，照常等待。
 - **B 等待人工审批**：超时后明确告知 A "B 在等人工审批"，不无限挂起。
-- **循环防护**：
-  - 投递内嵌 hop 计数，`hop >= 3` 拒绝投递并回错误；
-  - 同一对会话同时仅允许 1 条 in-flight；
+- **循环防护（hop 传播规则）**：
+  - **人类输入触发的回合**发起 relay，hop=1；**被 relay 注入触发的回合**
+    再发起 relay，hop=注入 hop+1（daemon 经 pending 表将"当前回合是否
+    relay 触发"与发起的 relay_ask 关联）；
+  - **同步模式的工具结果返回不算投递、不增 hop**（hop 只计 prompt 投递）；
+  - `hop >= 3` 拒绝投递并回错误；
+  - 每对会话的窗口速率限制兜底（如 10 分钟内最多 6 次投递）；
+  - 同一对会话同时仅 1 条 in-flight，**超出时 daemon 侧排队依次投递**
+    （不拒绝，agent 连发多问是合理需求）；
   - 注入的回投 prompt 带 `[relay]` 前缀，agent 可识别这不是人类输入。
+- **回复长度**：注入/返回的最终回复截断上限约 4k 字符，尾部注明
+  "已截断，可让对端分段"，避免长回复烧 token。
 
 ## 6. 错误处理
 
@@ -139,9 +160,10 @@ agent 调用 MCP 工具 relay_ask            │
 |------|------|
 | target 无命中 | `relay_ask` 报错并返回 `relay_list` 摘要，提示 agent 转问用户 |
 | target 歧义（多标题命中） | 返回候选列表（标题+短id+状态）由 agent 转问用户 |
-| 对端 daemon 不可达 | 返回 "peer 离线" |
-| 目标 session 不存在 | 返回 kimi 原始错误码与信息 |
+| 对端 daemon 不可达 | 返回 "peer 离线"（含 tailscale 依赖提示） |
+| 目标 session 不存在/已归档 | 返回 kimi 原始错误码与信息，不静默丢弃 |
 | daemon 重启 | pending 表持久化，恢复后继续轮询 |
+| MCP 调用被 kimi 超时掐断 | pending 不受影响，agent 调 `relay_check` 恢复 |
 | 超时 | 见上文；delivery_id 保留供后续回投 |
 
 ## 7. 测试策略
@@ -159,6 +181,10 @@ agent 调用 MCP 工具 relay_ask            │
 ## 9. 实现时需确认的开放项
 
 - kimi config 注册 streamable HTTP MCP server 的准确配置段格式。
+- **kimi 的 MCP 调用是否携带调用方会话上下文**——携带则 relay_ask 的
+  from 与 relay_register 的调用方识别可精确化，否则用最近活跃启发式。
+- **kimi MCP 客户端的工具调用超时时长**——决定 wait=true 的安全上限
+  与 relay_check 恢复路径的提示文案。
 - `GET /prompts` 在 queued 状态下的返回细节（决定轮询状态机的转移条件）。
 - 创建 session 的 API（`POST /api/v1/sessions` 的请求形状）及 HOME 工作区
   的信任要求——默认 session 的 find-or-create 依赖这两点。
