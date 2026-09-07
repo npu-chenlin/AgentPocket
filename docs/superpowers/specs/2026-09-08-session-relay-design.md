@@ -62,6 +62,18 @@ agent 调用 MCP 工具 relay_ask            │
   `refine -> { server: "local" | "<peer名>", session_id, note }`。
   本机别名可省 server 前缀；跨机写 `@gpu/refine`。
   CLI 维护：`agentpocket relay add/list/rm`。
+
+  session_id 的获取（按常用度分层，add 时均校验存在并回显标题确认）：
+  1. `agentpocket relay add <alias>` 不带 `--session`：交互选择——拉
+     `GET /sessions` 按 `updated_at` 倒序列出（标题 + busy 标记 + 短 id），
+     输序号选定；
+  2. `--session` 接受完整 URL（`http://host:58627/sessions/session_xxx`）
+     或裸 `session_xxx`，自动解析；
+  3. `--latest`：注册最近活跃 session——可在目标会话内让 agent 自己执行
+     `agentpocket relay add <alias> --latest` 完成注册；
+  4. `--title <子串>`：标题模糊匹配，唯一命中才通过，歧义报错。
+  （P2 跨机：mesh 增只读端点 `GET /relay/sessions`，picker 支持列对端。）
+
 - **pending 表**（同目录 `relay-pending.json`）：每条投递记录
   `{delivery_id, from_peer, from_session, to_alias, to_session, wait, hops,
   created_at, status}`；daemon 重启后恢复继续轮询。
