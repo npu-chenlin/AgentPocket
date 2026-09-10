@@ -13,6 +13,8 @@ clap_complete = "4"
 uuid = { version = "1", features = ["v4"] }
 semver = "1"
 ureq = { version = "2", default-features = false, features = ["tls"] }
+chrono = { version = "0.4", features = ["serde"] }
+fs2 = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

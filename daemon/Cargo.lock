@@ -7,8 +7,10 @@ name = "agentpocket"
 version = "2.14.0"
 dependencies = [
  "agentpocket-core",
+ "chrono",
  "clap",
  "clap_complete",
+ "fs2",
  "semver",
  "serde",
  "serde_json",
@@ -24,6 +26,7 @@ version = "2.14.0"
 dependencies = [
  "chrono",
  "fs2",
+ "percent-encoding",
  "serde",
  "serde_json",
  "thiserror",

@@ -1,8 +1,10 @@
 mod kimi;
 mod kimi_web;
+mod mcp;
 mod mesh;
 mod ops;
 mod paths;
+mod remote_agent;
 mod status;
 mod uninstall;
 mod update;
@@ -58,6 +60,8 @@ enum Command {
     Peers,
     /// 一次性探测已配置 Agent 服务的状态
     Status,
+    /// 前台运行 stdio MCP server：把远程派发工具暴露给 MCP 客户端（如 Kimi Code）
+    Mcp,
     /// 手动检查并更新
     Update,
     /// 查询或安装/升级 Kimi Code CLI（省略 host 为本机，指定则为对应 mesh 节点）
@@ -196,6 +200,13 @@ fn main() {
                     }
                 }
             });
+        }
+        Command::Mcp => {
+            // 与 Serve 同为长驻进程：协议消息走 stdout，日志走 stderr
+            if let Err(e) = mcp::run() {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
         }
         Command::Update => {
             match update::check_and_apply("https://api.github.com", Duration::from_secs(60)) {

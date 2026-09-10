@@ -14,6 +14,7 @@ version = "2.14.0"
 dependencies = [
  "chrono",
  "fs2",
+ "percent-encoding",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -32,7 +33,6 @@ dependencies = [
  "futures-util",
  "http",
  "if-addrs",
- "percent-encoding",
  "qrcode",
  "reqwest 0.12.28",
  "rustls-native-certs",

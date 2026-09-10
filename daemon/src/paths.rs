@@ -15,3 +15,8 @@ pub fn default_config_dir() -> PathBuf {
         });
     base.join("com.local.agentpocket.desktop")
 }
+
+/// 远端派发关联记录（remote-calls.json，v1 只写，本地审计用）。
+pub fn remote_calls_file() -> PathBuf {
+    default_config_dir().join("remote-calls.json")
+}

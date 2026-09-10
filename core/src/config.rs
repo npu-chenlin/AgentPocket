@@ -423,7 +423,8 @@ struct ExchangeConfig<'a> {
     servers: &'a [ServerConfig],
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
+/// 临时文件 + fsync + 0600 + 原子替换。供配置文件与其它本地状态文件共用。
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

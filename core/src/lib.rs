@@ -4,3 +4,4 @@ pub mod host;
 pub mod kimi_config;
 pub mod mesh_client;
 pub mod model;
+pub mod server_url;
