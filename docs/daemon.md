@@ -44,6 +44,8 @@ Daemon 与同机同用户的 Desktop 共用服务连接配置目录 `~/.local/sh
 
 `agentpocket mcp` 在前台运行一个 stdio MCP server，让 Kimi Code 这类 MCP 客户端能够**在其他服务器的 Kimi 上创建会话并下发任务**。它读本机共享配置里的地址与 token，**直连目标的 Kimi Web API**，不经过 mesh 端点，因此不新增未鉴权访问面。
 
+它属于**客户端侧**能力，要跑在 Kimi Code 所在的那台机器上。获取这个二进制有两条路：桌面端装 `deb` 就已经带上（`/usr/bin/agentpocket`）；节点侧用 `scripts/install.sh` 装（`/usr/local/bin/agentpocket`）。
+
 在 `~/.kimi-code/mcp.json` 中登记：
 
 ```json

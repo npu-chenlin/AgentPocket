@@ -29,6 +29,13 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.png"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/bin/agentpocket": "../../dist/agentpocket-x86_64-linux-musl"
+        }
+      }
+    }
   }
 }

@@ -43,6 +43,15 @@ npm test
 npm run tauri build
 ```
 
+安装包 `deb` 里除了托盘应用，还会装上节点 CLI `agentpocket`（`/usr/bin/agentpocket`，静态 musl 二进制）。因此 `agentpocket mcp` 这类客户端侧能力**不需要再单独跑节点安装脚本**。代价是打包前必须先产出该二进制，否则 `deb` 构建会失败：
+
+```shell
+scripts/build-daemon.sh x86_64     # 产出 dist/agentpocket-x86_64-linux-musl
+npm run tauri build                # 打包时把它映射到 /usr/bin/agentpocket
+```
+
+`deb` 只针对 amd64；节点侧仍用 `scripts/install.sh` 安装带 systemd 服务的版本（`/usr/local/bin/agentpocket`，在 PATH 上优先于 `deb` 装的那份）。
+
 若只产出二进制（不打安装包），必须启用 `custom-protocol`：
 
 ```shell
