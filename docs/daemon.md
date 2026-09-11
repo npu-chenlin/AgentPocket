@@ -34,7 +34,8 @@ curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/script
 | `agentpocket update` | 手动检查并更新 daemon |
 | `sudo agentpocket uninstall` | 停止并移除 daemon 与服务；配置目录保留 |
 | `agentpocket completions <shell>` | 输出 bash/zsh/fish 等补全脚本 |
-| `agentpocket mcp` | 前台运行 stdio MCP server，把远端 Agent 派发能力暴露给 MCP 客户端（如 Kimi Code） |
+| `agentpocket mcp` | 前台运行 stdio MCP server（MCP 客户端拉起的入口，一般不用手敲） |
+| `agentpocket mcp install` / `status` | 把本机 agentpocket 登记进 Kimi Code 的 `~/.kimi-code/mcp.json`；查看登记状态 |
 
 ## 配置与共享
 
@@ -46,11 +47,18 @@ Daemon 与同机同用户的 Desktop 共用服务连接配置目录 `~/.local/sh
 
 它属于**客户端侧**能力，要跑在 Kimi Code 所在的那台机器上。获取这个二进制有两条路：桌面端装 `deb` 就已经带上（`/usr/bin/agentpocket`）；节点侧用 `scripts/install.sh` 装（`/usr/local/bin/agentpocket`）。
 
-在 `~/.kimi-code/mcp.json` 中登记：
+接入本机 Kimi Code，直接跑：
+
+```shell
+agentpocket mcp install     # 写 ~/.kimi-code/mcp.json；幂等，改动前备份为 .bak
+agentpocket mcp status      # 查登记状态、以及登记的路径是否还在
+```
+
+它会写入下面这样的条目（`command` 用安装后的绝对路径，避免 PATH 差异）。想手写也行：
 
 ```json
 {"mcpServers":{"agentpocket":{
-  "command":"agentpocket","args":["mcp"],
+  "command":"/usr/bin/agentpocket","args":["mcp"],
   "toolTimeoutMs":300000,
   "env":{"AGENTPOCKET_MCP_MAX_WAIT_SECONDS":"240"}}}}
 ```

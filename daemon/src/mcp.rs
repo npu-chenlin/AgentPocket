@@ -95,6 +95,15 @@ impl Ctx {
 /// tools/call 派给单个 worker 线程（同一时刻只跑一个），保证 5s liveness ping
 /// 在工具调用阻塞几十秒时也能被应答。stdout 用 Mutex 串行化，一行一个 JSON。
 pub fn run() -> Result<(), String> {
+    // 人类在终端里直接敲 `agentpocket mcp` 只会看到一个"卡住"的进程——它其实在等
+    // 协议消息。提示走 stderr，stdout 保持纯净（照旧可以手工喂 JSON-RPC 调试）。
+    {
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            eprintln!("[mcp] 这是 stdio MCP server，由 MCP 客户端（如 Kimi Code）拉起；直接运行会一直等 stdin。");
+            eprintln!("[mcp] 要接入本机 Kimi Code：agentpocket mcp install");
+        }
+    }
     let ctx = Arc::new(Ctx::from_env());
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
     let (tx, rx) = mpsc::channel::<(Value, String, Value)>();

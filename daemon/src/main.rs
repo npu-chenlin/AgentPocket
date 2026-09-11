@@ -1,6 +1,8 @@
+mod gui;
 mod kimi;
 mod kimi_web;
 mod mcp;
+mod mcp_setup;
 mod mesh;
 mod ops;
 mod paths;
@@ -42,6 +44,14 @@ enum KimiWebAction {
 }
 
 #[derive(Subcommand)]
+enum McpAction {
+    /// 把本机 agentpocket 登记进 ~/.kimi-code/mcp.json（幂等；改动前备份为 .bak）
+    Install,
+    /// 查看是否已登记、登记的路径是否还在
+    Status,
+}
+
+#[derive(Subcommand)]
 enum Command {
     /// 前台运行：节点端点 + 自动更新（systemd 拉起此命令）
     Serve,
@@ -60,8 +70,11 @@ enum Command {
     Peers,
     /// 一次性探测已配置 Agent 服务的状态
     Status,
-    /// 前台运行 stdio MCP server：把远程派发工具暴露给 MCP 客户端（如 Kimi Code）
-    Mcp,
+    /// MCP 派发：不带动作时前台运行 stdio server（MCP 客户端拉起的就是它）
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpAction>,
+    },
     /// 手动检查并更新
     Update,
     /// 查询或安装/升级 Kimi Code CLI（省略 host 为本机，指定则为对应 mesh 节点）
@@ -84,6 +97,15 @@ enum Command {
 }
 
 fn main() {
+    // 裸执行（不带任何子命令）：桌面上就是"打开应用"；节点上没装 GUI，退回打印帮助
+    if std::env::args_os().len() == 1 {
+        if let Err(e) = gui::launch_or_help() {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let cli = Cli::parse();
     match cli.command {
         Command::Serve => {
@@ -201,13 +223,35 @@ fn main() {
                 }
             });
         }
-        Command::Mcp => {
-            // 与 Serve 同为长驻进程：协议消息走 stdout，日志走 stderr
-            if let Err(e) = mcp::run() {
-                eprintln!("{e}");
-                std::process::exit(1);
+        Command::Mcp { action } => match action {
+            // 不带动作：被 MCP 客户端拉起的 stdio server（常驻，协议走 stdout、日志走 stderr）
+            None => {
+                if let Err(e) = mcp::run() {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
             }
-        }
+            Some(McpAction::Install) => {
+                let cli = std::env::current_exe().expect("无法解析自身路径");
+                match mcp_setup::install(&cli) {
+                    Ok(msg) => println!("{msg}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Some(McpAction::Status) => {
+                let cli = std::env::current_exe().expect("无法解析自身路径");
+                match mcp_setup::status(&cli) {
+                    Ok(msg) => println!("{msg}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        },
         Command::Update => {
             match update::check_and_apply("https://api.github.com", Duration::from_secs(60)) {
                 Ok(message) => println!("{message}"),

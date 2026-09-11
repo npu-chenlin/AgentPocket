@@ -43,7 +43,7 @@ npm test
 npm run tauri build
 ```
 
-安装包 `deb` 里除了托盘应用，还会装上节点 CLI `agentpocket`（`/usr/bin/agentpocket`，静态 musl 二进制）。因此 `agentpocket mcp` 这类客户端侧能力**不需要再单独跑节点安装脚本**。代价是打包前必须先产出该二进制，否则 `deb` 构建会失败：
+安装包 `deb` 里除了托盘应用，还会装上节点 CLI `agentpocket`（`/usr/bin/agentpocket`，静态 musl 二进制）。因此 `agentpocket mcp` 这类客户端侧能力**不需要再单独跑节点安装脚本**——装完执行一次 `agentpocket mcp install` 就接好了。代价是打包前必须先产出该二进制，否则 `deb` 构建会失败：
 
 ```shell
 scripts/build-daemon.sh x86_64     # 产出 dist/agentpocket-x86_64-linux-musl
