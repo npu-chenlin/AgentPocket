@@ -19,9 +19,9 @@ use agentpocket_core::model::Backend;
 const TOOL_TIMEOUT_MS: u64 = 300_000;
 const MAX_WAIT_SECONDS: &str = "240";
 
-/// Kimi Code 的 MCP 配置文件位置。
+/// Kimi Code 的 MCP 配置文件位置（`~/.kimi-code/mcp.json`）。
 pub fn mcp_json_path() -> PathBuf {
-    kimi_config::home_dir().join("mcp.json")
+    kimi_config::mcp_config_path(&kimi_config::home_dir())
 }
 
 /// 纯函数：把 agentpocket 条目合并进现有内容，保留其它 server 与未知字段。
@@ -151,6 +151,14 @@ mod tests {
 
     fn cli() -> PathBuf {
         PathBuf::from("/usr/bin/agentpocket")
+    }
+
+    /// 回归：`mcp_json_path` 曾经写成 `home_dir().join("mcp.json")`，会落到 `~/mcp.json`，
+    /// 而 Kimi Code 只读 `~/.kimi-code/mcp.json`——命令会静默失效并污染家目录。
+    #[test]
+    fn mcp_json_path_is_under_kimi_code_dir() {
+        let path = mcp_json_path();
+        assert!(path.ends_with(".kimi-code/mcp.json"), "实际解析为 {path:?}");
     }
 
     #[test]

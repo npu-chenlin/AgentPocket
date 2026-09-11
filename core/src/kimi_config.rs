@@ -17,6 +17,12 @@ pub fn config_path(home: &Path) -> PathBuf {
     home.join(".kimi-code").join("config.toml")
 }
 
+/// <home>/.kimi-code/mcp.json（Kimi Code 的 MCP 客户端配置）。
+/// 注意这里和 config_path 一样要拼上 `.kimi-code`——home_dir() 返回的是 $HOME 本身。
+pub fn mcp_config_path(home: &Path) -> PathBuf {
+    home.join(".kimi-code").join("mcp.json")
+}
+
 pub fn read(home: &Path) -> Result<String, String> {
     let path = config_path(home);
     std::fs::read_to_string(&path).map_err(|e| format!("读取 {} 失败：{e}", path.display()))
