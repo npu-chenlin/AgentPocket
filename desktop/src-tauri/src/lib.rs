@@ -59,6 +59,20 @@ pub fn run() {
             let state_for_coordinator = Arc::clone(&state);
             app.manage(Arc::clone(&state));
 
+            // 让系统自启动项与设置保持一致：新装的用户默认开启；用户手动删掉自启动项后，
+            // 下次启动也会照设置补回来。（只在设置变更时同步是不够的——那样默认值永远落不了地。）
+            let autostart = state
+                .config
+                .read()
+                .map(|config| config.settings.autostart)
+                .unwrap_or(false);
+            let autostart_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = commands::update_autostart(&autostart_handle, autostart).await {
+                    eprintln!("[autostart] 同步开机自启失败：{e}");
+                }
+            });
+
             let app_handle = app.handle().clone();
             let monitor_started_at = Utc::now();
             tauri::async_runtime::spawn(async move {

@@ -88,7 +88,8 @@ impl Default for DesktopSettings {
     fn default() -> Self {
         Self {
             start_hidden: true,
-            autostart: false,
+            // 托盘监控类应用的意义就是常驻：默认就挂开机自启（设置里和托盘菜单都能关掉）
+            autostart: true,
             notifications: true,
             mesh_peers: Vec::new(),
         }
@@ -262,6 +263,15 @@ mod tests {
         assert!(ServerConfig::new("id", "Work", "host", 0, "", Backend::Dsh)
             .validate()
             .is_err());
+    }
+
+    #[test]
+    fn default_settings_enable_autostart() {
+        // 托盘监控类应用的默认形态：装完即后台常驻。这是有意的产品默认值——
+        // 改动前先确认（用户仍然可以在设置或托盘菜单里关掉）。
+        let settings = DesktopSettings::default();
+        assert!(settings.autostart);
+        assert!(settings.start_hidden);
     }
 
     #[test]

@@ -556,7 +556,7 @@ fn validate_config(config: &AppConfig) -> Result<(), CommandError> {
     Ok(())
 }
 
-async fn update_autostart<R: tauri::Runtime>(
+pub(crate) async fn update_autostart<R: tauri::Runtime>(
     app: &AppHandle<R>,
     enabled: bool,
 ) -> Result<(), CommandError> {
