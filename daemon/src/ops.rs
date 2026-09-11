@@ -189,9 +189,13 @@ fn kimi_remote_upgrade_via(host: &str, port: u16) -> Result<String, String> {
 pub fn kimi_web_enable(config_dir: &Path, home: &Path, port: u16) -> Result<String, String> {
     crate::kimi_web::enable(home, port)?;
     let registered = crate::kimi_web::register_server_entry(config_dir, port)?;
-    Ok(format!(
-        "kimi web 服务已生成并启动（端口 {port}）；{registered}"
-    ))
+    let mut message = format!("kimi web 服务已生成并启动（端口 {port}）；{registered}");
+    // 没开 linger 的话这个服务重启后不会自己回来，必须当面说清楚而不是静默交付
+    if let Some(warning) = crate::kimi_web::linger_warning() {
+        message.push('\n');
+        message.push_str(&warning);
+    }
+    Ok(message)
 }
 
 pub fn kimi_web_restart(home: &Path, force: bool) -> Result<String, String> {
@@ -208,13 +212,18 @@ pub fn kimi_web_status(home: &Path) -> Result<String, String> {
     let status = crate::kimi_web::status(home);
     Ok(if status.installed {
         format!(
-            "kimi web 服务：{}（端口 {}）",
+            "kimi web 服务：{}（端口 {}）\n开机自启：{}",
             if status.active {
                 "运行中"
             } else {
                 "未运行"
             },
-            status.port
+            status.port,
+            if status.linger {
+                "已就绪（linger 已开启）"
+            } else {
+                "未就绪——无头服务器重启后不会自动启动，以 root 执行 loginctl enable-linger <服务用户>"
+            }
         )
     } else {
         "kimi web 服务未生成（agentpocket kimi-web enable 生成）".to_string()

@@ -37,6 +37,8 @@ curl -fsSL https://raw.githubusercontent.com/npu-chenlin/AgentPocket/main/script
 | `agentpocket mcp` | 前台运行 stdio MCP server（MCP 客户端拉起的入口，一般不用手敲） |
 | `agentpocket mcp install` / `status` | 把本机 agentpocket 登记进 Kimi Code 的 `~/.kimi-code/mcp.json`；查看登记状态 |
 
+> `kimi-web` 生成的是**用户级** systemd 单元（`~/.config/systemd/user/kimi-web.service`）。无头服务器上没人登录，而用户级单元默认不会在无人登录的开机场景启动——所以安装脚本会执行 `loginctl enable-linger <服务用户>`。`agentpocket kimi-web status` 会显示 linger 是否就绪。
+
 ## 配置与共享
 
 Daemon 与同机同用户的 Desktop 共用服务连接配置目录 `~/.local/share/com.local.agentpocket.desktop/config.json`。Kimi Code 配置位于 `~/.kimi-code/config.toml`，两者是不同文件，也对应两种不同的同步功能。

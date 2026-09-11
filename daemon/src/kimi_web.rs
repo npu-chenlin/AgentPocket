@@ -68,6 +68,8 @@ pub struct KimiWebStatus {
     pub installed: bool,
     pub active: bool,
     pub port: u16,
+    /// 是否开启了 linger。用户级单元只有开了 linger，才会在"无人登录的开机"场景下启动。
+    pub linger: bool,
 }
 
 pub fn status(home: &Path) -> KimiWebStatus {
@@ -80,7 +82,37 @@ pub fn status(home: &Path) -> KimiWebStatus {
         .ok()
         .and_then(|content| parse_port(&content))
         .unwrap_or(DEFAULT_PORT);
-    KimiWebStatus { installed, active, port }
+    KimiWebStatus {
+        installed,
+        active,
+        port,
+        linger: linger_marker().map(|p| p.is_file()).unwrap_or(false),
+    }
+}
+
+/// systemd 为每个开启 linger 的用户在 `/var/lib/systemd/linger` 下放一个空文件。
+/// 该目录全局可读，所以判断不需要任何权限，也不必去解析 loginctl 的输出。
+fn linger_marker() -> Option<PathBuf> {
+    let output = Command::new("id").arg("-un").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let user = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!user.is_empty()).then(|| PathBuf::from("/var/lib/systemd/linger").join(user))
+}
+
+/// 未开 linger 时的警告：kimi web 是用户级服务，无头服务器上没人登录时它不会随开机启动。
+/// 已开启、或判断不出当前用户时返回 None——宁可不提醒，也不误报。
+pub fn linger_warning() -> Option<String> {
+    let marker = linger_marker()?;
+    if marker.is_file() {
+        return None;
+    }
+    let user = marker.file_name()?.to_string_lossy().to_string();
+    Some(format!(
+        "⚠ 未开启 linger：kimi web 是用户级服务，无头服务器上没人登录时重启后不会自动启动。\
+         请以 root 执行 `loginctl enable-linger {user}`（scripts/install.sh 已包含这一步）。"
+    ))
 }
 
 /// 从单元 ExecStart 解析 --port；缺省按默认端口。

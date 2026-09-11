@@ -83,6 +83,14 @@ EOF
 systemctl daemon-reload
 systemctl enable --now agentpocket
 
+# 无头服务器上没人登录：开启 linger，让该用户的 user manager 随开机启动。
+# 否则用户级服务（kimi-web）——以及 daemon 对它的 systemctl --user 管理——在重启后都会失效，
+# 这正是"节点重启后 kimi web 不见了"的原因。
+if ! loginctl enable-linger "$RUN_USER" 2>/dev/null; then
+    echo "警告：未能开启 linger（loginctl enable-linger $RUN_USER）" >&2
+    echo "      使用 kimi-web 这类用户级服务时，重启后它们不会自动启动。" >&2
+fi
+
 # bash 补全（新 shell 生效）
 if [ -d /usr/share/bash-completion/completions ]; then
     "$BIN_PATH" completions bash > "$COMPLETION_PATH" 2>/dev/null || true
