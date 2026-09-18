@@ -184,6 +184,7 @@ fn notification_title(backend: Backend, kind: &AgentEventKind) -> String {
     let prefix = match backend {
         Backend::Kimi => "Kimi Code",
         Backend::Dsh => "DeepSeek Harness",
+        Backend::Opencode => "OpenCode",
     };
     let action = match kind {
         AgentEventKind::Completed => "任务完成",

@@ -1,4 +1,4 @@
-export type Backend = "kimi" | "dsh";
+export type Backend = "kimi" | "dsh" | "opencode";
 
 export interface MeshPeerEntry {
   name: string;

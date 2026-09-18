@@ -1,5 +1,6 @@
 pub mod dsh;
 pub mod kimi;
+pub mod opencode;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -165,6 +166,7 @@ async fn run_single_server(
     match server.backend {
         Backend::Dsh => dsh::run(server, update_tx, token, pinned).await,
         Backend::Kimi => kimi::run(server, update_tx, token, pinned).await,
+        Backend::Opencode => opencode::run(server, update_tx, token, pinned).await,
     }
 }
 
@@ -371,10 +373,11 @@ where
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("backend detection failed: dsh={dsh:?}, kimi={kimi:?}")]
+#[error("backend detection failed: dsh={dsh:?}, kimi={kimi:?}, opencode={opencode:?}")]
 pub struct ProbeError {
     pub dsh: Option<String>,
     pub kimi: Option<String>,
+    pub opencode: Option<String>,
 }
 
 pub async fn probe_backend(server: &ServerConfig) -> Result<Backend, ProbeError> {
@@ -388,10 +391,41 @@ pub async fn probe_backend(server: &ServerConfig) -> Result<Backend, ProbeError>
         return Ok(Backend::Kimi);
     }
 
+    let opencode_result = probe_opencode(server).await;
+    if let Ok(()) = opencode_result {
+        return Ok(Backend::Opencode);
+    }
+
     Err(ProbeError {
         dsh: dsh_result.err(),
         kimi: kimi_result.err(),
+        opencode: opencode_result.err(),
     })
+}
+
+async fn probe_opencode(server: &ServerConfig) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let url = match server.base_url() {
+        Ok(url) => url.join("/config").map_err(|e| e.to_string())?,
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut req = client.get(url).header("Accept", "application/json");
+    if !server.opencode_token().is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", server.opencode_token()));
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}", status));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("invalid JSON: {}", e))?;
+    if value.is_object() {
+        Ok(())
+    } else {
+        Err("response is not a JSON object".to_string())
+    }
 }
 
 async fn probe_dsh(server: &ServerConfig) -> Result<(), String> {

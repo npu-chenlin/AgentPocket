@@ -29,7 +29,7 @@ export function validateServerDraft(
     errors.port = "端口必须是 1–65535 之间的整数";
   }
 
-  if (draft.backend !== "kimi" && draft.backend !== "dsh") {
+  if (draft.backend !== "kimi" && draft.backend !== "dsh" && draft.backend !== "opencode") {
     errors.backend = "请选择有效的后端类型";
   }
 

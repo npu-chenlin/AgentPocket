@@ -14,8 +14,8 @@ export function escapeHtml(value: string): string {
 }
 
 function backendMark(backend: Backend, connected: boolean): string {
-  const label = backend === "kimi" ? "Kimi" : "dsh";
-  const mark = backend === "kimi" ? "K" : "🐋";
+  const label = backend === "kimi" ? "Kimi" : backend === "opencode" ? "OpenCode" : "dsh";
+  const mark = backend === "kimi" ? "K" : backend === "opencode" ? "OC" : "🐋";
   return `
     <span class="server-badge">
       <span class="backend-logo backend-logo--${backend}${connected ? "" : " backend-logo--offline"}" data-backend="${backend}" aria-label="${label}">${mark}</span>

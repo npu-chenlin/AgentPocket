@@ -4,10 +4,10 @@
 
 | 功能 | Android | Desktop | Daemon |
 | --- | :---: | :---: | :---: |
-| 打开 Kimi Code / dsh Web | 支持 | 支持（系统浏览器） | — |
+| 打开 Kimi Code / dsh / OpenCode Web | 支持 | 支持（系统浏览器） | — |
 | 保存、编辑、删除服务连接 | 支持 | 支持 | 读取同机共享配置 |
 | 拖拽排序服务连接 | 支持 | — | — |
-| 自动识别 Kimi / dsh | 支持 | 支持 | 状态探测支持 |
+| 自动识别 Kimi / dsh / OpenCode | 支持 | 支持 | 状态探测支持 |
 | 在线状态与活跃会话 | 支持 | 支持 | `status` 一次性探测 |
 | 完成、失败、等待回答、等待审批通知 | 支持 | 支持 | — |
 | 后台持续监听 | Android 服务 | 托盘常驻 | — |
@@ -22,6 +22,6 @@
 
 ## 不属于当前范围
 
-- AgentPocket 不替代 Kimi Code 或 dsh 的模型调用、工作区创建和会话执行逻辑。
+- AgentPocket 不替代 Kimi Code、dsh 或 OpenCode 的模型调用、工作区创建和会话执行逻辑。
 - Android 当前不能新建 dsh 工作区；请在电脑浏览器中创建后再从手机使用已有会话。
 - Daemon 不是通用服务器监控平台，也不会替用户管理 Tailscale、系统防火墙或所有 Agent 类型。

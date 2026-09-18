@@ -67,6 +67,8 @@ import com.journeyapps.barcodescanner.ScanOptions;
 import com.petterp.floatingx.assist.FxAdsorbDirection;
 import com.petterp.floatingx.assist.FxGravity;
 import com.petterp.floatingx.assist.helper.FxScopeHelper;
+
+import java.io.IOException;
 import com.petterp.floatingx.listener.IFxTouchListener;
 import com.petterp.floatingx.listener.control.IFxScopeControl;
 import com.petterp.floatingx.view.IFxInternalHelper;
@@ -417,6 +419,7 @@ public class MainActivity extends ComponentActivity {
             @Override public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 installThemeSync();
+                seedOpencodeProjectRegistry(view, url);
             }
         });
         webView.setWebChromeClient(new WebChromeClient() {
@@ -461,6 +464,28 @@ public class MainActivity extends ComponentActivity {
         handleSyncIntent(intent);
     }
 
+    /** opencode 工作目录：token 字段承载（dir=/path、/path 或 Bearer 令牌）。 */
+    private String opencodeDirectory(ServerStore.Server server) {
+        String t = server.token == null ? "" : server.token.trim();
+        if (t.startsWith("dir=")) return t.substring(4);
+        if (t.startsWith("/")) return t;
+        return "/";
+    }
+
+    private String base64url(String s) {
+        return android.util.Base64.encodeToString(s.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                android.util.Base64.NO_WRAP | android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING);
+    }
+
+    /** 会话的前端路由路径：kimi 为 /sessions/{id}，opencode 为 /{base64url(dir)}/session/{id}，dsh 无。 */
+    private String sessionPath(ServerStore.Server server, String sessionId) {
+        if (server == null || sessionId == null || sessionId.isEmpty()) return "/";
+        if (ServerStore.Server.BACKEND_KIMI.equals(server.backend)) return "/sessions/" + sessionId;
+        if (ServerStore.Server.BACKEND_OPENCODE.equals(server.backend))
+            return "/" + base64url(opencodeDirectory(server)) + "/session/" + sessionId;
+        return "/";
+    }
+
     /** 当前 WebView 页面是否已指向目标服务器（含目标会话，dsh 无会话深链）。 */
     private boolean isOnTargetPage(String sessionId) {
         if (webView == null) return false;
@@ -468,35 +493,34 @@ public class MainActivity extends ComponentActivity {
         if (current == null) return false;
         ServerStore.Server server = ServerStore.active(this);
         if (server == null) return false;
-        String expected = server.baseUrl() + "/";
-        if (sessionId != null && !sessionId.isEmpty()
-                && ServerStore.Server.BACKEND_KIMI.equals(server.backend)) {
-            expected += "sessions/" + sessionId;
-        }
+        String expected = server.baseUrl() + sessionPath(server, sessionId);
         return current.equals(expected) || current.startsWith(expected);
     }
 
-    /** 当前 WebView 是否已停在激活服务器的 kimi 页面上（可走前端路由切换会话）。 */
+    /** 当前 WebView 是否已停在激活服务器的可路由页面上（可走前端路由切换会话）。 */
     private boolean isOnServerPage() {
         if (webView == null) return false;
         String current = webView.getUrl();
         if (current == null) return false;
         ServerStore.Server server = ServerStore.active(this);
-        return server != null
-                && ServerStore.Server.BACKEND_KIMI.equals(server.backend)
+        if (server == null) return false;
+        return (ServerStore.Server.BACKEND_KIMI.equals(server.backend)
+                    || ServerStore.Server.BACKEND_OPENCODE.equals(server.backend))
                 && current.startsWith(server.baseUrl() + "/");
     }
 
     /**
-     * 打开激活服务器上的指定会话。kimi 前端是 history 路由的 SPA（popstate 驱动），
+     * 打开激活服务器上的指定会话。kimi/opencode 前端是 history 路由的 SPA（popstate 驱动），
      * 页面已在同一服务器上时用 pushState + popstate 触发前端路由切换，
      * 避免跨会话点击通知/会话列表时整页重载白屏；其余情况退回整页加载。
      */
     private void navigateToSession(String sessionId) {
         if (sessionId != null && !sessionId.isEmpty() && isOnServerPage()) {
             String safeId = sessionId.replaceAll("[^A-Za-z0-9_-]", "");
+            ServerStore.Server server = ServerStore.active(this);
+            String path = sessionPath(server, safeId);
             String script = "(function(){try{"
-                    + "var p='/sessions/" + safeId + "';"
+                    + "var p='" + path + "';"
                     + "if(location.pathname!==p){"
                     + "history.pushState(null,'',p);"
                     + "window.dispatchEvent(new PopStateEvent('popstate'));"
@@ -1099,7 +1123,10 @@ public class MainActivity extends ComponentActivity {
             holder.card.setBackground(UiKit.cardBackground(MainActivity.this, selected));
 
             holder.backendIcon.setImageResource(ServerStore.Server.BACKEND_DSH.equals(server.backend)
-                    ? R.drawable.ic_backend_dsh : R.drawable.ic_backend_kimi);
+                    ? R.drawable.ic_backend_dsh
+                    : ServerStore.Server.BACKEND_OPENCODE.equals(server.backend)
+                            ? R.drawable.ic_backend_opencode
+                            : R.drawable.ic_backend_kimi);
             holder.backendIcon.clearColorFilter();
             boolean known = health.contains("checked_" + server.id);
             boolean online = health.getBoolean("online_" + server.id, false);
@@ -1233,11 +1260,24 @@ public class MainActivity extends ComponentActivity {
         showModernDialog(dialog, null);
     }
 
-    /** 服务器后端类型图标：dsh 用鲸鱼 logo，Kimi 用官方 logo。 */
+    String selectedBackend(RadioButton[] radios) {
+        String backend = ServerStore.Server.BACKEND_KIMI;
+        for (RadioButton r : radios) {
+            if (r.isChecked()) {
+                Object tag = r.getTag();
+                if (tag != null) backend = tag.toString();
+                break;
+            }
+        }
+        return backend;
+    }
+
+    /** 服务器后端类型图标：dsh 用鲸鱼 logo，Kimi 用官方 logo，opencode 用终端形 logo。 */
     private ImageView backendIconView(String backend) {
         ImageView icon = new ImageView(this);
-        icon.setImageResource(ServerStore.Server.BACKEND_DSH.equals(backend)
-                ? R.drawable.ic_backend_dsh : R.drawable.ic_backend_kimi);
+        icon.setImageResource(ServerStore.Server.BACKEND_DSH.equals(backend) ? R.drawable.ic_backend_dsh
+                : ServerStore.Server.BACKEND_OPENCODE.equals(backend) ? R.drawable.ic_backend_opencode
+                : R.drawable.ic_backend_kimi);
         icon.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
         return icon;
     }
@@ -1287,6 +1327,7 @@ public class MainActivity extends ComponentActivity {
         return !"会话".equals(trimmed)
                 && !"点击查看会话".equals(trimmed)
                 && !"点击查看 Kimi 会话".equals(trimmed)
+                && !"OpenCode 会话".equals(trimmed)
                 && !"New Session".equals(trimmed);
     }
 
@@ -1362,17 +1403,26 @@ public class MainActivity extends ComponentActivity {
         final RadioButton kimiRadio = new RadioButton(this);
         kimiRadio.setText("Kimi Code");
         kimiRadio.setTextSize(14);
+        kimiRadio.setTag(ServerStore.Server.BACKEND_KIMI);
         final RadioButton dshRadio = new RadioButton(this);
         dshRadio.setText("DeepSeek Harness");
         dshRadio.setTextSize(14);
+        dshRadio.setTag(ServerStore.Server.BACKEND_DSH);
+        final RadioButton ocRadio = new RadioButton(this);
+        ocRadio.setText("OpenCode");
+        ocRadio.setTextSize(14);
+        ocRadio.setTag(ServerStore.Server.BACKEND_OPENCODE);
+        final RadioButton[] backendRadios = { kimiRadio, dshRadio, ocRadio };
         RadioGroup backendGroup = new RadioGroup(this);
         backendGroup.setOrientation(RadioGroup.HORIZONTAL);
         backendGroup.setPadding(0, 0, 0, dp(10));
         backendGroup.addView(kimiRadio);
         backendGroup.addView(dshRadio);
+        backendGroup.addView(ocRadio);
         String editingBackend = editing == null ? ServerStore.Server.BACKEND_KIMI : editing.backend;
         kimiRadio.setChecked(ServerStore.Server.BACKEND_KIMI.equals(editingBackend));
         dshRadio.setChecked(ServerStore.Server.BACKEND_DSH.equals(editingBackend));
+        ocRadio.setChecked(ServerStore.Server.BACKEND_OPENCODE.equals(editingBackend));
         EditText name = modernField("服务连接名称（例如：工作站）", false);
         name.setText(editing == null ? "" : editing.name);
         EditText ip = modernField("主机 IP 或域名", false);
@@ -1384,6 +1434,26 @@ public class MainActivity extends ComponentActivity {
         token.setInputType(android.text.InputType.TYPE_CLASS_TEXT |
                 android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
         token.setText(editing == null ? "" : editing.token);
+        android.widget.CompoundButton.OnCheckedChangeListener tokenHint =
+                (button, checked) -> {
+                    if (!checked) return;
+                    final String selected = selectedBackend(backendRadios);
+                    token.setHint(ServerStore.Server.BACKEND_OPENCODE.equals(selected)
+                            ? "OpenCode 目录或访问令牌（如 /path 或 dir=/path，Bearer 令牌可选）"
+                            : ServerStore.Server.BACKEND_DSH.equals(selected)
+                                    ? "Token（dsh 留空）"
+                                    : "Token（Kimi 专用）");
+                };
+        kimiRadio.setOnCheckedChangeListener(tokenHint);
+        dshRadio.setOnCheckedChangeListener(tokenHint);
+        ocRadio.setOnCheckedChangeListener(tokenHint);
+        // 编辑态：setChecked 发生在监听器绑定前，需手动让 hint 贴合当前选中后端。
+        String initialBackend = selectedBackend(backendRadios);
+        token.setHint(ServerStore.Server.BACKEND_OPENCODE.equals(initialBackend)
+                ? "OpenCode 目录或访问令牌（如 /path 或 dir=/path，Bearer 令牌可选）"
+                : ServerStore.Server.BACKEND_DSH.equals(initialBackend)
+                        ? "Token（dsh 留空）"
+                        : "Token（Kimi 专用）");
         recognize.setOnClickListener(v -> {
             ParsedConnection parsed = parseConnection(pasted.getText().toString());
             if (parsed == null) {
@@ -1396,18 +1466,21 @@ public class MainActivity extends ComponentActivity {
             if (name.getText().toString().trim().isEmpty()) name.setText(parsed.host + ":" + parsed.port);
             Toast.makeText(this, "已识别，正在探测 Agent 类型…", Toast.LENGTH_SHORT).show();
             probeBackend(parsed.host, parsed.port, backend -> runOnUiThread(() -> {
+                String chosen = backend != null ? backend : parsed.backend;
+                for (RadioButton r : backendRadios) {
+                    r.setChecked(chosen.equals(r.getTag()));
+                }
                 if (backend == null) {
-                    // 探测失败：dsh 启动串已标明类型则采用，否则回落 Kimi
-                    if (ServerStore.Server.BACKEND_DSH.equals(parsed.backend)) dshRadio.setChecked(true);
-                    else kimiRadio.setChecked(true);
                     Toast.makeText(this, "未能确认 Agent 类型，已按 "
-                            + (dshRadio.isChecked() ? "DeepSeek Harness" : "Kimi Code") + " 处理", Toast.LENGTH_SHORT).show();
-                } else if (ServerStore.Server.BACKEND_DSH.equals(backend)) {
-                    dshRadio.setChecked(true);
-                    Toast.makeText(this, "已探测到 DeepSeek Harness", Toast.LENGTH_SHORT).show();
+                            + (ServerStore.Server.BACKEND_OPENCODE.equals(chosen) ? "OpenCode"
+                                    : ServerStore.Server.BACKEND_DSH.equals(chosen) ? "DeepSeek Harness" : "Kimi Code")
+                            + " 处理", Toast.LENGTH_SHORT).show();
                 } else {
-                    kimiRadio.setChecked(true);
-                    Toast.makeText(this, "已探测到 Kimi Code", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this,
+                            ServerStore.Server.BACKEND_OPENCODE.equals(chosen) ? "已探测到 OpenCode"
+                            : ServerStore.Server.BACKEND_DSH.equals(chosen) ? "已探测到 DeepSeek Harness"
+                            : "已探测到 Kimi Code",
+                            Toast.LENGTH_SHORT).show();
                 }
             }));
         });
@@ -1451,9 +1524,16 @@ public class MainActivity extends ComponentActivity {
             if (displayName.isEmpty()) displayName = host + ":" + p;
             List<ServerStore.Server> servers = new ArrayList<>(ServerStore.load(this));
             String id = editing == null ? ServerStore.newId() : editing.id;
-            String backend = dshRadio.isChecked() ? ServerStore.Server.BACKEND_DSH : ServerStore.Server.BACKEND_KIMI;
-            String tokenValue = ServerStore.Server.BACKEND_DSH.equals(backend)
-                    ? "" : token.getText().toString().trim();
+            String backend = selectedBackend(backendRadios);
+            String tokenValue;
+            if (ServerStore.Server.BACKEND_KIMI.equals(backend)) {
+                tokenValue = token.getText().toString().trim();
+            } else if (ServerStore.Server.BACKEND_OPENCODE.equals(backend)) {
+                // opencode：token 字段承载目录（dir=/path 或 /path）或 Bearer 令牌，原样保留
+                tokenValue = token.getText().toString().trim();
+            } else {
+                tokenValue = "";
+            }
             ServerStore.Server saved = new ServerStore.Server(id, displayName, host, p, tokenValue, backend);
             if (editing == null) servers.add(saved);
             else for (int i = 0; i < servers.size(); i++) if (servers.get(i).id.equals(id)) servers.set(i, saved);
@@ -1538,6 +1618,7 @@ public class MainActivity extends ComponentActivity {
     private ParsedConnection parseConnection(String text) {
         try {
             boolean isDsh = text.contains("dsh web") || text.contains("DeepSeek Harness");
+            boolean isOc = text.contains("opencode serve") || text.contains("OpenCode") || text.contains("opencode");
             String raw = null;
             if (isDsh) {
                 // dsh 启动输出形如 "dsh web: http://127.0.0.1:3080 (LAN: http://100.x.y.z:3080)"，
@@ -1556,7 +1637,7 @@ public class MainActivity extends ComponentActivity {
             if (host == null || host.isEmpty()) return null;
             if (port < 1) port = "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
             String foundToken = "";
-            if (!isDsh) {
+            if (!isDsh && !isOc) {
                 String fragment = uri.getFragment();
                 if (fragment != null) foundToken = Uri.parse("http://local/?" + fragment).getQueryParameter("token");
                 if (foundToken == null || foundToken.isEmpty()) foundToken = uri.getQueryParameter("token");
@@ -1566,7 +1647,9 @@ public class MainActivity extends ComponentActivity {
                 }
             }
             return new ParsedConnection(host, port, foundToken == null ? "" : foundToken,
-                    isDsh ? ServerStore.Server.BACKEND_DSH : ServerStore.Server.BACKEND_KIMI);
+                    isDsh ? ServerStore.Server.BACKEND_DSH
+                            : isOc ? ServerStore.Server.BACKEND_OPENCODE
+                                    : ServerStore.Server.BACKEND_KIMI);
         } catch (Exception ignored) { return null; }
     }
 
@@ -1576,6 +1659,7 @@ public class MainActivity extends ComponentActivity {
     /**
      * 自动探测服务器后端类型。
      * dsh 特征：POST /api/agentPreset.list 返回 RPC 信封（type=server-response）；
+     * opencode 特征：GET /config 返回 JSON 对象（OpenCode 的全局配置），且 GET /status 或 /session 存在；
      * Kimi 特征：GET /api/v2/sessions 存在（无 token 时 401/403 也算存在）。
      */
     private void probeBackend(String host, int port, BackendProbe callback) {
@@ -1585,7 +1669,7 @@ public class MainActivity extends ComponentActivity {
                 .post(RequestBody.create("{}", MediaType.parse("application/json; charset=utf-8")))
                 .build();
         probeClient.newCall(dshProbe).enqueue(new Callback() {
-            @Override public void onFailure(Call call, IOException e) { probeKimi(); }
+            @Override public void onFailure(Call call, IOException e) { probeOpencode(); }
             @Override public void onResponse(Call call, Response response) {
                 try (Response r = response) {
                     String body = r.body() != null ? r.body().string() : "";
@@ -1594,7 +1678,23 @@ public class MainActivity extends ComponentActivity {
                         return;
                     }
                 } catch (Exception ignored) {}
-                probeKimi();
+                probeOpencode();
+            }
+            private void probeOpencode() {
+                Request ocProbe = new Request.Builder().url(base + "/config").build();
+                probeClient.newCall(ocProbe).enqueue(new Callback() {
+                    @Override public void onFailure(Call call, IOException e) { probeKimi(); }
+                    @Override public void onResponse(Call call, Response response) {
+                        try (Response r = response) {
+                            String body = r.body() != null ? r.body().string() : "";
+                            if (r.isSuccessful() && body.trim().startsWith("{")) {
+                                callback.onResult(ServerStore.Server.BACKEND_OPENCODE);
+                                return;
+                            }
+                        } catch (Exception ignored) {}
+                        probeKimi();
+                    }
+                });
             }
             private void probeKimi() {
                 Request kimiProbe = new Request.Builder().url(base + "/api/v2/sessions").build();
@@ -1614,12 +1714,85 @@ public class MainActivity extends ComponentActivity {
         loadConfiguredUrl(null);
     }
 
+    /**
+     * workaround #28340：opencode 前端把项目注册表按「访问 origin」分键存 localStorage
+     * （localhost→"local"，LAN/Tailscale IP→独立键）。手机通过 Tailscale/LAN 访问时
+     * 该 origin 的注册表为空 → home 侧栏 join 不到 project，会话列表全部被 Drop。
+     *
+     * 方案：加载原版 root 页后注入 JS，从 /project 拉取真实 worktree，播种
+     * `opencode.global.dat:server` 里当前 origin 的项目注册表，然后 location.reload()
+     * 让前端用原版逻辑自己原生渲染项目与会话（不伪造任何 DOM，视觉完全一致）。
+     * 已播种且内容不变时幂等返回，避免 reload 死循环；深链会话页跳过。
+     */
+    private void seedOpencodeProjectRegistry(WebView view, String url) {
+        ServerStore.Server server = ServerStore.active(this);
+        if (server == null || view == null) return;
+        if (!ServerStore.Server.BACKEND_OPENCODE.equals(server.backend)) return;
+        String base = server.baseUrl();
+        if (!url.startsWith(base + "/")) return;
+        String path = url.substring(base.length());
+        if (!"/".equals(path)) return;
+        view.evaluateJavascript(OPENCODE_PROJECT_SEED_JS, null);
+    }
+
+    private static final String OPENCODE_PROJECT_SEED_JS =
+        "(() => {"
+      + "  if (window.__apSeedStarted) return; window.__apSeedStarted = true;"
+      + "  var KEY = 'opencode.global.dat:server';"
+      + "  var VKEY = '__apSeedV';"
+      + "  var lastV = null;"
+      + "  try { lastV = localStorage.getItem(VKEY); } catch(e){}"
+      + "  fetch('/project').then(function(r){ return r.json(); }).then(function(projects){"
+      + "    var ws = (projects || []).filter(function(p){ return p && p.worktree && p.worktree !== '/'; })"
+      + "      .map(function(p){ return { worktree: p.worktree, expanded: true }; });"
+      + "    if (!ws.length) { window.__apSeedStarted = false; return; }"
+      + "    var originKey = location.origin;"
+      + "    var version = ws.map(function(x){ return x.worktree; }).sort().join('|');"
+      + "    if (lastV === version) { window.__apSeedStarted = false; return; }"
+      + "    var cur = null;"
+      + "    try { cur = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch(e){}"
+      + "    if (!cur) cur = { list: [], projects: {}, lastProject: {}, recentlyClosed: {} };"
+      + "    if (!cur.projects) cur.projects = {};"
+      + "    var keys = [originKey, 'local', location.host, location.hostname];"
+      + "    keys.forEach(function(k){ if (k) cur.projects[k] = ws; });"
+      + "    if (!cur.lastProject) cur.lastProject = {};"
+      + "    if (!cur.lastProject[originKey] && ws.length) cur.lastProject[originKey] = ws[0].worktree;"
+      + "    localStorage.setItem(KEY, JSON.stringify(cur));"
+      + "    localStorage.setItem(VKEY, version);"
+      + "    location.reload();"
+      + "  }).catch(function(){ window.__apSeedStarted = false; });"
+      + "})();";
+
+    private static String escapeHtml(String s) {
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace("\"", "&quot;").replace("'", "&#39;");
+    }
+
     private void loadConfiguredUrl(String sessionId) {
         ServerStore.Server server = ServerStore.active(this);
         if (server == null) return;
         if (ServerStore.Server.BACKEND_DSH.equals(server.backend)) {
             // dsh：无 token 鉴权，前端也没有 URL 会话深链，只打开首页
             webView.loadUrl(server.baseUrl() + "/");
+            return;
+        }
+        if (ServerStore.Server.BACKEND_OPENCODE.equals(server.backend)) {
+            if (sessionId != null && !sessionId.isEmpty()) {
+                // 有指定会话 → 直接深链
+                String url = server.baseUrl() + "/" + base64url(opencodeDirectory(server)) + "/session/" + sessionId;
+                String token = server.token == null ? "" : server.token.trim();
+                boolean bearer = !token.isEmpty() && !token.startsWith("dir=") && !token.startsWith("/");
+                if (bearer) {
+                    java.util.Map<String, String> headers = new java.util.HashMap<>();
+                    headers.put("Authorization", "Bearer " + token);
+                    webView.loadUrl(url, headers);
+                } else {
+                    webView.loadUrl(url);
+                }
+            } else {
+                // 加载原版 root 页面；onPageFinished 会检测并注入会话列表（workaround #27837）
+                webView.loadUrl(server.baseUrl() + "/");
+            }
             return;
         }
         String url = server.baseUrl() + "/";

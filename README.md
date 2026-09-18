@@ -2,11 +2,11 @@
 
 AgentPocket 是一个通过 Tailscale 连接 Coding Agent 的多端工具：用 Android 或桌面端访问远程 Agent 服务、关注任务状态，并在多台节点之间维护 Kimi Code 环境。
 
-AgentPocket 不运行 Coding Agent 本身，也不替代 Kimi Code 或 DeepSeek Harness；它负责连接、提醒、配置同步和节点维护。
+AgentPocket 不运行 Coding Agent 本身，也不替代 Kimi Code、DeepSeek Harness 或 OpenCode；它负责连接、提醒、配置同步和节点维护。
 
 ## 核心用户旅程
 
-1. 在运行 Kimi Code 或 DeepSeek Harness Web 的电脑上安装并登录 Tailscale。
+1. 在运行 Kimi Code、DeepSeek Harness 或 OpenCode Web 的电脑上安装并登录 Tailscale。
 2. 启动 Agent 服务，将它绑定到手机可访问的地址。
 3. 在 Android 或 Desktop 中添加一个“服务连接”（主机、端口、后端和可选 token）。
 4. 从手机或桌面打开 Agent 服务中的会话；Agent 任务完成、失败、等待回答或等待审批时，查看通知并回到对应会话。
@@ -16,7 +16,7 @@ AgentPocket 不运行 Coding Agent 本身，也不替代 Kimi Code 或 DeepSeek 
 
 | 功能域 | 解决的问题 | 包含能力 |
 | --- | --- | --- |
-| 使用 Agent | 随时进入远程 Coding Agent | 打开 Kimi/dsh、切换服务连接、进入活跃会话 |
+| 使用 Agent | 随时进入远程 Coding Agent | 打开 Kimi/dsh/OpenCode、切换服务连接、进入活跃会话 |
 | 关注任务 | 任务有结果或需要介入时及时回来 | 后台监听、在线与活动状态、会话置顶保持、完成/失败/回答/审批通知 |
 | 管理连接 | 减少重复填写地址和凭据 | 服务连接增删改、后端识别、导入导出、手机配对 |
 | 管理节点 | 维护多台运行 Kimi 的机器 | 节点发现、Kimi 配置分发、CLI 升级、Kimi Web 管理 |
@@ -31,6 +31,8 @@ AgentPocket 不运行 Coding Agent 本身，也不替代 Kimi Code 或 DeepSeek 
 | Daemon | 管理无显示器或多台 Linux 机器的人 | 节点发现、Kimi 配置分发、Kimi CLI 管理、Kimi Web 生命周期、自更新 |
 
 术语和边界见 [概念与术语](docs/concepts.md)，各端具体能力见 [功能矩阵](docs/feature-matrix.md)。
+
+> **注意（OpenCode）**：OpenCode Web UI 按“访问来源”分键存储项目注册表，经 LAN/Tailscale IP 访问时会话列表初始为空。AgentPocket 加载首页后会播种项目注册表并让 OpenCode 前端自行渲染项目与会话，远端打开即可看到历史会话。
 
 ## 快速开始
 
@@ -65,7 +67,15 @@ dsh 默认只监听 `127.0.0.1`。若手机不能直接访问，请在电脑上�
 socat TCP-LISTEN:3080,bind=<Tailscale IP>,reuseaddr,fork TCP:127.0.0.1:3080
 ```
 
-在 AgentPocket 中添加服务连接，例如 Kimi 使用 `http://<Tailscale IP>:58627`，dsh 使用 `http://<Tailscale IP>:3080`。
+OpenCode（使用 [OpenCode](https://opencode.ai) 安装，需要 Node.js 18+）：
+
+```shell
+opencode serve --hostname 0.0.0.0 --port 4096
+```
+
+OpenCode 默认监听 `127.0.0.1`；`--hostname 0.0.0.0` 监听 Tailscale 地址。在 AgentPocket 中添加 OpenCode 服务连接时使用 `http://<Tailscale IP>:4096`，token 字段可填 `dir=/path` 或目录路径以固定打开的目录。
+
+在 AgentPocket 中添加服务连接，例如 Kimi 使用 `http://<Tailscale IP>:58627`，dsh 使用 `http://<Tailscale IP>:3080`，OpenCode 使用 `http://<Tailscale IP>:4096`。
 
 ### 安装与构建
 
@@ -78,7 +88,7 @@ socat TCP-LISTEN:3080,bind=<Tailscale IP>,reuseaddr,fork TCP:127.0.0.1:3080
 
 ## 安全边界
 
-- AgentPocket 是非官方客户端，与 Moonshot AI/Kimi、DeepSeek 官方无隶属关系。
+- AgentPocket 是非官方客户端，与 Moonshot AI/Kimi、DeepSeek、OpenCode 官方无隶属关系。
 - Tailscale 只解决网络可达性；AgentPocket 不替用户配置防火墙、端口转发或可信网络。
 - Kimi 的 `--dangerous-bypass-auth`、Daemon 的节点端点和 Kimi 配置分发依赖 Tailnet 的信任边界。节点间 mesh 端点使用明文 HTTP 且无独立鉴权，只在可信 Tailnet 中使用。
 - 服务连接导出、桌面配置和二维码可能包含访问凭据，请按密钥处理；不要提交到公开仓库或发送给不可信的人。

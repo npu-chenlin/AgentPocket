@@ -80,6 +80,9 @@ public class KeepAliveService extends Service implements ServerMonitor.MonitorHo
         if (ServerStore.Server.BACKEND_DSH.equals(server.backend)) {
             return new DshServerMonitor(this, server, client);
         }
+        if (ServerStore.Server.BACKEND_OPENCODE.equals(server.backend)) {
+            return new OpencodeServerMonitor(this, server, client);
+        }
         return new KimiServerMonitor(this, server, client);
     }
 

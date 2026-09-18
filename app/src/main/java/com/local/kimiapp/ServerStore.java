@@ -22,9 +22,10 @@ public final class ServerStore {
     public static final class Server {
         public static final String BACKEND_KIMI = "kimi";
         public static final String BACKEND_DSH = "dsh";
+        public static final String BACKEND_OPENCODE = "opencode";
         public String id, name, host, token;
         public int port;
-        /** 后端协议类型：BACKEND_KIMI（Kimi Code web）或 BACKEND_DSH（DeepSeek Harness web）。 */
+        /** 后端协议类型：BACKEND_KIMI（Kimi Code web）、BACKEND_DSH（DeepSeek Harness web）或 BACKEND_OPENCODE（OpenCode web）。 */
         public String backend;
         public Server(String id, String name, String host, int port, String token) {
             this(id, name, host, port, token, BACKEND_KIMI);

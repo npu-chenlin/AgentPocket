@@ -330,6 +330,7 @@ pub async fn probe_backend(server: ServerConfig) -> Result<String, CommandError>
     Ok(match backend {
         Backend::Kimi => "kimi".to_string(),
         Backend::Dsh => "dsh".to_string(),
+        Backend::Opencode => "opencode".to_string(),
     })
 }
 

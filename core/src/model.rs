@@ -10,6 +10,7 @@ use url::Url;
 pub enum Backend {
     Kimi,
     Dsh,
+    Opencode,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -62,6 +63,15 @@ impl ServerConfig {
             return Err(ValidationError::InvalidHost);
         }
         Ok(())
+    }
+
+    /// opencode 的可选 Bearer token（`opencode serve --port N` 部署时用）。
+    /// token 字段对 kimi 是访问令牌、对 opencode 是 API key、对 dsh 无效。
+    pub fn opencode_token(&self) -> &str {
+        match self.backend {
+            Backend::Opencode if !self.token.is_empty() => self.token.trim(),
+            _ => "",
+        }
     }
 }
 

@@ -41,9 +41,58 @@ pub fn build_server_url(
                 url.set_fragment(Some(&format!("token={encoded}")));
             }
         }
+        Backend::Opencode => {
+            // opencode web 的会话页路由为 /{base64url(directory)}/session/{id}；
+            // 未指定会话时回退根路径。
+            if let Some(id) = session_id.filter(|s| !s.is_empty()) {
+                let dir = opencode_directory(server);
+                url.set_path(&format!(
+                    "{}/session/{}",
+                    encode_base64url(dir.as_bytes()),
+                    id
+                ));
+            } else {
+                url.set_path("/");
+            }
+        }
     }
 
     Ok(url)
+}
+
+/// opencode 会话页所属的目录。token 字段对 opencode 承载两用信息：
+/// `dir=<path>` 显式指定工作目录，或裸路径；仅有 API key（非路径）时回退根目录。
+pub fn opencode_directory(server: &ServerConfig) -> String {
+    let token = server.opencode_token();
+    if let Some(path) = token.strip_prefix("dir=") {
+        return path.to_string();
+    }
+    if token.starts_with('/') {
+        return token.to_string();
+    }
+    "/".to_string()
+}
+
+/// URL-safe base64（无填充），与 opencode web 前端 `cn()` 的编码一致。
+fn encode_base64url(input: &[u8]) -> String {
+    use std::fmt::Write;
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        let _ = write!(out, "{}", CHARS[(n >> 18) as usize & 63] as char);
+        let _ = write!(out, "{}", CHARS[(n >> 12) as usize & 63] as char);
+        if chunk.len() > 1 {
+            let _ = write!(out, "{}", CHARS[(n >> 6) as usize & 63] as char);
+        }
+        if chunk.len() > 2 {
+            let _ = write!(out, "{}", CHARS[n as usize & 63] as char);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -97,5 +146,37 @@ mod tests {
     fn dsh_url_never_carries_token() {
         let url = build_server_url(&server("secret", Backend::Dsh), None).unwrap();
         assert_eq!(url.as_str(), "http://100.64.0.2:3080/");
+    }
+
+    #[test]
+    fn opencode_root_url() {
+        let url = build_server_url(&server("", Backend::Opencode), None).unwrap();
+        assert_eq!(url.as_str(), "http://100.64.0.2:3080/");
+    }
+
+    #[test]
+    fn opencode_session_url_encodes_directory() {
+        // 与 opencode web 前端一致：/{base64url(directory)}/session/{id}。
+        let mut srv = server("", Backend::Opencode);
+        srv.token = "dir=/home/cvlife/progs/AgentPocket".to_string();
+        let url = build_server_url(&srv, Some("ses_abc")).unwrap();
+        assert_eq!(
+            url.as_str(),
+            "http://100.64.0.2:3080/L2hvbWUvY3ZsaWZlL3Byb2dzL0FnZW50UG9ja2V0/session/ses_abc"
+        );
+    }
+
+    #[test]
+    fn opencode_session_url_defaults_to_root_directory() {
+        let url = build_server_url(&server("", Backend::Opencode), Some("ses_abc")).unwrap();
+        assert_eq!(url.as_str(), "http://100.64.0.2:3080/Lw/session/ses_abc");
+    }
+
+    #[test]
+    fn opencode_token_without_prefix_treated_as_path() {
+        let mut srv = server("", Backend::Opencode);
+        srv.token = "/home/work".to_string();
+        let url = build_server_url(&srv, Some("ses_1")).unwrap();
+        assert_eq!(url.as_str(), "http://100.64.0.2:3080/L2hvbWUvd29yaw/session/ses_1");
     }
 }

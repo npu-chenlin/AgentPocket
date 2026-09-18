@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- OpenCode logo（近似）：蓝色渐变圆角方块 + 白色终端提示符形箭头 >，还原 opencode 的 command 品牌 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="32"
+    android:viewportHeight="22">
+    <path
+        android:fillColor="#3874FF"
+        android:fillType="evenOdd"
+        android:pathData="M7,1 h18 a6,6 0 0 1 6,6 v8 a6,6 0 0 1 -6,6 h-18 a6,6 0 0 1 -6,-6 v-8 a6,6 0 0 1 6,-6 z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12.5,7.6 L16.9,11 L12.5,14.4 L14.1,15.65 L20.15,11.55 A0.55,0.55 0 0 0 20.15,10.45 L14.1,6.35 Z" />
+</vector>

@@ -117,7 +117,7 @@ app.innerHTML = `
         <label class="field field--wide">名称<input name="name" autocomplete="off" placeholder="工作站" /><small class="field-error" data-error-for="name"></small></label>
         <label class="field field--host">主机 IP / 域名<input name="host" autocomplete="off" placeholder="100.64.0.2" /><small class="field-error" data-error-for="host"></small></label>
         <label class="field field--port">端口<input name="port" type="number" min="1" max="65535" inputmode="numeric" /><small class="field-error" data-error-for="port"></small></label>
-        <label class="field">Agent 类型<select name="backend"><option value="dsh">dsh</option><option value="kimi">Kimi</option></select><small class="field-error" data-error-for="backend"></small></label>
+        <label class="field">Agent 类型<select name="backend"><option value="dsh">dsh</option><option value="kimi">Kimi</option><option value="opencode">OpenCode</option></select><small class="field-error" data-error-for="backend"></small></label>
         <label class="field">访问令牌<input name="token" type="password" autocomplete="new-password" placeholder="可留空" /><small>令牌仅在编辑时读取，不会出现在服务连接列表中。</small></label>
       </div>
       <div id="form-error" class="inline-error" role="alert"></div>
@@ -441,7 +441,7 @@ requiredElement<HTMLButtonElement>("#probe-backend").addEventListener("click", a
   try {
     const backend = await invoke<ServerDraft["backend"]>(commands.probeBackend, { server: draft });
     formControl<HTMLSelectElement>("backend").value = backend;
-    showFormErrors({}, `已识别为 ${backend === "kimi" ? "Kimi" : "dsh"}`);
+    showFormErrors({}, `已识别为 ${backend === "kimi" ? "Kimi" : backend === "opencode" ? "OpenCode" : "dsh"}`);
   } catch (error) {
     showFormErrors({}, `识别失败，已保留当前选择：${errorMessage(error)}`);
   } finally {
