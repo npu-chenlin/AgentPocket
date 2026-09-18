@@ -1,6 +1,7 @@
 //! ~/.kimi-code/config.toml 同步：单文件、整体替换，覆盖前备份为 config.toml.bak。
 
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -56,7 +57,8 @@ pub fn write(home: &Path, content: &str) -> Result<(), String> {
         file.write_all(content.as_bytes())
             .and_then(|_| file.sync_all())
             .map_err(|e| format!("写入 {} 失败：{e}", tmp_path.display()))?;
-        // config.toml 含 API key，临时文件和最终文件都收紧为属主可读写。
+        // config.toml 含 API key，临时文件和最终文件都收紧为属主可读写（仅 Unix 有权限位）。
+        #[cfg(unix)]
         std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600))
             .map_err(|e| format!("设置 {} 权限失败：{e}", tmp_path.display()))?;
         std::fs::rename(&tmp_path, &path)
@@ -78,6 +80,8 @@ fn sync_parent(parent: Option<&Path>) -> Result<(), String> {
         dir.sync_all()
             .map_err(|e| format!("同步 {} 失败：{e}", parent.display()))?;
     }
+    #[cfg(not(unix))]
+    let _ = parent;
     Ok(())
 }
 
@@ -90,11 +94,14 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         write(home.path(), "model = \"k2\"\n").unwrap();
         assert_eq!(read(home.path()).unwrap(), "model = \"k2\"\n");
-        let mode = std::fs::metadata(config_path(home.path()))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            let mode = std::fs::metadata(config_path(home.path()))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
 
         write(home.path(), "model = \"k3\"\n").unwrap();
         let backup = home.path().join(".kimi-code/config.toml.bak");
