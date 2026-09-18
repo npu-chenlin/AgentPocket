@@ -1,28 +1,45 @@
 # AgentPocket
 
-AgentPocket 是一个通过 Tailscale 连接 Coding Agent 的多端工具：用 Android 或桌面端访问远程 Agent 服务、关注任务状态，并在多台节点之间维护 Kimi Code 环境。
+[![Release](https://img.shields.io/github/v/release/npu-chenlin/AgentPocket?label=release&sort=semver)](https://github.com/npu-chenlin/AgentPocket/releases)
+[![License](https://img.shields.io/github/license/npu-chenlin/AgentPocket)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/npu-chenlin/AgentPocket?style=flat&label=stars)](https://github.com/npu-chenlin/AgentPocket)
+[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Desktop%20%7C%20Daemon-informational)](docs/feature-matrix.md)
 
-AgentPocket 不运行 Coding Agent 本身，也不替代 Kimi Code、DeepSeek Harness 或 OpenCode；它负责连接、提醒、配置同步和节点维护。
+把装在你电脑上的 Coding Agent 装进口袋 —— 通过 Tailscale 用手机或桌面端随时进入远程 Agent 服务、关注任务状态，并在多台节点之间维护 Kimi Code 环境。
 
-## 核心用户旅程
+AgentPocket 不运行 Coding Agent 本身，也不替代 Kimi Code、DeepSeek Harness 或 OpenCode；它只负责「连接、提醒、配置同步和节点维护」这一层。
 
-1. 在运行 Kimi Code、DeepSeek Harness 或 OpenCode Web 的电脑上安装并登录 Tailscale。
-2. 启动 Agent 服务，将它绑定到手机可访问的地址。
-3. 在 Android 或 Desktop 中添加一个“服务连接”（主机、端口、后端和可选 token）。
-4. 从手机或桌面打开 Agent 服务中的会话；Agent 任务完成、失败、等待回答或等待审批时，查看通知并回到对应会话。
-5. 有多台电脑时，在节点管理中发现节点，并按需分发 Kimi 配置。
+## 特性一览
 
-## 功能地图
-
-| 功能域 | 解决的问题 | 包含能力 |
+| | 特性 | 说明 |
 | --- | --- | --- |
-| 使用 Agent | 随时进入远程 Coding Agent | 打开 Kimi/dsh/OpenCode、切换服务连接、进入活跃会话 |
-| 关注任务 | 任务有结果或需要介入时及时回来 | 后台监听、在线与活动状态、会话置顶保持、完成/失败/回答/审批通知 |
-| 管理连接 | 减少重复填写地址和凭据 | 服务连接增删改、后端识别、导入导出、手机配对 |
-| 管理节点 | 维护多台运行 Kimi 的机器 | 节点发现、Kimi 配置分发、CLI 升级、Kimi Web 管理 |
-| 应用维护 | 让各端可靠常驻和更新 | 托盘、开机启动、应用更新、daemon 安装与自更新 |
+| 手机形态 | 内嵌 Agent Web | 在 Android 应用里直接打开 Kimi / dsh / OpenCode，不必切浏览器 |
+| 任务警觉 | 后台监听与通知 | 任务完成、失败、等待回答或等待审批时推送，点击回到对应会话 |
+| 多服务器 | 服务连接管理 | 保存多套地址与凭据，识别后端类型，一键切换、扫码同步 |
+| 多节点 | 节点管理 | 发现 Tailnet 内的电脑，分发 Kimi 配置、升级 CLI、管理 Kimi Web |
+| 常驻 | 各端可靠运行 | 托盘常驻、开机自启、应用更新、daemon 自更新 |
 
-## 三个组件
+支持的后端：**Kimi Code**、**DeepSeek Harness（dsh）**、**OpenCode**。
+
+## 界面速览
+
+| 手机端 | 桌面端 |
+| --- | --- |
+| ![手机端](docs/demo.jpg) | ![桌面端](docs/desktop.jpg) |
+
+## 架构概览
+
+```
+Android / Desktop / Daemon
+        │  连接（HTTP/SSE）      ┌────────────┐   拉起会话    ┌─────────────┐
+        ├──────────────────────► │ AgentPocket │ ───────────► │ 你的电脑      │
+        │                       │   连接层     │   配置同步   │ Kimi/dsh/OC │
+        ◄────────────────────── │             │ ◄─────────── │ 节点发现/分发 │
+         状态 / 通知            └────────────┘              └─────────────┘
+                                        通过 Tailscale（同一 Tailnet）
+```
+
+各端角色：
 
 | 组件 | 适合谁 | 主要能力 |
 | --- | --- | --- |
@@ -30,61 +47,91 @@ AgentPocket 不运行 Coding Agent 本身，也不替代 Kimi Code、DeepSeek Ha
 | Desktop | 需要在电脑上常驻管理的人 | 系统托盘、状态监控、通知、浏览器跳转、服务连接导入导出、手机配对、节点管理 |
 | Daemon | 管理无显示器或多台 Linux 机器的人 | 节点发现、Kimi 配置分发、Kimi CLI 管理、Kimi Web 生命周期、自更新 |
 
-术语和边界见 [概念与术语](docs/concepts.md)，各端具体能力见 [功能矩阵](docs/feature-matrix.md)。
-
-> **注意（OpenCode）**：OpenCode Web UI 按“访问来源”分键存储项目注册表，经 LAN/Tailscale IP 访问时会话列表初始为空。AgentPocket 加载首页后会播种项目注册表并让 OpenCode 前端自行渲染项目与会话，远端打开即可看到历史会话。
-
 ## 快速开始
 
 ### 前提
 
-电脑和 Android 手机需要安装 [Tailscale](https://tailscale.com/download)，并登录同一个 Tailnet。电脑上还需要安装并启动一种 Agent 服务。
+电脑和 Android 手机安装 [Tailscale](https://tailscale.com/download) 并登录到同一个 Tailnet。电脑上再启动一种 Agent 服务。
 
-Kimi Code（macOS / Linux）：
+**Kimi Code**（macOS / Linux）：
 
 ```shell
 curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
 kimi web --dangerous-bypass-auth --host 0.0.0.0 --port 58627
 ```
 
-`--dangerous-bypass-auth` 会关闭 Agent 服务自己的访问认证，只应在可信的 Tailscale 网络中使用。
+`--dangerous-bypass-auth` 会关闭 Agent 服务自带的访问认证，只应在可信的 Tailscale 网络中使用。
 
-DeepSeek Harness（需要 Node.js 18+）：
+**DeepSeek Harness**（需要 Node.js 18+）：
 
 ```shell
 npx -y @deepseek-ai/dsh web --trusted-host <Tailscale IP>
 ```
 
-国内网络可使用 npm 镜像：
+网络受限时使用 npm 镜像：
 
 ```shell
 npx -y --registry=https://registry.npmmirror.com @deepseek-ai/dsh web --trusted-host <Tailscale IP>
 ```
 
-dsh 默认只监听 `127.0.0.1`。若手机不能直接访问，请在电脑上将 Tailscale 地址转发到本地端口，例如：
+dsh 默认只监听 `127.0.0.1`。若手机不能直接访问，在电脑上将 Tailscale 地址转发到本地端口：
 
 ```shell
 socat TCP-LISTEN:3080,bind=<Tailscale IP>,reuseaddr,fork TCP:127.0.0.1:3080
 ```
 
-OpenCode（使用 [OpenCode](https://opencode.ai) 安装，需要 Node.js 18+）：
+**OpenCode**（使用 [OpenCode](https://opencode.ai) 安装，需要 Node.js 18+）：
 
 ```shell
 opencode serve --hostname 0.0.0.0 --port 4096
 ```
 
-OpenCode 默认监听 `127.0.0.1`；`--hostname 0.0.0.0` 监听 Tailscale 地址。在 AgentPocket 中添加 OpenCode 服务连接时使用 `http://<Tailscale IP>:4096`，token 字段可填 `dir=/path` 或目录路径以固定打开的目录。
+OpenCode 默认只监听 `127.0.0.1`；`--hostname 0.0.0.0` 让它在 Tailscale 地址上监听。
 
-在 AgentPocket 中添加服务连接，例如 Kimi 使用 `http://<Tailscale IP>:58627`，dsh 使用 `http://<Tailscale IP>:3080`，OpenCode 使用 `http://<Tailscale IP>:4096`。
+### 添加服务连接
+
+在 AgentPocket 中添加服务连接：
+
+| 后端 | 地址示例 | token 字段 |
+| --- | --- | --- |
+| Kimi | `http://<Tailscale IP>:58627` | 可选访问令牌 |
+| dsh | `http://<Tailscale IP>:3080` | 可选访问令牌 |
+| OpenCode | `http://<Tailscale IP>:4096` | `dir=/path` 或目录路径，用于固定打开的目录 |
+
+> 若 OpenCode 经 LAN/Tailscale IP 访问时侧栏会话列表为空，这是 OpenCode Web 前端的已知问题（按访问来源分键存储项目注册表）。AgentPocket 加载首页后会播种项目注册表并让 OpenCode 前端自行渲染项目与会话，远端打开即可看到历史会话，无需手动处理。
 
 ### 安装与构建
 
-预构建安装包可从 [GitHub Releases](https://github.com/npu-chenlin/AgentPocket/releases) 下载。Android 的使用和构建说明见 [Android](docs/android.md)；Desktop 的安装与构建见 [Desktop](docs/desktop.md)；节点守护进程见 [Daemon](docs/daemon.md)。
+预构建安装包从 [GitHub Releases](https://github.com/npu-chenlin/AgentPocket/releases) 下载。
+
+- Android：使用与构建见 [docs/android.md](docs/android.md)
+- Desktop：安装与构建见 [docs/desktop.md](docs/desktop.md)
+- Daemon：节点守护进程见 [docs/daemon.md](docs/daemon.md)
+
+## 能力矩阵
+
+| 功能 | Android | Desktop | Daemon |
+| --- | :---: | :---: | :---: |
+| 打开 Kimi / dsh / OpenCode Web | 支持 | 支持 | — |
+| 服务连接管理 | 支持 | 支持 | 读取共享配置 |
+| 自动识别后端 | 支持 | 支持 | 探测支持 |
+| 任务完成/失败/等待通知 | 支持 | 支持 | — |
+| 手机配对 / 连接同步 | 扫码 | 二维码 | — |
+| 节点发现与 Kimi 配置分发 | — | 支持 | `pull`/`push` |
+
+完整矩阵见 [docs/feature-matrix.md](docs/feature-matrix.md)。
 
 ## 配置同步的两个含义
 
 - **手机配对 / 服务连接同步**：Android 与 Desktop 通过二维码互传保存的服务连接列表。导出文件可能包含 token，不要公开分享。
 - **节点间 Kimi 配置分发**：Daemon 或 Desktop 节点面板在 Tailnet 内拉取/推送 `~/.kimi-code/config.toml`。它不等于手机配对，也不会同步 Android 的服务连接列表。
+
+## 常见问题
+
+- **连接失败/找不到服务？** 先确认电脑和手机在同一 Tailnet、服务地址用 `<Tailscale IP>` 而非 `127.0.0.1`。
+- **dsh 手机打不开？** dsh 默认监听本机，先用 `socat` 转发，见上方快速开始。
+- **OpenCode 没有历史会话？** 用新版 AgentPocket 打开首页即可，项目注册表会自动播种。
+- **token 会被同步吗？** 会，服务连接导出/二维码包含凭据，请按密钥对待。
 
 ## 安全边界
 
