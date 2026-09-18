@@ -203,6 +203,7 @@ fn main() {
                     let backend = match probe.backend {
                         agentpocket_core::model::Backend::Kimi => "kimi",
                         agentpocket_core::model::Backend::Dsh => "dsh",
+                        agentpocket_core::model::Backend::Opencode => "opencode",
                     };
                     if probe.online {
                         println!(

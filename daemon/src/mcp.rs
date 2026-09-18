@@ -344,6 +344,7 @@ fn tool_list_targets(ctx: &Ctx, args: &Value) -> Result<String, String> {
                 "backend": match s.backend {
                     Backend::Kimi => "kimi",
                     Backend::Dsh => "dsh",
+                    Backend::Opencode => "opencode",
                 },
                 "dispatchable": s.backend == Backend::Kimi && ctx.allow.allows(s),
             })
