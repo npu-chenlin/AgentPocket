@@ -84,7 +84,7 @@ p {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 13px 20px;
+  padding: 13px clamp(14px, 3vw, 28px);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
@@ -131,9 +131,9 @@ p {
 
 .content {
   flex: 1;
-  width: min(680px, 100%);
+  width: min(960px, 100%);
   margin: 0 auto;
-  padding: 20px 20px 40px;
+  padding: 20px clamp(14px, 3vw, 28px) 40px;
 }
 
 .section-heading {
@@ -859,7 +859,9 @@ input[role="switch"]:checked::after {
 /* ---------- 弹窗 ---------- */
 
 .modal {
-  width: min(560px, calc(100vw - 40px));
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
   padding: 20px;
   border: 1px solid var(--border-strong);
   border-radius: 14px;
@@ -869,7 +871,7 @@ input[role="switch"]:checked::after {
 }
 
 .modal--small {
-  width: min(440px, calc(100vw - 40px));
+  width: min(520px, calc(100vw - 32px));
 }
 
 .modal::backdrop {
@@ -1099,7 +1101,35 @@ input[role="switch"]:checked::after {
 
 /* ---------- 响应式与动效偏好 ---------- */
 
-@media (max-width: 560px) {
+@media (max-width: 700px) {
+  .app-header {
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    flex: 1 1 180px;
+  }
+
+  .header-actions {
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .modal__actions {
+    flex-wrap: wrap;
+  }
+
+  .mesh-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .mesh-input {
+    flex: 1 1 160px;
+  }
+}
+
+@media (max-width: 620px) {
   body {
     min-width: 360px;
   }
