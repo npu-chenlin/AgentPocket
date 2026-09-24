@@ -15,6 +15,8 @@ use crate::monitor::{
 use crate::protocol::{build_event, ProtocolState};
 
 const EVENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// 普通 JSON 请求的超时；SSE 长连接不使用这个总超时。
+const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// 兜底心跳：即使 SSE 静默，也定期把已知状态推给 UI（不请求服务端）。
 const STATUS_PUSH_INTERVAL: Duration = Duration::from_secs(10);
 /// SSE 行缓冲上限，防止服务端不按行发送时无限增长。
@@ -36,7 +38,10 @@ pub async fn run(
     pinned: PinnedSessions,
 ) {
     let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        // 不能给整个 client 设置 timeout：reqwest 会把它应用到响应体读取，
+        // opencode v2 空闲时 SSE 可能约 15 秒才发一次 heartbeat，届时会被误判断线。
+        // 普通 JSON 请求在 get_json 中单独套 HTTP_REQUEST_TIMEOUT。
+        .connect_timeout(Duration::from_secs(10))
         .build()
     {
         Ok(c) => c,
@@ -360,18 +365,23 @@ async fn get_json(
         client.get(url).header("Accept", "application/json"),
         server,
     );
-    let resp = cancellable_request(async { req.send().await.map_err(|e| e.to_string()) }, token)
+    let request = async {
+        let resp = cancellable_request(async { req.send().await.map_err(|e| e.to_string()) }, token)
+            .await
+            .map_err(MonitorError::Http)?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| MonitorError::Http(e.to_string()))?;
+        if !status.is_success() {
+            return Err(MonitorError::Http(format!("HTTP {}", status)));
+        }
+        Ok::<String, MonitorError>(text)
+    };
+    timeout(HTTP_REQUEST_TIMEOUT, request)
         .await
-        .map_err(MonitorError::Http)?;
-    let status = resp.status();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| MonitorError::Http(e.to_string()))?;
-    if !status.is_success() {
-        return Err(MonitorError::Http(format!("HTTP {}", status)));
-    }
-    Ok(text)
+        .map_err(|_| MonitorError::Http("request timed out".to_string()))?
 }
 
 #[derive(Debug, thiserror::Error)]

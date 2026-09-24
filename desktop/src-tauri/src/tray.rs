@@ -99,9 +99,10 @@ impl<R: Runtime> TrayController<R> {
 
         let menu = controller.build_menu(&state)?;
         let tooltip = tooltip_text(&state);
+        let (config, statuses) = read_state(&state);
 
         TrayIconBuilder::with_id(TRAY_ID)
-            .icon(tray_icon_image())
+            .icon(tray_icon_image(tray_icon_state(&config, &statuses)))
             .menu(&menu)
             .tooltip(&tooltip)
             .show_menu_on_left_click(false)
@@ -123,8 +124,12 @@ impl<R: Runtime> TrayController<R> {
     /// The old menu and its items are dropped, so handles are not leaked.
     pub fn rebuild(&self, state: Arc<AppState>) -> Result<(), tauri::Error> {
         if let Some(tray) = self.app_handle.tray_by_id(TRAY_ID) {
+            let (config, statuses) = read_state(&state);
             let menu = self.build_menu(&state)?;
             tray.set_menu(Some(menu))?;
+            tray.set_icon(Some(tray_icon_image(tray_icon_state(
+                &config, &statuses,
+            ))))?;
             tray.set_tooltip(Some(tooltip_text(&state)))?;
         }
         Ok(())
@@ -192,9 +197,44 @@ fn tooltip_text(state: &AppState) -> String {
     tooltip(&statuses, config.servers.len())
 }
 
-fn tray_icon_image() -> tauri::image::Image<'static> {
-    tauri::image::Image::from_bytes(include_bytes!("../icons/backend-offline.png"))
-        .expect("embedded tray icon decodes")
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrayIconState {
+    /// 尚未收到首个 monitor 状态。
+    Neutral,
+    /// 至少一台服务在线，但没有任务运行。
+    Online,
+    /// 至少一个任务正在运行。
+    Busy,
+    /// 配置了服务，但目前没有在线服务。
+    Offline,
+}
+
+/// 根据当前快照选择托盘图标。品牌底色始终保留蓝色，只有右下角状态点变化，
+/// 避免旧版把整个托盘图标做成灰色、在线和离线难以区分。
+fn tray_icon_state(
+    config: &AppConfig,
+    statuses: &HashMap<String, ServerStatus>,
+) -> TrayIconState {
+    if config.servers.is_empty() || statuses.is_empty() {
+        return TrayIconState::Neutral;
+    }
+    if statuses.values().any(|status| status.active_count > 0) {
+        return TrayIconState::Busy;
+    }
+    if statuses.values().any(|status| status.connected) {
+        return TrayIconState::Online;
+    }
+    TrayIconState::Offline
+}
+
+fn tray_icon_image(state: TrayIconState) -> tauri::image::Image<'static> {
+    let bytes = match state {
+        TrayIconState::Neutral => include_bytes!("../icons/tray-neutral.png").as_slice(),
+        TrayIconState::Online => include_bytes!("../icons/tray-online.png").as_slice(),
+        TrayIconState::Busy => include_bytes!("../icons/tray-busy.png").as_slice(),
+        TrayIconState::Offline => include_bytes!("../icons/tray-offline.png").as_slice(),
+    };
+    tauri::image::Image::from_bytes(bytes).expect("embedded tray icon decodes")
 }
 
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, state: &Arc<AppState>, id: String) {
@@ -277,6 +317,42 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), tauri::Error> 
 mod tests {
     use super::*;
     use crate::model::{AppConfig, Backend, ServerConfig, ServerStatus};
+
+    fn status(connected: bool, active_count: u32) -> ServerStatus {
+        ServerStatus {
+            connected,
+            active_count,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tray_icon_is_neutral_before_first_monitor_result() {
+        let config = sample_config();
+        assert_eq!(tray_icon_state(&config, &HashMap::new()), TrayIconState::Neutral);
+    }
+
+    #[test]
+    fn tray_icon_reflects_online_busy_and_offline_states() {
+        let config = sample_config();
+        let mut statuses = HashMap::new();
+        statuses.insert("s1".to_string(), status(false, 0));
+        assert_eq!(tray_icon_state(&config, &statuses), TrayIconState::Offline);
+
+        statuses.insert("s1".to_string(), status(true, 0));
+        assert_eq!(tray_icon_state(&config, &statuses), TrayIconState::Online);
+
+        statuses.insert("s1".to_string(), status(true, 2));
+        assert_eq!(tray_icon_state(&config, &statuses), TrayIconState::Busy);
+    }
+
+    #[test]
+    fn tray_icon_is_neutral_without_configured_servers() {
+        assert_eq!(
+            tray_icon_state(&AppConfig::default(), &HashMap::new()),
+            TrayIconState::Neutral
+        );
+    }
 
     fn sample_config() -> AppConfig {
         AppConfig {
