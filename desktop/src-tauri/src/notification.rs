@@ -130,11 +130,7 @@ impl NotificationCoordinator {
 
         Some(PendingNotification {
             title: notification_title(server.backend, &event.kind),
-            body: event
-                .body
-                .clone()
-                .or_else(|| event.session_title.clone())
-                .unwrap_or_default(),
+            body: notification_body(event, server),
         })
     }
 
@@ -157,6 +153,26 @@ impl NotificationCoordinator {
 impl Default for NotificationCoordinator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// 通知正文与 Android 保持一致，在内容前标出服务名称，便于多服务器并行时区分来源。
+/// 服务名称为空时回退到 host:port，避免通知失去来源信息。
+fn notification_body(event: &AgentEvent, server: &ServerConfig) -> String {
+    let body = event
+        .body
+        .clone()
+        .or_else(|| event.session_title.clone())
+        .unwrap_or_default();
+    let server_name = if server.name.trim().is_empty() {
+        format!("{}:{}", server.host, server.port)
+    } else {
+        server.name.trim().to_string()
+    };
+    if body.is_empty() {
+        format!("[{}]", server_name)
+    } else {
+        format!("[{}] {}", server_name, body)
     }
 }
 
@@ -497,7 +513,7 @@ mod tests {
                 &DesktopSettings::default(),
             )
             .unwrap();
-        assert_eq!(note.body, "custom body");
+        assert_eq!(note.body, "[Server] custom body");
 
         let mut without_body = event("srv", Some("sess"), "k2", AgentEventKind::Failed, now);
         without_body.body = None;
@@ -511,6 +527,20 @@ mod tests {
                 &DesktopSettings::default(),
             )
             .unwrap();
-        assert_eq!(note.body, "fallback title");
+        assert_eq!(note.body, "[Server] fallback title");
+    }
+
+    #[test]
+    fn notification_body_falls_back_to_host_when_name_is_empty() {
+        let mut coord = NotificationCoordinator::new();
+        let started = Utc::now();
+        let now = started + chrono::Duration::seconds(1);
+        let mut srv = server(Backend::Kimi);
+        srv.name = String::new();
+        let evt = event("srv", Some("sess"), "k1", AgentEventKind::Completed, now);
+        let note = coord
+            .handle_event(&evt, &srv, started, now, &DesktopSettings::default())
+            .unwrap();
+        assert_eq!(note.body, "[100.64.0.2:3080] test body");
     }
 }

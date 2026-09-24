@@ -442,7 +442,6 @@ public class MainActivity extends ComponentActivity {
             @Override public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 installThemeSync();
-                seedOpencodeProjectRegistry(view, url);
             }
         });
         webView.setWebChromeClient(new WebChromeClient() {
@@ -1786,65 +1785,6 @@ public class MainActivity extends ComponentActivity {
         loadConfiguredUrl(null);
     }
 
-    /**
-     * workaround #28340：opencode 前端把项目注册表按「访问 origin」分键存 localStorage
-     * （`opencode.global.dat:server`，localhost→"local"，LAN/Tailscale IP→独立键）。
-     * 手机通过 Tailscale/LAN 访问时该 origin 的注册表为空 → home 侧栏 join 不到
-     * project，会话列表全部被 Drop。
-     *
-     * 方案：加载原版 root 页后注入 JS，从 `/api/project` 拉取真实项目，播种
-     * 当前 origin 的项目注册表，然后 location.reload() 让前端用原版逻辑自己原生
-     * 渲染项目与会话（不伪造任何 DOM，视觉完全一致）。
-     * 用独立版本哨兵保证幂等：版本相同直接返回，最多 reload 一次。
-     * 深链会话页跳过。
-     *
-     * v2 变化：REST 前端移到 `/api/`，项目路径字段 `worktree` 改名为 `canonical`。
-     */
-    private void seedOpencodeProjectRegistry(WebView view, String url) {
-        ServerStore.Server server = ServerStore.active(this);
-        if (server == null || view == null) return;
-        if (!ServerStore.Server.BACKEND_OPENCODE.equals(server.backend)) return;
-        String base = server.baseUrl();
-        if (!url.startsWith(base + "/")) return;
-        String path = url.substring(base.length());
-        if (!"/".equals(path)) return;
-        view.evaluateJavascript(OPENCODE_PROJECT_SEED_JS, null);
-    }
-
-    private static final String OPENCODE_PROJECT_SEED_JS =
-        "(() => {"
-      + "  if (window.__apSeedStarted) return; window.__apSeedStarted = true;"
-      + "  var KEY = 'opencode.global.dat:server';"
-      + "  var VKEY = '__apSeedV';"
-      + "  var lastV = null;"
-      + "  try { lastV = localStorage.getItem(VKEY); } catch(e){}"
-      + "  fetch('/api/project', {headers:{'Accept':'application/json'}}).then(function(r){"
-      + "    if (!r.ok) throw new Error('HTTP ' + r.status);"
-      + "    return r.json();"
-      + "  }).then(function(projects){"
-      // v2 字段为 canonical，v1 为 worktree，两个都兼容。
-      + "    var ws = (projects || []).map(function(p){"
-      + "      return p && (p.canonical || p.worktree) || null;"
-      + "    }).filter(function(w){ return w && w !== '/'; })"
-      + "      .map(function(w){ return { worktree: w, expanded: true }; });"
-      + "    if (!ws.length) { window.__apSeedStarted = false; return; }"
-      + "    var originKey = location.origin;"
-      + "    var version = ws.map(function(x){ return x.worktree; }).sort().join('|');"
-      + "    if (lastV === version) { window.__apSeedStarted = false; return; }"
-      + "    var cur = null;"
-      + "    try { cur = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch(e){}"
-      + "    if (!cur) cur = { list: [], projects: {}, lastProject: {}, recentlyClosed: {} };"
-      + "    if (!cur.projects) cur.projects = {};"
-      + "    var keys = [originKey, 'local', location.host, location.hostname];"
-      + "    keys.forEach(function(k){ if (k) cur.projects[k] = ws; });"
-      + "    if (!cur.lastProject) cur.lastProject = {};"
-      + "    if (!cur.lastProject[originKey] && ws.length) cur.lastProject[originKey] = ws[0].worktree;"
-      + "    localStorage.setItem(KEY, JSON.stringify(cur));"
-      + "    localStorage.setItem(VKEY, version);"
-      + "    location.reload();"
-      + "  }).catch(function(){ window.__apSeedStarted = false; });"
-      + "})();";
-
     private static String escapeHtml(String s) {
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 .replace("\"", "&quot;").replace("'", "&#39;");
@@ -1873,7 +1813,7 @@ public class MainActivity extends ComponentActivity {
             if (sessionId != null && !sessionId.isEmpty()) {
                 webView.loadUrl(server.baseUrl() + sessionPath(server, sessionId));
             } else {
-                // 加载原版 root 页面；onPageFinished 检测并注入项目注册表（workaround #28340）
+                // v2 前端会直接从 /api/project 与 /api/session 加载项目与会话。
                 webView.loadUrl(server.baseUrl() + "/");
             }
             return;

@@ -105,7 +105,8 @@ v2 起 Web 与 API 都要求登录：未设 `OPENCODE_SERVER_PASSWORD` 时服务
 > 字段填同一个密码即可（填 `opencode:密码` 或只填密码都行）。凭据由各端以 HTTP Basic
 > 头发出，手机端由 WebView 的认证回调自动应答，不会弹登录框。
 >
-> 若 OpenCode 经 LAN/Tailscale IP 访问时侧栏会话列表为空，这是 OpenCode Web 前端的已知问题（按访问来源分键存储项目注册表）。AgentPocket 加载首页后会播种项目注册表并让 OpenCode 前端自行渲染项目与会话，远端打开即可看到历史会话，无需手动处理。
+> OpenCode v2 Web 前端会直接从 `/api/project` 与 `/api/session` 加载项目与会话，
+> 通过 LAN/Tailscale IP 访问时不再需要 AgentPocket 播种浏览器本地项目注册表。
 
 ### 安装与构建
 
@@ -138,7 +139,6 @@ v2 起 Web 与 API 都要求登录：未设 `OPENCODE_SERVER_PASSWORD` 时服务
 - **连接失败/找不到服务？** 先确认电脑和手机在同一 Tailnet、服务地址用 `<Tailscale IP>` 而非 `127.0.0.1`。
 - **dsh 手机打不开？** dsh 默认监听本机，先用 `socat` 转发，见上方快速开始。
 - **OpenCode 连不上 / 一直转圈？** v2 起必须登录：确认服务端设了 `OPENCODE_SERVER_PASSWORD`，且 AgentPocket 的 token 字段填了同一个密码。
-- **OpenCode 没有历史会话？** 用新版 AgentPocket 打开首页即可，项目注册表会自动播种。
 - **token 会被同步吗？** 会，服务连接导出/二维码包含凭据，请按密钥对待。
 
 ## 安全边界
