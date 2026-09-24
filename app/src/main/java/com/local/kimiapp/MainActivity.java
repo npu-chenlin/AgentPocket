@@ -121,6 +121,8 @@ public class MainActivity extends ComponentActivity {
     private String[] pendingPermissionResources;
     /** 悬浮球控制器（配置变化/折叠屏展开时需要重新贴边）。 */
     private IFxScopeControl floatingControl;
+    /** 悬浮球所在的 Activity 根容器；折叠/恢复前台时用于重新挂载。 */
+    private FrameLayout floatingRoot;
     /** 后端类型探测用短超时 client，避免阻塞页面加载。 */
     private final OkHttpClient probeClient = new OkHttpClient.Builder()
             .connectTimeout(5, TimeUnit.SECONDS)
@@ -167,24 +169,52 @@ public class MainActivity extends ComponentActivity {
 
     /**
      * 折叠屏展开/旋转导致屏幕宽度变化时，把悬浮球重新贴到新的屏幕边缘。
-     * onConfigurationChanged 时布局尚未更新，先记录旧位置，等布局完成后移动。
+     * 这里必须读取父容器宽度；manager 自身只有 56dp，不能当作屏幕宽度。
+     * onConfigurationChanged 时布局可能尚未完成，所以等 root 的下一次布局。
      */
     private void reattachFloatingBall() {
-        if (floatingControl == null) return;
+        final FrameLayout root = floatingRoot;
         final IFxScopeControl ball = floatingControl;
+        if (root == null || ball == null) return;
         final float oldX = ball.getX();
         final float oldY = ball.getY();
         final int ballWidth = ball.getView().getWidth();
-        final int oldWidth = ball.getManagerView().getWidth();
+        final int oldWidth = root.getWidth();
         if (oldWidth <= 0 || ballWidth <= 0) return;
-        ball.getManagerView().post(() -> {
-            int newWidth = ball.getManagerView().getWidth();
+        final boolean leftSide = (oldX + ballWidth / 2f) < oldWidth / 2f;
+        final float offset = leftSide ? oldX : (oldWidth - oldX - ballWidth);
+
+        root.post(() -> {
+            int newWidth = root.getWidth();
             if (newWidth <= 0 || newWidth == oldWidth) return;
-            boolean leftSide = (oldX + ballWidth / 2f) < oldWidth / 2f;
-            float offset = leftSide ? oldX : (oldWidth - oldX - ballWidth);
             float newX = leftSide ? offset : newWidth - ballWidth - offset;
-            ball.move(newX, oldY, true);
+            ball.move(newX, oldY, false);
         });
+    }
+
+    /**
+     * Activity 经历后台/折叠屏配置变化后，FloatingX 的局部容器可能已经脱离 root，
+     * 单纯 show() 不会重新 addView。此时重新创建局部悬浮球；正常 attached 时只恢复显示。
+     */
+    private void restoreFloatingBall() {
+        final FrameLayout root = floatingRoot;
+        if (root == null) return;
+        if (floatingControl == null) {
+            installServerHandle(root);
+            return;
+        }
+        FrameLayout manager = floatingControl.getManagerView();
+        if (manager == null || manager.getParent() != root) {
+            floatingControl.cancel();
+            floatingControl = null;
+            // 旧 handle 上可能还挂着延迟的睡眠/点击任务，避免重建后误操作旧 View。
+            mainHandler.removeCallbacksAndMessages(null);
+            installServerHandle(root);
+            applyBaseFaceState();
+            return;
+        }
+        floatingControl.show();
+        reattachFloatingBall();
     }
 
     private void startKeepAliveService() {
@@ -214,6 +244,7 @@ public class MainActivity extends ComponentActivity {
     }
 
     private void installServerHandle(FrameLayout root) {
+        floatingRoot = root;
         FrameLayout handle = new FrameLayout(this);
         handle.setLayoutParams(new FrameLayout.LayoutParams(dp(56), dp(56)));
         handle.setContentDescription("切换服务连接");
@@ -469,6 +500,7 @@ public class MainActivity extends ComponentActivity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        restoreFloatingBall();
         if (activateServerFromIntent(intent)) {
             String sessionId = intent.getStringExtra(EXTRA_SESSION_ID);
             // 页面已在目标服务器/会话上时不再重新加载；跨会话在同服务器内
@@ -1841,6 +1873,11 @@ public class MainActivity extends ComponentActivity {
         getSharedPreferences(KeepAliveService.HEALTH_PREFS, MODE_PRIVATE)
                 .unregisterOnSharedPreferenceChangeListener(facePrefsListener);
         mainHandler.removeCallbacksAndMessages(null);
+        if (floatingControl != null) {
+            floatingControl.cancel();
+            floatingControl = null;
+        }
+        floatingRoot = null;
         if (webView != null) { webView.stopLoading(); webView.destroy(); }
         super.onDestroy();
     }
@@ -1848,6 +1885,7 @@ public class MainActivity extends ComponentActivity {
     @Override protected void onStart() {
         super.onStart();
         isVisible = true;
+        restoreFloatingBall();
     }
 
     @Override protected void onStop() {
