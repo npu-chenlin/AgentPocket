@@ -14,8 +14,8 @@ android {
         applicationId 'com.local.kimiapp'
         minSdk 26
         targetSdk 34
-        versionCode 51
-        versionName '2.17.0'
+        versionCode 52
+        versionName '2.17.1'
     }
 
     signingConfigs {
