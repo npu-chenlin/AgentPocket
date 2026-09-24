@@ -144,10 +144,24 @@ public final class ServerStore {
         List<Server> result = new ArrayList<>();
         for (int i = 0; i < items.length(); i++) try {
             JSONObject item = items.getJSONObject(i);
+            String backend = item.optString("backend", Server.BACKEND_KIMI);
             result.add(new Server(item.getString("id"), item.optString("name", "Kimi"),
-                    item.getString("host"), item.getInt("port"), item.optString("token", ""),
-                    item.optString("backend", Server.BACKEND_KIMI)));
+                    item.getString("host"), item.getInt("port"),
+                    migrateToken(item.optString("token", ""), backend),
+                    backend));
         } catch (Exception ignored) {}
         return result;
+    }
+
+    /**
+     * opencode 的 token 语义迁移：旧版存工作目录（dir=/path 或裸 /path），
+     * 新版存 HTTP Basic 凭据。旧目录值不是密码，原样保留会导致恒定 401，故清空。
+     * 旧版的 Bearer 令牌是普通字符串，无法与密码区分，保留原值由用户自行更新。
+     */
+    private static String migrateToken(String token, String backend) {
+        if (!Server.BACKEND_OPENCODE.equals(backend)) return token;
+        String t = token == null ? "" : token.trim();
+        if (t.startsWith("dir=") || t.startsWith("/")) return "";
+        return token;
     }
 }

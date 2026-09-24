@@ -65,14 +65,55 @@ impl ServerConfig {
         Ok(())
     }
 
-    /// opencode 的可选 Bearer token（`opencode serve --port N` 部署时用）。
-    /// token 字段对 kimi 是访问令牌、对 opencode 是 API key、对 dsh 无效。
-    pub fn opencode_token(&self) -> &str {
-        match self.backend {
-            Backend::Opencode if !self.token.is_empty() => self.token.trim(),
-            _ => "",
+    /// opencode v2 的登录凭据：token 字段承载 `user:pass`（HTTP Basic）。
+    /// opencode 的用户名固定为 `opencode`（服务端忽略 `OPENCODE_SERVER_USERNAME`），
+    /// 密码对应服务端的 `OPENCODE_SERVER_PASSWORD`。只写密码时默认补上 `opencode:`。
+    /// token 字段对 kimi 是访问令牌、对 dsh 无效。
+    pub fn opencode_credentials(&self) -> Option<(&str, &str)> {
+        if self.backend != Backend::Opencode {
+            return None;
+        }
+        let raw = self.token.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        match raw.split_once(':') {
+            Some((user, pass)) => Some((user.trim(), pass)),
+            None => Some(("opencode", raw)),
         }
     }
+
+    /// opencode 请求用的 `Authorization` 头值（HTTP Basic）。
+    pub fn opencode_basic_header(&self) -> Option<String> {
+        let (user, pass) = self.opencode_credentials()?;
+        Some(format!("Basic {}", base64_encode(user.as_bytes(), pass.as_bytes())))
+    }
+}
+
+/// 标准 base64 编码（用于 HTTP Basic），不依赖外部 crate 以保持 core 轻量。
+fn base64_encode(user: &[u8], pass: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let joined: Vec<u8> = user.iter().copied().chain([b':']).chain(pass.iter().copied()).collect();
+    let mut out = String::with_capacity(joined.len().div_ceil(3) * 4);
+    for chunk in joined.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(CHARS[(n >> 18) as usize & 63] as char);
+        out.push(CHARS[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            CHARS[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            CHARS[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 /// 手动登记的 mesh peer（存于 DesktopSettings，GUI 侧维护）。
@@ -255,6 +296,43 @@ impl From<&ServerConfig> for ServerForEdit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_credentials_default_username() {
+        // 只写密码时补默认用户名 opencode（服务端固定用户名）。
+        let srv = ServerConfig::new("id", "OC", "h", 4096, "s3cret", Backend::Opencode);
+        assert_eq!(srv.opencode_credentials(), Some(("opencode", "s3cret")));
+        assert_eq!(
+            srv.opencode_basic_header().as_deref(),
+            Some("Basic b3BlbmNvZGU6czNjcmV0")
+        );
+    }
+
+    #[test]
+    fn opencode_credentials_explicit_user_pass() {
+        let srv = ServerConfig::new("id", "OC", "h", 4096, "bob:hunter2", Backend::Opencode);
+        assert_eq!(srv.opencode_credentials(), Some(("bob", "hunter2")));
+        assert_eq!(
+            srv.opencode_basic_header().as_deref(),
+            Some("Basic Ym9iOmh1bnRlcjI=")
+        );
+    }
+
+    #[test]
+    fn opencode_credentials_keep_colons_in_password() {
+        let srv = ServerConfig::new("id", "OC", "h", 4096, "opencode:a:b:c", Backend::Opencode);
+        assert_eq!(srv.opencode_credentials(), Some(("opencode", "a:b:c")));
+    }
+
+    #[test]
+    fn opencode_credentials_none_for_other_backends_or_empty() {
+        // kimi 的 token 绝不能被当成 opencode 凭据。
+        let kimi = ServerConfig::new("id", "K", "h", 58627, "tok", Backend::Kimi);
+        assert_eq!(kimi.opencode_credentials(), None);
+        assert_eq!(kimi.opencode_basic_header(), None);
+        let empty = ServerConfig::new("id", "OC", "h", 4096, "  ", Backend::Opencode);
+        assert_eq!(empty.opencode_basic_header(), None);
+    }
 
     #[test]
     fn validates_server_fields() {

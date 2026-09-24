@@ -15,7 +15,19 @@ use crate::monitor::{
 use crate::protocol::{build_event, ProtocolState};
 
 const EVENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// 兜底心跳：即使 SSE 静默，也定期把已知状态推给 UI（不请求服务端）。
+const STATUS_PUSH_INTERVAL: Duration = Duration::from_secs(10);
+/// SSE 行缓冲上限，防止服务端不按行发送时无限增长。
+const MAX_SSE_BUFFER: usize = 1 << 20;
+
+/// 给 opencode 请求挂上认证头。v2 起服务端用 HTTP Basic（用户名固定 `opencode`，
+/// 密码来自 `OPENCODE_SERVER_PASSWORD`），token 字段承载 `user:pass`。
+fn authorize(req: reqwest::RequestBuilder, server: &ServerConfig) -> reqwest::RequestBuilder {
+    match server.opencode_basic_header() {
+        Some(header) => req.header("Authorization", header),
+        None => req,
+    }
+}
 
 pub async fn run(
     server: ServerConfig,
@@ -84,7 +96,7 @@ async fn poll_and_events(
     token: &CancellationToken,
     pins: &mut PinTracker,
 ) -> Result<(), MonitorError> {
-    // 初始基线：会话列表 + 状态。
+    // 初始基线：会话列表（填充标题缓存）。
     fetch_baseline(client, server, state, token).await?;
     pins.emit_finished(update_tx, &server.id, state).await;
     send_status(update_tx, &server.id, true, state, None, &pins.pinned);
@@ -92,10 +104,10 @@ async fn poll_and_events(
     // 事件流长连接。
     let events_url = events_url(server)?;
     let stream_fut = async {
-        let mut req = client.get(events_url).header("Accept", "text/event-stream");
-        if !server.opencode_token().is_empty() {
-            req = req.header("Authorization", format!("Bearer {}", server.opencode_token()));
-        }
+        let req = authorize(
+            client.get(events_url).header("Accept", "text/event-stream"),
+            server,
+        );
         req.send().await
     };
     let resp = tokio::select! {
@@ -109,29 +121,36 @@ async fn poll_and_events(
     }
     let mut stream = resp.bytes_stream();
 
-    // 状态轮询与事件流并行：轮询负责忙闲，事件流负责过滤掉自己产生的噪声、
-    // 识别结果事件。
-    let mut poll = interval(STATUS_POLL_INTERVAL);
-    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // v2 没有可轮询的忙闲端点：状态完全由 SSE 事件驱动
+    // （`session.execution.started` / `session.execution.succeeded`）。
+    // 心跳只负责把已知状态重新推给 UI，并检测置顶会话完成。
+    let mut heartbeat = interval(STATUS_PUSH_INTERVAL);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // 跨 chunk 行缓冲：TCP 分片可能把一行 `data:` 切断。
+    let mut buffer = String::new();
 
     loop {
         tokio::select! {
             chunk = stream.next() => {
                 match chunk {
                     Some(Ok(bytes)) => {
-                        let text = String::from_utf8_lossy(&bytes).to_string();
-                        let events = handle_sse(server, &text, state);
-                        emit_events(update_tx, events).await;
+                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+                        if buffer.len() > MAX_SSE_BUFFER {
+                            // 服务端不按行发送时避免无限增长。
+                            buffer.clear();
+                        } else if let Some(idx) = buffer.rfind('\n') {
+                            let ready: String = buffer.drain(..=idx).collect();
+                            let events = handle_sse(server, &ready, state);
+                            emit_events(update_tx, events).await;
+                            pins.emit_finished(update_tx, &server.id, state).await;
+                            send_status(update_tx, &server.id, true, state, None, &pins.pinned);
+                        }
                     }
                     Some(Err(e)) => return Err(MonitorError::Event(e.to_string())),
                     None => return Err(MonitorError::Event("event stream closed".to_string())),
                 }
             }
-            _ = poll.tick() => {
-                let statuses = fetch_status(client, server, token).await?;
-                for (session_id, busy) in statuses {
-                    update_busy(state, &session_id, busy);
-                }
+            _ = heartbeat.tick() => {
                 pins.emit_finished(update_tx, &server.id, state).await;
                 send_status(update_tx, &server.id, true, state, None, &pins.pinned);
             }
@@ -154,10 +173,9 @@ fn update_busy(state: &mut ProtocolState, session_id: &str, busy: bool) {
 /// 解析一段 SSE 文本（可能包含多行），提取事件并更新内部状态。
 /// 返回需要发出的 AgentEvent。
 ///
-/// opencode 事件流支持两种信封：
-/// - v1 `/event`：`{"id","type","properties"}`
-/// - v2 `/global/event`：`{"directory","project","payload":{...v1 形状...}}`
-/// 会话字段都在 `properties` 里（v1/v2 一致）。
+/// opencode v2 的事件信封为
+/// `{"id","created","type","data":{...},"location":{"directory":...}}`，
+/// 会话标识在 `data.sessionID`。v1 的 `{"properties":{...}}` 形状仍兼容。
 fn handle_sse(
     server: &ServerConfig,
     text: &str,
@@ -171,9 +189,16 @@ fn handle_sse(
         let Ok(json) = serde_json::from_str::<Value>(payload.trim()) else {
             continue;
         };
-        let inner = json.get("payload").cloned().unwrap_or(json);
+        // v2 把负载放在 `data`；更早的包装用 `payload`；v1 则直接平铺。
+        let inner = json
+            .get("data")
+            .or_else(|| json.get("payload"))
+            .filter(|v| v.is_object())
+            .cloned()
+            .unwrap_or_else(|| json.clone());
         let event_type = inner
             .get("type")
+            .or_else(|| json.get("type"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
         // durable 事件带 `.N` 尾缀（如 session.created.1），归一化处理。
@@ -186,7 +211,11 @@ fn handle_sse(
         } else {
             event_type
         };
-        let props = inner.get("properties").cloned().unwrap_or_default();
+        let props = inner
+            .get("properties")
+            .filter(|v| v.is_object())
+            .cloned()
+            .unwrap_or_else(|| inner.clone());
         let session_id = props
             .get("sessionID")
             .or_else(|| props.get("session_id"))
@@ -217,6 +246,18 @@ fn handle_sse(
                     state.busy.remove(&id);
                 }
             }
+            // v2：一次执行回合的开始与结束。
+            "session.execution.started" => {
+                if let Some(id) = session_id {
+                    update_busy(state, &id, true);
+                }
+            }
+            "session.execution.succeeded" | "session.execution.failed" => {
+                if let Some(id) = session_id {
+                    update_busy(state, &id, false);
+                }
+            }
+            // v1 兼容。
             "session.status" => {
                 if let (Some(id), Some(status)) = (session_id, props.get("status")) {
                     let busy = status.get("type").and_then(|v| v.as_str()) != Some("idle");
@@ -247,74 +288,60 @@ fn handle_sse(
     events
 }
 
-/// 会话列表基线：填充标题缓存。
+/// 会话列表基线：填充标题缓存。v2 返回 `{"data":[...],"cursor":{...}}`。
 async fn fetch_baseline(
     client: &reqwest::Client,
     server: &ServerConfig,
     state: &mut ProtocolState,
     token: &CancellationToken,
 ) -> Result<(), MonitorError> {
-    let resp = get_json(client, server, "/session", token).await?;
-    let value: Value = serde_json::from_str(&resp)
-        .map_err(|e| MonitorError::Protocol(format!("invalid JSON: {}", e)))?;
-    let items = value.as_array().ok_or_else(|| {
-        MonitorError::Protocol("expecting session list array".to_string())
-    })?;
-    state.titles.clear();
-    for item in items {
-        let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("OpenCode 会话");
-        state.titles.insert(id.to_string(), title.to_string());
+    let mut titles: Vec<(String, String)> = Vec::new();
+    let mut cursor: Option<String> = None;
+    // 最多翻 20 页，避免异常服务端导致无限循环。
+    for _ in 0..20 {
+        let mut path = String::from("/api/session?limit=200");
+        if let Some(c) = &cursor {
+            path.push_str("&cursor=");
+            path.push_str(c);
+        }
+        let resp = get_json(client, server, &path, token).await?;
+        let value: Value = serde_json::from_str(&resp)
+            .map_err(|e| MonitorError::Protocol(format!("invalid JSON: {}", e)))?;
+        let items = value
+            .get("data")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                MonitorError::Protocol("expecting {data:[...]} session envelope".to_string())
+            })?;
+        for item in items {
+            let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let title = item
+                .get("title")
+                .and_then(|v| v.as_str())
+                .filter(|t| !t.is_empty())
+                .unwrap_or("OpenCode 会话");
+            titles.push((id.to_string(), title.to_string()));
+        }
+        cursor = value
+            .pointer("/cursor/next")
+            .and_then(|v| v.as_str())
+            .filter(|c| !c.is_empty())
+            .map(String::from);
+        if cursor.is_none() {
+            break;
+        }
     }
+    // 收集完整后再替换，避免清空后只填到第一页。
+    state.titles = titles.into_iter().collect();
     state.baseline_complete = true;
     Ok(())
 }
 
-/// 轮询会话状态：GET /session/status?directory=<dir>，返回 id -> busy。
-async fn fetch_status(
-    client: &reqwest::Client,
-    server: &ServerConfig,
-    token: &CancellationToken,
-) -> Result<Vec<(String, bool)>, MonitorError> {
-    let mut url = server.base_url().map_err(MonitorError::Config)?;
-    url.set_path("/session/status");
-    url.query_pairs_mut().append_pair(
-        "directory",
-        &agentpocket_core::server_url::opencode_directory(server),
-    );
-    let mut req = client.get(url).header("Accept", "application/json");
-    if !server.opencode_token().is_empty() {
-        req = req.header("Authorization", format!("Bearer {}", server.opencode_token()));
-    }
-    let resp = cancellable_request(async { req.send().await.map_err(|e| e.to_string()) }, token)
-        .await
-        .map_err(MonitorError::Http)?;
-    let status = resp.status();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| MonitorError::Http(e.to_string()))?;
-    if !status.is_success() {
-        return Err(MonitorError::Http(format!("HTTP {}", status)));
-    }
-    let value: Value = serde_json::from_str(&text)
-        .map_err(|e| MonitorError::Protocol(format!("invalid JSON: {}", e)))?;
-    let Some(map) = value.as_object() else {
-        return Ok(Vec::new());
-    };
-    let mut result = Vec::new();
-    for (id, status) in map {
-        let busy = status.get("type").and_then(|v| v.as_str()) != Some("idle");
-        result.push((id.clone(), busy));
-    }
-    Ok(result)
-}
-
 fn events_url(server: &ServerConfig) -> Result<url::Url, MonitorError> {
     let mut base = server.base_url().map_err(MonitorError::Config)?;
-    base.set_path("/global/event");
+    base.set_path("/api/event");
     Ok(base)
 }
 
@@ -329,10 +356,10 @@ async fn get_json(
         .map_err(MonitorError::Config)?
         .join(path)
         .map_err(MonitorError::Url)?;
-    let mut req = client.get(url).header("Accept", "application/json");
-    if !server.opencode_token().is_empty() {
-        req = req.header("Authorization", format!("Bearer {}", server.opencode_token()));
-    }
+    let req = authorize(
+        client.get(url).header("Accept", "application/json"),
+        server,
+    );
     let resp = cancellable_request(async { req.send().await.map_err(|e| e.to_string()) }, token)
         .await
         .map_err(MonitorError::Http)?;
@@ -390,7 +417,16 @@ mod tests {
     }
 
     #[test]
-    fn v2_envelope_parses_session_created() {
+    fn v2_data_envelope_parses_session_created() {
+        // v2 信封：负载在 data 内，properties 形状保持不变。
+        let data = r#"data: {"id":"evt_1","type":"session.created","data":{"sessionID":"ses_1","info":{"id":"ses_1","title":"写代码"}}}"#;
+        let (_, state) = apply(&test_server(""), data);
+        assert_eq!(state.titles.get("ses_1").map(|s| s.as_str()), Some("写代码"));
+    }
+
+    #[test]
+    fn v2_nested_payload_envelope_still_parses() {
+        // 兼容更早的 `{payload:{...v1...}}` 包装。
         let data = r#"data: {"directory":"/p","project":"prj","payload":{"id":"evt_1","type":"session.created","properties":{"sessionID":"ses_1","info":{"id":"ses_1","title":"写代码"}}}}"#;
         let (_, state) = apply(&test_server(""), data);
         assert_eq!(state.titles.get("ses_1").map(|s| s.as_str()), Some("写代码"));
@@ -398,7 +434,7 @@ mod tests {
 
     #[test]
     fn durable_suffix_normalized() {
-        let data = r#"data: {"id":"evt_1","type":"session.created.5","properties":{"sessionID":"ses_1","info":{"id":"ses_1","title":"写代码"}}}"#;
+        let data = r#"data: {"id":"evt_1","type":"session.created.5","data":{"sessionID":"ses_1","info":{"id":"ses_1","title":"写代码"}}}"#;
         let (_, state) = apply(&test_server(""), data);
         assert_eq!(state.titles.get("ses_1").map(|s| s.as_str()), Some("写代码"));
     }
@@ -410,7 +446,7 @@ mod tests {
         state.titles.insert("ses_1".into(), "写代码".into());
         state.raw_busy.insert("ses_1".into());
         state.busy.insert("ses_1".into());
-        let data = r#"data: {"id":"evt_2","type":"session.deleted","properties":{"sessionID":"ses_1"}}"#;
+        let data = r#"data: {"id":"evt_2","type":"session.deleted","data":{"sessionID":"ses_1"}}"#;
         let events = handle_sse(&server, data, &mut state);
         assert!(events.is_empty());
         assert!(!state.titles.contains_key("ses_1"));
@@ -419,7 +455,42 @@ mod tests {
     }
 
     #[test]
-    fn session_status_marks_busy() {
+    fn v2_execution_started_marks_busy() {
+        let server = test_server("");
+        let mut state = ProtocolState::default();
+        state.titles.insert("ses_1".into(), "写代码".into());
+        let data = r#"data: {"id":"evt_3","type":"session.execution.started","data":{"sessionID":"ses_1"}}"#;
+        handle_sse(&server, data, &mut state);
+        assert!(state.busy.contains("ses_1"));
+        assert!(state.raw_busy.contains("ses_1"));
+    }
+
+    #[test]
+    fn v2_execution_succeeded_clears_busy() {
+        let server = test_server("");
+        let mut state = ProtocolState::default();
+        state.titles.insert("ses_1".into(), "写代码".into());
+        state.raw_busy.insert("ses_1".into());
+        state.busy.insert("ses_1".into());
+        let data = r#"data: {"id":"evt_4","type":"session.execution.succeeded","data":{"sessionID":"ses_1"}}"#;
+        handle_sse(&server, data, &mut state);
+        assert!(!state.busy.contains("ses_1"));
+        assert!(!state.raw_busy.contains("ses_1"));
+    }
+
+    #[test]
+    fn v2_execution_failed_clears_busy() {
+        let server = test_server("");
+        let mut state = ProtocolState::default();
+        state.raw_busy.insert("ses_1".into());
+        state.busy.insert("ses_1".into());
+        let data = r#"data: {"id":"evt_5","type":"session.execution.failed","data":{"sessionID":"ses_1"}}"#;
+        handle_sse(&server, data, &mut state);
+        assert!(!state.busy.contains("ses_1"));
+    }
+
+    #[test]
+    fn v1_session_status_marks_busy() {
         let server = test_server("");
         let mut state = ProtocolState::default();
         state.titles.insert("ses_1".into(), "写代码".into());
@@ -431,7 +502,7 @@ mod tests {
 
     #[test]
     fn session_error_produces_failed_event() {
-        let data = r#"data: {"id":"evt_4","type":"session.error","properties":{"sessionID":"ses_1"}}"#;
+        let data = r#"data: {"id":"evt_4","type":"session.error","data":{"sessionID":"ses_1"}}"#;
         let (events, state) = apply(&test_server(""), data);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, AgentEventKind::Failed);
@@ -440,11 +511,69 @@ mod tests {
     }
 
     #[test]
+    fn real_v2_execution_sequence_captured_from_server() {
+        // 实测 v2 事件样本：started 后 succeeded 对应一次完整回合。
+        let started = r#"data: {"id":"evt_0d2711843001VRtmJjVQBodo27","created":1790237022275,"type":"session.execution.started","data":{"sessionID":"ses_f2d999e91ffeDMQ4ckFCeAl0ge"},"durable":{"aggregateID":"ses_f2d999e91ffeDMQ4ckFCeAl0ge"}}"#;
+        let succeeded = r#"data: {"id":"evt_0d271291f001toSXxqMlQrSqQh","created":1790237026591,"type":"session.execution.succeeded","data":{"sessionID":"ses_f2d999e91ffeDMQ4ckFCeAl0ge"},"durable":{"aggregateID":"ses_f2d999e91ffeDMQ4ckFCeAl0ge"}}"#;
+        let server = test_server("opencode:opencode");
+        let mut state = ProtocolState::default();
+        handle_sse(&server, started, &mut state);
+        assert!(state.busy.contains("ses_f2d999e91ffeDMQ4ckFCeAl0ge"));
+        handle_sse(&server, succeeded, &mut state);
+        assert!(!state.busy.contains("ses_f2d999e91ffeDMQ4ckFCeAl0ge"));
+    }
+
+    #[test]
     fn non_session_events_ignored() {
-        let data = r#"data: {"id":"evt_5","type":"message.part.updated","properties":{"sessionID":"ses_1"}}"#;
+        let data = r#"data: {"id":"evt_5","type":"session.text.delta","data":{"sessionID":"ses_1"}}"#;
         let (events, state) = apply(&test_server(""), data);
         assert!(events.is_empty());
         assert!(state.titles.is_empty());
         assert!(state.busy.is_empty());
+    }
+
+    #[test]
+    fn server_connected_event_ignored() {
+        let data = r#"data: {"id":"evt_0","type":"server.connected","data":{}}"#;
+        let (events, state) = apply(&test_server(""), data);
+        assert!(events.is_empty());
+        assert!(state.busy.is_empty());
+    }
+
+    #[test]
+    fn events_url_uses_api_prefix() {
+        let url = events_url(&test_server("")).unwrap();
+        assert_eq!(url.as_str(), "http://127.0.0.1:4096/api/event");
+    }
+
+    #[test]
+    fn authorization_header_is_basic_not_bearer() {
+        let req = authorize(
+            reqwest::Client::new()
+                .get("http://127.0.0.1:4096/api/config"),
+            &test_server("opencode:opencode"),
+        )
+        .build()
+        .unwrap();
+        assert_eq!(
+            req.headers()
+                .get("Authorization")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "Basic b3BlbmNvZGU6b3BlbmNvZGU="
+        );
+    }
+
+    #[test]
+    fn no_authorization_header_without_credentials() {
+        let req = authorize(
+            reqwest::Client::new()
+                .get("http://127.0.0.1:4096/api/config"),
+            &test_server(""),
+        )
+        .build()
+        .unwrap();
+        assert!(req.headers().get("Authorization").is_none());
     }
 }

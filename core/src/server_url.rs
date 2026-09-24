@@ -42,15 +42,11 @@ pub fn build_server_url(
             }
         }
         Backend::Opencode => {
-            // opencode web 的会话页路由为 /{base64url(directory)}/session/{id}；
+            // opencode v2 的会话页路由为 /server/{base64url(serverUrl)}/session/{id}；
             // 未指定会话时回退根路径。
             if let Some(id) = session_id.filter(|s| !s.is_empty()) {
-                let dir = opencode_directory(server);
-                url.set_path(&format!(
-                    "{}/session/{}",
-                    encode_base64url(dir.as_bytes()),
-                    id
-                ));
+                let key = opencode_server_key(&url);
+                url.set_path(&format!("/server/{key}/session/{id}"));
             } else {
                 url.set_path("/");
             }
@@ -60,17 +56,16 @@ pub fn build_server_url(
     Ok(url)
 }
 
-/// opencode 会话页所属的目录。token 字段对 opencode 承载两用信息：
-/// `dir=<path>` 显式指定工作目录，或裸路径；仅有 API key（非路径）时回退根目录。
-pub fn opencode_directory(server: &ServerConfig) -> String {
-    let token = server.opencode_token();
-    if let Some(path) = token.strip_prefix("dir=") {
-        return path.to_string();
-    }
-    if token.starts_with('/') {
-        return token.to_string();
-    }
-    "/".to_string()
+/// opencode v2 前端用于标识服务器的 key：`base64url(服务器根 URL)`。
+/// 前端把整个 origin（含 scheme/host/port，无尾部斜杠）编码进路由段。
+pub fn opencode_server_key(base: &Url) -> String {
+    let origin = format!(
+        "{}://{}:{}",
+        base.scheme(),
+        base.host_str().unwrap_or_default(),
+        base.port_or_known_default().unwrap_or_default()
+    );
+    encode_base64url(origin.as_bytes())
 }
 
 /// URL-safe base64（无填充），与 opencode web 前端 `cn()` 的编码一致。
@@ -155,28 +150,39 @@ mod tests {
     }
 
     #[test]
-    fn opencode_session_url_encodes_directory() {
-        // 与 opencode web 前端一致：/{base64url(directory)}/session/{id}。
-        let mut srv = server("", Backend::Opencode);
-        srv.token = "dir=/home/cvlife/progs/AgentPocket".to_string();
-        let url = build_server_url(&srv, Some("ses_abc")).unwrap();
+    fn opencode_session_url_encodes_server_origin() {
+        // v2 前端一致：/server/{base64url(origin)}/session/{id}。
+        let url = build_server_url(
+            &server("opencode:secret", Backend::Opencode),
+            Some("ses_abc"),
+        )
+        .unwrap();
         assert_eq!(
             url.as_str(),
-            "http://100.64.0.2:3080/L2hvbWUvY3ZsaWZlL3Byb2dzL0FnZW50UG9ja2V0/session/ses_abc"
+            "http://100.64.0.2:3080/server/aHR0cDovLzEwMC42NC4wLjI6MzA4MA/session/ses_abc"
         );
     }
 
     #[test]
-    fn opencode_session_url_defaults_to_root_directory() {
-        let url = build_server_url(&server("", Backend::Opencode), Some("ses_abc")).unwrap();
-        assert_eq!(url.as_str(), "http://100.64.0.2:3080/Lw/session/ses_abc");
+    fn opencode_server_key_matches_frontend_encoding() {
+        // 真实 v2 前端：base64url("http://127.0.0.1:4096") == aHR0cDovLzEyNy4wLjAuMTo0MDk2
+        let base = Url::parse("http://127.0.0.1:4096/").unwrap();
+        assert_eq!(
+            opencode_server_key(&base),
+            "aHR0cDovLzEyNy4wLjAuMTo0MDk2"
+        );
     }
 
     #[test]
-    fn opencode_token_without_prefix_treated_as_path() {
-        let mut srv = server("", Backend::Opencode);
-        srv.token = "/home/work".to_string();
+    fn opencode_session_url_ignores_credentials_in_token() {
+        // token 现在只是 user:pass，不再参与路由构造。
+        let mut srv = server("bob:hunter2", Backend::Opencode);
+        srv.host = "127.0.0.1".to_string();
+        srv.port = 4096;
         let url = build_server_url(&srv, Some("ses_1")).unwrap();
-        assert_eq!(url.as_str(), "http://100.64.0.2:3080/L2hvbWUvd29yaw/session/ses_1");
+        assert_eq!(
+            url.as_str(),
+            "http://127.0.0.1:4096/server/aHR0cDovLzEyNy4wLjAuMTo0MDk2/session/ses_1"
+        );
     }
 }

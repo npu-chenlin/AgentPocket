@@ -406,12 +406,12 @@ pub async fn probe_backend(server: &ServerConfig) -> Result<Backend, ProbeError>
 async fn probe_opencode(server: &ServerConfig) -> Result<(), String> {
     let client = reqwest::Client::new();
     let url = match server.base_url() {
-        Ok(url) => url.join("/config").map_err(|e| e.to_string())?,
+        Ok(url) => url.join("/api/config").map_err(|e| e.to_string())?,
         Err(e) => return Err(e.to_string()),
     };
     let mut req = client.get(url).header("Accept", "application/json");
-    if !server.opencode_token().is_empty() {
-        req = req.header("Authorization", format!("Bearer {}", server.opencode_token()));
+    if let Some(header) = server.opencode_basic_header() {
+        req = req.header("Authorization", header);
     }
     let resp = req.send().await.map_err(|e| e.to_string())?;
     let status = resp.status();
@@ -421,10 +421,11 @@ async fn probe_opencode(server: &ServerConfig) -> Result<(), String> {
     }
     let value: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("invalid JSON: {}", e))?;
-    if value.is_object() {
+    // v2 的 /api/config 返回配置文件列表（数组）；旧版返回单个对象，两者都接受。
+    if value.is_object() || value.is_array() {
         Ok(())
     } else {
-        Err("response is not a JSON object".to_string())
+        Err("response is neither a JSON object nor array".to_string())
     }
 }
 

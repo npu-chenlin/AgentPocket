@@ -33,6 +33,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewConfiguration;
 import android.view.animation.OvershootInterpolator;
+import android.webkit.HttpAuthHandler;
 import android.webkit.PermissionRequest;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -411,6 +412,28 @@ public class MainActivity extends ComponentActivity {
                 return true;
             }
 
+            /**
+             * opencode v2 起服务端要求 HTTP Basic 认证（密码来自 OPENCODE_SERVER_PASSWORD）。
+             * WebView 默认不处理 401 challenge，会直接取消请求导致页面空白，
+             * 所以这里必须主动交出凭据。
+             * 注意：凭据绝不能写进 URL —— 浏览器/WebView 会拒绝构造
+             * 「URL 含凭据」的 fetch（同源 API 请求会全部失败）。
+             */
+            @Override public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handler,
+                                                               String host, String realm) {
+                ServerStore.Server server = ServerStore.active(MainActivity.this);
+                if (server != null && isTrustedServerOrigin(Uri.parse(server.baseUrl()))
+                        && ServerStore.Server.BACKEND_OPENCODE.equals(server.backend)) {
+                    String[] credential = opencodeCredential(server);
+                    if (credential != null) {
+                        handler.proceed(credential[0], credential[1]);
+                        return;
+                    }
+                }
+                // 没有可用凭据时取消，避免弹出系统登录框挡住界面。
+                handler.cancel();
+            }
+
             @Override public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
                 injectUuidPolyfill(view);
@@ -464,25 +487,45 @@ public class MainActivity extends ComponentActivity {
         handleSyncIntent(intent);
     }
 
-    /** opencode 工作目录：token 字段承载（dir=/path、/path 或 Bearer 令牌）。 */
-    private String opencodeDirectory(ServerStore.Server server) {
-        String t = server.token == null ? "" : server.token.trim();
-        if (t.startsWith("dir=")) return t.substring(4);
-        if (t.startsWith("/")) return t;
-        return "/";
+    /**
+     * opencode 的 HTTP Basic 凭据：token 字段承载 user:pass。
+     * opencode 服务端固定用户名为 opencode（忽略 OPENCODE_SERVER_USERNAME），
+     * 因此只填密码时补上默认用户名。返回 {user, pass}，无凭据返回 null。
+     */
+    private static String[] opencodeCredential(ServerStore.Server server) {
+        String raw = server.token == null ? "" : server.token.trim();
+        if (raw.isEmpty()) return null;
+        int colon = raw.indexOf(':');
+        if (colon < 0) return new String[]{"opencode", raw};
+        String user = raw.substring(0, colon).trim();
+        String pass = raw.substring(colon + 1);
+        if (user.isEmpty()) user = "opencode";
+        return new String[]{user, pass};
     }
 
-    private String base64url(String s) {
+    /**
+     * opencode v2 前端用于标识服务器的路由 key：base64url(服务器根 URL)。
+     * 例：http://127.0.0.1:4096 → aHR0cDovLzEyNy4wLjAuMTo0MDk2
+     */
+    private static String opencodeServerKey(ServerStore.Server server) {
+        String origin = "http://" + server.host + ":" + server.port;
+        return base64url(origin);
+    }
+
+    private static String base64url(String s) {
         return android.util.Base64.encodeToString(s.getBytes(java.nio.charset.StandardCharsets.UTF_8),
                 android.util.Base64.NO_WRAP | android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING);
     }
 
-    /** 会话的前端路由路径：kimi 为 /sessions/{id}，opencode 为 /{base64url(dir)}/session/{id}，dsh 无。 */
+    /**
+     * 会话的前端路由路径：kimi 为 /sessions/{id}；
+     * opencode v2 为 /server/{base64url(origin)}/session/{id}；dsh 无深链。
+     */
     private String sessionPath(ServerStore.Server server, String sessionId) {
         if (server == null || sessionId == null || sessionId.isEmpty()) return "/";
         if (ServerStore.Server.BACKEND_KIMI.equals(server.backend)) return "/sessions/" + sessionId;
         if (ServerStore.Server.BACKEND_OPENCODE.equals(server.backend))
-            return "/" + base64url(opencodeDirectory(server)) + "/session/" + sessionId;
+            return "/server/" + opencodeServerKey(server) + "/session/" + sessionId;
         return "/";
     }
 
@@ -1430,7 +1473,7 @@ public class MainActivity extends ComponentActivity {
         EditText port = modernField("端口", false);
         port.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
         port.setText(String.valueOf(editing == null ? 58627 : editing.port));
-        EditText token = modernField("Token（Kimi 专用，dsh 留空）", false);
+        EditText token = modernField("Token（Kimi 令牌；OpenCode 填登录密码）", false);
         token.setInputType(android.text.InputType.TYPE_CLASS_TEXT |
                 android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
         token.setText(editing == null ? "" : editing.token);
@@ -1439,7 +1482,7 @@ public class MainActivity extends ComponentActivity {
                     if (!checked) return;
                     final String selected = selectedBackend(backendRadios);
                     token.setHint(ServerStore.Server.BACKEND_OPENCODE.equals(selected)
-                            ? "OpenCode 目录或访问令牌（如 /path 或 dir=/path，Bearer 令牌可选）"
+                            ? "OpenCode 登录密码或 用户名:密码（如 opencode:opencode）"
                             : ServerStore.Server.BACKEND_DSH.equals(selected)
                                     ? "Token（dsh 留空）"
                                     : "Token（Kimi 专用）");
@@ -1450,7 +1493,7 @@ public class MainActivity extends ComponentActivity {
         // 编辑态：setChecked 发生在监听器绑定前，需手动让 hint 贴合当前选中后端。
         String initialBackend = selectedBackend(backendRadios);
         token.setHint(ServerStore.Server.BACKEND_OPENCODE.equals(initialBackend)
-                ? "OpenCode 目录或访问令牌（如 /path 或 dir=/path，Bearer 令牌可选）"
+                ? "OpenCode 登录密码或 用户名:密码（如 opencode:opencode）"
                 : ServerStore.Server.BACKEND_DSH.equals(initialBackend)
                         ? "Token（dsh 留空）"
                         : "Token（Kimi 专用）");
@@ -1465,7 +1508,7 @@ public class MainActivity extends ComponentActivity {
             token.setText(parsed.token);
             if (name.getText().toString().trim().isEmpty()) name.setText(parsed.host + ":" + parsed.port);
             Toast.makeText(this, "已识别，正在探测 Agent 类型…", Toast.LENGTH_SHORT).show();
-            probeBackend(parsed.host, parsed.port, backend -> runOnUiThread(() -> {
+            probeBackend(parsed.host, parsed.port, token.getText().toString().trim(), backend -> runOnUiThread(() -> {
                 String chosen = backend != null ? backend : parsed.backend;
                 for (RadioButton r : backendRadios) {
                     r.setChecked(chosen.equals(r.getTag()));
@@ -1529,7 +1572,7 @@ public class MainActivity extends ComponentActivity {
             if (ServerStore.Server.BACKEND_KIMI.equals(backend)) {
                 tokenValue = token.getText().toString().trim();
             } else if (ServerStore.Server.BACKEND_OPENCODE.equals(backend)) {
-                // opencode：token 字段承载目录（dir=/path 或 /path）或 Bearer 令牌，原样保留
+                // opencode v2：token 字段承载 HTTP Basic 凭据 user:pass（只填密码时补默认用户）
                 tokenValue = token.getText().toString().trim();
             } else {
                 tokenValue = "";
@@ -1637,6 +1680,20 @@ public class MainActivity extends ComponentActivity {
             if (host == null || host.isEmpty()) return null;
             if (port < 1) port = "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
             String foundToken = "";
+            if (isOc) {
+                // opencode v2：凭据来自 OPENCODE_SERVER_PASSWORD（或 user:pass），
+                // 直接从粘贴文本提取，避免用户手抄。
+                Matcher pw = Pattern.compile(
+                        "(?i)OPENCODE_SERVER_PASSWORD\\s*=\\s*(\\S+)").matcher(text);
+                if (pw.find()) {
+                    foundToken = "opencode:" + pw.group(1);
+                } else {
+                    Matcher up = Pattern.compile(
+                            "(?i)(?:user(?:name)?|OPENCODE_SERVER_USERNAME)\\s*[:=]\\s*"
+                                    + "([^\\s:]+)\\s*[:=]\\s*(\\S+)").matcher(text);
+                    if (up.find()) foundToken = up.group(1) + ":" + up.group(2);
+                }
+            }
             if (!isDsh && !isOc) {
                 String fragment = uri.getFragment();
                 if (fragment != null) foundToken = Uri.parse("http://local/?" + fragment).getQueryParameter("token");
@@ -1659,10 +1716,12 @@ public class MainActivity extends ComponentActivity {
     /**
      * 自动探测服务器后端类型。
      * dsh 特征：POST /api/agentPreset.list 返回 RPC 信封（type=server-response）；
-     * opencode 特征：GET /config 返回 JSON 对象（OpenCode 的全局配置），且 GET /status 或 /session 存在；
+     * opencode 特征：GET /api/config 返回 JSON（v2 为配置文件数组），需要 HTTP Basic 认证；
      * Kimi 特征：GET /api/v2/sessions 存在（无 token 时 401/403 也算存在）。
+     *
+     * @param opencodeToken 编辑框里的 token（user:pass），供 opencode 探测携带认证
      */
-    private void probeBackend(String host, int port, BackendProbe callback) {
+    private void probeBackend(String host, int port, String opencodeToken, BackendProbe callback) {
         String base = "http://" + host + ":" + port;
         Request dshProbe = new Request.Builder()
                 .url(base + "/api/agentPreset.list")
@@ -1681,13 +1740,26 @@ public class MainActivity extends ComponentActivity {
                 probeOpencode();
             }
             private void probeOpencode() {
-                Request ocProbe = new Request.Builder().url(base + "/config").build();
-                probeClient.newCall(ocProbe).enqueue(new Callback() {
+                Request.Builder builder = new Request.Builder()
+                        .url(base + "/api/config")
+                        .header("Accept", "application/json");
+                String raw = opencodeToken == null ? "" : opencodeToken.trim();
+                if (!raw.isEmpty()) {
+                    int colon = raw.indexOf(':');
+                    String user = colon < 0 ? "opencode" : raw.substring(0, colon).trim();
+                    String pass = colon < 0 ? raw : raw.substring(colon + 1);
+                    if (user.isEmpty()) user = "opencode";
+                    builder.header("Authorization", basicHeader(user + ":" + pass));
+                }
+                probeClient.newCall(builder.build()).enqueue(new Callback() {
                     @Override public void onFailure(Call call, IOException e) { probeKimi(); }
                     @Override public void onResponse(Call call, Response response) {
                         try (Response r = response) {
                             String body = r.body() != null ? r.body().string() : "";
-                            if (r.isSuccessful() && body.trim().startsWith("{")) {
+                            String trimmed = body.trim();
+                            // v2 返回配置文件数组，v1 返回单个配置对象。
+                            if (r.isSuccessful()
+                                    && (trimmed.startsWith("[") || trimmed.startsWith("{"))) {
                                 callback.onResult(ServerStore.Server.BACKEND_OPENCODE);
                                 return;
                             }
@@ -1716,13 +1788,17 @@ public class MainActivity extends ComponentActivity {
 
     /**
      * workaround #28340：opencode 前端把项目注册表按「访问 origin」分键存 localStorage
-     * （localhost→"local"，LAN/Tailscale IP→独立键）。手机通过 Tailscale/LAN 访问时
-     * 该 origin 的注册表为空 → home 侧栏 join 不到 project，会话列表全部被 Drop。
+     * （`opencode.global.dat:server`，localhost→"local"，LAN/Tailscale IP→独立键）。
+     * 手机通过 Tailscale/LAN 访问时该 origin 的注册表为空 → home 侧栏 join 不到
+     * project，会话列表全部被 Drop。
      *
-     * 方案：加载原版 root 页后注入 JS，从 /project 拉取真实 worktree，播种
-     * `opencode.global.dat:server` 里当前 origin 的项目注册表，然后 location.reload()
-     * 让前端用原版逻辑自己原生渲染项目与会话（不伪造任何 DOM，视觉完全一致）。
-     * 已播种且内容不变时幂等返回，避免 reload 死循环；深链会话页跳过。
+     * 方案：加载原版 root 页后注入 JS，从 `/api/project` 拉取真实项目，播种
+     * 当前 origin 的项目注册表，然后 location.reload() 让前端用原版逻辑自己原生
+     * 渲染项目与会话（不伪造任何 DOM，视觉完全一致）。
+     * 用独立版本哨兵保证幂等：版本相同直接返回，最多 reload 一次。
+     * 深链会话页跳过。
+     *
+     * v2 变化：REST 前端移到 `/api/`，项目路径字段 `worktree` 改名为 `canonical`。
      */
     private void seedOpencodeProjectRegistry(WebView view, String url) {
         ServerStore.Server server = ServerStore.active(this);
@@ -1742,9 +1818,15 @@ public class MainActivity extends ComponentActivity {
       + "  var VKEY = '__apSeedV';"
       + "  var lastV = null;"
       + "  try { lastV = localStorage.getItem(VKEY); } catch(e){}"
-      + "  fetch('/project').then(function(r){ return r.json(); }).then(function(projects){"
-      + "    var ws = (projects || []).filter(function(p){ return p && p.worktree && p.worktree !== '/'; })"
-      + "      .map(function(p){ return { worktree: p.worktree, expanded: true }; });"
+      + "  fetch('/api/project', {headers:{'Accept':'application/json'}}).then(function(r){"
+      + "    if (!r.ok) throw new Error('HTTP ' + r.status);"
+      + "    return r.json();"
+      + "  }).then(function(projects){"
+      // v2 字段为 canonical，v1 为 worktree，两个都兼容。
+      + "    var ws = (projects || []).map(function(p){"
+      + "      return p && (p.canonical || p.worktree) || null;"
+      + "    }).filter(function(w){ return w && w !== '/'; })"
+      + "      .map(function(w){ return { worktree: w, expanded: true }; });"
       + "    if (!ws.length) { window.__apSeedStarted = false; return; }"
       + "    var originKey = location.origin;"
       + "    var version = ws.map(function(x){ return x.worktree; }).sort().join('|');"
@@ -1768,6 +1850,13 @@ public class MainActivity extends ComponentActivity {
                 .replace("\"", "&quot;").replace("'", "&#39;");
     }
 
+    /** 构造 HTTP Basic 头值。 */
+    static String basicHeader(String userPass) {
+        return "Basic " + android.util.Base64.encodeToString(
+                userPass.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                android.util.Base64.NO_WRAP);
+    }
+
     private void loadConfiguredUrl(String sessionId) {
         ServerStore.Server server = ServerStore.active(this);
         if (server == null) return;
@@ -1777,20 +1866,14 @@ public class MainActivity extends ComponentActivity {
             return;
         }
         if (ServerStore.Server.BACKEND_OPENCODE.equals(server.backend)) {
+            // 认证交给 WebViewClient.onReceivedHttpAuthRequest（HTTP Basic）。
+            // 这里绝不能把凭据塞进 URL 或 loadUrl 的 header：
+            // 凭据进 URL 会让页面内所有同源 fetch 构造失败（WebView/浏览器都会拒绝），
+            // 而 loadUrl 的 header 只作用于这一次文档请求，后续 API 请求拿不到。
             if (sessionId != null && !sessionId.isEmpty()) {
-                // 有指定会话 → 直接深链
-                String url = server.baseUrl() + "/" + base64url(opencodeDirectory(server)) + "/session/" + sessionId;
-                String token = server.token == null ? "" : server.token.trim();
-                boolean bearer = !token.isEmpty() && !token.startsWith("dir=") && !token.startsWith("/");
-                if (bearer) {
-                    java.util.Map<String, String> headers = new java.util.HashMap<>();
-                    headers.put("Authorization", "Bearer " + token);
-                    webView.loadUrl(url, headers);
-                } else {
-                    webView.loadUrl(url);
-                }
+                webView.loadUrl(server.baseUrl() + sessionPath(server, sessionId));
             } else {
-                // 加载原版 root 页面；onPageFinished 会检测并注入会话列表（workaround #27837）
+                // 加载原版 root 页面；onPageFinished 检测并注入项目注册表（workaround #28340）
                 webView.loadUrl(server.baseUrl() + "/");
             }
             return;

@@ -118,7 +118,7 @@ app.innerHTML = `
         <label class="field field--host">主机 IP / 域名<input name="host" autocomplete="off" placeholder="100.64.0.2" /><small class="field-error" data-error-for="host"></small></label>
         <label class="field field--port">端口<input name="port" type="number" min="1" max="65535" inputmode="numeric" /><small class="field-error" data-error-for="port"></small></label>
         <label class="field">Agent 类型<select name="backend"><option value="dsh">dsh</option><option value="kimi">Kimi</option><option value="opencode">OpenCode</option></select><small class="field-error" data-error-for="backend"></small></label>
-        <label class="field">访问令牌<input name="token" type="password" autocomplete="new-password" placeholder="可留空" /><small>令牌仅在编辑时读取，不会出现在服务连接列表中。</small></label>
+        <label class="field">访问令牌<input name="token" type="password" autocomplete="new-password" placeholder="可留空" /><small>Kimi 填访问令牌；OpenCode 填登录密码（或 用户名:密码，默认用户 opencode）。仅在编辑时读取，不会出现在服务连接列表中。</small></label>
       </div>
       <div id="form-error" class="inline-error" role="alert"></div>
       <div class="modal__actions">

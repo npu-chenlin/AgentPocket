@@ -83,10 +83,13 @@ socat TCP-LISTEN:3080,bind=<Tailscale IP>,reuseaddr,fork TCP:127.0.0.1:3080
 **OpenCode**（使用 [OpenCode](https://opencode.ai) 安装，需要 Node.js 18+）：
 
 ```shell
-opencode serve --hostname 0.0.0.0 --port 4096
+OPENCODE_SERVER_PASSWORD='你的密码' opencode serve --hostname 0.0.0.0 --port 4096
 ```
 
 OpenCode 默认只监听 `127.0.0.1`；`--hostname 0.0.0.0` 让它在 Tailscale 地址上监听。
+v2 起 Web 与 API 都要求登录：未设 `OPENCODE_SERVER_PASSWORD` 时服务不设防，设了之后
+客户端必须用 **HTTP Basic** 认证，用户名固定为 `opencode`（`OPENCODE_SERVER_USERNAME`
+当前被服务端忽略）。
 
 ### 添加服务连接
 
@@ -95,9 +98,13 @@ OpenCode 默认只监听 `127.0.0.1`；`--hostname 0.0.0.0` 让它在 Tailscale 
 | 后端 | 地址示例 | token 字段 |
 | --- | --- | --- |
 | Kimi | `http://<Tailscale IP>:58627` | 可选访问令牌 |
-| dsh | `http://<Tailscale IP>:3080` | 可选访问令牌 |
-| OpenCode | `http://<Tailscale IP>:4096` | `dir=/path` 或目录路径，用于固定打开的目录 |
+| dsh | `http://<Tailscale IP>:3080` | 留空 |
+| OpenCode | `http://<Tailscale IP>:4096` | 登录密码，或 `用户名:密码`（默认用户 `opencode`） |
 
+> **OpenCode 认证**：服务端的密码是 `OPENCODE_SERVER_PASSWORD`，在 AgentPocket 的 token
+> 字段填同一个密码即可（填 `opencode:密码` 或只填密码都行）。凭据由各端以 HTTP Basic
+> 头发出，手机端由 WebView 的认证回调自动应答，不会弹登录框。
+>
 > 若 OpenCode 经 LAN/Tailscale IP 访问时侧栏会话列表为空，这是 OpenCode Web 前端的已知问题（按访问来源分键存储项目注册表）。AgentPocket 加载首页后会播种项目注册表并让 OpenCode 前端自行渲染项目与会话，远端打开即可看到历史会话，无需手动处理。
 
 ### 安装与构建
@@ -130,6 +137,7 @@ OpenCode 默认只监听 `127.0.0.1`；`--hostname 0.0.0.0` 让它在 Tailscale 
 
 - **连接失败/找不到服务？** 先确认电脑和手机在同一 Tailnet、服务地址用 `<Tailscale IP>` 而非 `127.0.0.1`。
 - **dsh 手机打不开？** dsh 默认监听本机，先用 `socat` 转发，见上方快速开始。
+- **OpenCode 连不上 / 一直转圈？** v2 起必须登录：确认服务端设了 `OPENCODE_SERVER_PASSWORD`，且 AgentPocket 的 token 字段填了同一个密码。
 - **OpenCode 没有历史会话？** 用新版 AgentPocket 打开首页即可，项目注册表会自动播种。
 - **token 会被同步吗？** 会，服务连接导出/二维码包含凭据，请按密钥对待。
 
@@ -138,7 +146,8 @@ OpenCode 默认只监听 `127.0.0.1`；`--hostname 0.0.0.0` 让它在 Tailscale 
 - AgentPocket 是非官方客户端，与 Moonshot AI/Kimi、DeepSeek、OpenCode 官方无隶属关系。
 - Tailscale 只解决网络可达性；AgentPocket 不替用户配置防火墙、端口转发或可信网络。
 - Kimi 的 `--dangerous-bypass-auth`、Daemon 的节点端点和 Kimi 配置分发依赖 Tailnet 的信任边界。节点间 mesh 端点使用明文 HTTP 且无独立鉴权，只在可信 Tailnet 中使用。
-- 服务连接导出、桌面配置和二维码可能包含访问凭据，请按密钥处理；不要提交到公开仓库或发送给不可信的人。
+- 服务连接导出、桌面配置和二维码可能包含访问凭据（含 OpenCode 登录密码），请按密钥处理；不要提交到公开仓库或发送给不可信的人。
+- OpenCode v2 的 Web/API 默认需要登录；AgentPocket 会带上 Basic 凭据访问被信任的服务地址，凭据不会发给其它站点。
 - Daemon 安装脚本会安装 systemd 服务并使用 sudo；使用前请检查脚本内容、发布资产和目标机器。
 - Windows 与 macOS Desktop 尚未进行正式发布验证。
 

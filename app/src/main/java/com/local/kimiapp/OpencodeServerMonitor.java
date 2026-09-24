@@ -24,25 +24,23 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 /**
- * OpenCode web 服务器监听器。
+ * OpenCode web 服务器监听器（适配 opencode v2，实测协议）。
  *
- * 协议要点（实测）：
- * 1. 会话列表：GET /session → JSON 数组（id / title / directory）。
- * 2. 忙碌状态：GET /session/status?directory=&lt;dir&gt; → {sessionId: {type: busy|idle|retry}}，
- *    status 必须带与前端一致的 directory 参数才会返回结果。
- * 3. 事件流：GET /global/event（SSE，text/event-stream），帧为
- *    {"directory","project","payload":{"id","type","properties"}}；
- *    v1 /event 则是 {"id","type","properties"}。会话事件类型
- *    session.created/updated/deleted/status/idle 与翻转（带 `.N` 尾缀）。
- * 4. 无内置鉴权：随 `opencode serve --port N` 部署时的 Bearer token（开 --dangerous-bypass-auth 则留空）。
+ * 1. 鉴权：HTTP Basic。用户名为 opencode（服务端固定，忽略 OPENCODE_SERVER_USERNAME），
+ *    密码来自 OPENCODE_SERVER_PASSWORD。token 字段承载 user:pass，只写密码时补默认用户。
+ * 2. 会话列表：GET /api/session → {"data":[{id,title,...}],"cursor":{...}}。
+ * 3. 忙闲：v2 没有可轮询的状态端点，只在事件流里体现。
+ * 4. 事件流：GET /api/event（SSE），帧为
+ *    {"id","created","type","data":{...},"location":{"directory":...}}。
+ *    一次回合对应 session.execution.started → session.execution.succeeded/failed；
+ *    durable 事件 type 可能带 `.N` 尾缀。
+ * 5. 全部 REST 接口在 /api/ 前缀下。
  */
 public class OpencodeServerMonitor extends ServerMonitor {
     private static final String TAG = "OpencodeMonitor";
-    private static final long STATUS_POLL_MS = 10_000;
 
     private final Map<String, Boolean> busyBySession = Collections.synchronizedMap(new HashMap<>());
     private final AtomicBoolean connecting = new AtomicBoolean();
-    private final AtomicBoolean polling = new AtomicBoolean();
     private String eventUrl;
 
     public OpencodeServerMonitor(MonitorHost host, ServerStore.Server server, OkHttpClient client) {
@@ -52,77 +50,32 @@ public class OpencodeServerMonitor extends ServerMonitor {
     @Override public void start() {
         if (stopped) return;
         connected = false;
-        eventUrl = server.baseUrl() + "/global/event";
-        fetchSessionBaseline(() -> {
-            readEventStream();
-            // 轮询只随首个成功基线启动一次；后续重连复用现有轮询，避免线程累积。
-            if (polling.compareAndSet(false, true)) scheduleStatusPoll();
-        });
+        eventUrl = server.baseUrl() + "/api/event";
+        // v2 的忙闲只来自 SSE 事件，不再有状态轮询。
+        fetchSessionBaseline(this::readEventStream);
     }
 
-    /** 轮询兜底：/session/status 不保证经 SSE 推送，（尤其断线重连后）用它校准状态。 */
-    private void scheduleStatusPoll() {
-        if (stopped) return;
-        new Thread(() -> {
-            try {
-                Thread.sleep(STATUS_POLL_MS);
-            } catch (InterruptedException ignored) {
-                return;
-            }
-            if (stopped) return;
-            pollStatus();
-            scheduleStatusPoll();
-        }, "opencode-poll-" + server.id).start();
-    }
-
-    private void pollStatus() {
-        if (stopped) return;
-        Response response = null;
-        try {
-            HttpUrl url = HttpUrl.get(server.baseUrl() + "/session/status").newBuilder()
-                    .addQueryParameter("directory", directoryParam())
-                    .build();
-            Request request = authorize(new Request.Builder().url(url)
-                    .header("Accept", "application/json"));
-            response = client.newCall(request).execute();
-            if (!response.isSuccessful()) return;
-            JSONObject status = new JSONObject(response.body().string());
-            // 用 status map 全量校准：map 中按其值更新，不在 map 中（已完成/不在监控目录）设为 idle。
-            // 统一走 setBusy，让「busy -> idle」跃迁检测与 SSE 路径共用一套去重通知。
-            List<String> ids;
-            synchronized (titleCache) {
-                ids = new ArrayList<>(titleCache.keySet());
-            }
-            for (String id : ids) {
-                JSONObject s = status.optJSONObject(id);
-                setBusy(id, s != null && !"idle".equals(s.optString("type", "")));
-            }
-        } catch (Exception ignored) {
-        } finally {
-            if (response != null) response.close();
-        }
-    }
-
-    private String directoryParam() {
-        String token = server.token == null ? "" : server.token.trim();
-        if (token.startsWith("dir=")) return token.substring(4);
-        if (token.startsWith("/")) return token;
-        return "/";
-    }
-
+    /**
+     * 挂上 HTTP Basic 认证头。opencode v2 要求 Basic；token 字段承载 user:pass，
+     * 只写密码时补默认用户名 opencode。
+     */
     private Request authorize(Request.Builder builder) {
-        String token = server.token == null ? "" : server.token.trim();
-        if (!token.isEmpty() && !token.startsWith("dir=") && !token.startsWith("/")) {
-            builder.header("Authorization", "Bearer " + token);
+        String raw = server.token == null ? "" : server.token.trim();
+        if (!raw.isEmpty()) {
+            int colon = raw.indexOf(':');
+            String user = colon < 0 ? "opencode" : raw.substring(0, colon).trim();
+            String pass = colon < 0 ? raw : raw.substring(colon + 1);
+            if (user.isEmpty()) user = "opencode";
+            builder.header("Authorization", MainActivity.basicHeader(user + ":" + pass));
         }
         return builder.build();
     }
 
-    /** 基线：拉一次会话列表填充标题缓存；列表没有忙碌信息，状态靠轮询 + SSE。 */
+    /** 基线：拉一次会话列表填充标题缓存；忙闲只靠 SSE 事件。 */
     private void fetchSessionBaseline(Runnable then) {
         Request request;
         try {
-            request = authorize(new Request.Builder().url(server.baseUrl() + "/session")
+            request = authorize(new Request.Builder().url(server.baseUrl() + "/api/session?limit=200")
                     .header("Accept", "application/json"));
         } catch (Exception e) {
             scheduleReconnect();
@@ -135,8 +88,20 @@ public class OpencodeServerMonitor extends ServerMonitor {
             }
             @Override public void onResponse(Call call, Response response) {
                 try (Response ignored = response) {
+                    if (response.code() == 401 || response.code() == 403) {
+                        throw new IOException("认证失败（HTTP " + response.code()
+                                + "）：token 应填 opencode 登录密码或 用户名:密码");
+                    }
                     if (!response.isSuccessful()) throw new IOException("HTTP " + response.code());
-                    JSONArray items = new JSONArray(response.body().string());
+                    // v2 信封：{"data":[...],"cursor":{...}}；v1 是裸数组。
+                    String body = response.body().string();
+                    JSONArray items;
+                    try {
+                        items = new JSONObject(body).optJSONArray("data");
+                    } catch (Exception notEnvelope) {
+                        items = new JSONArray(body);
+                    }
+                    if (items == null) throw new IOException("session list missing data[]");
                     synchronized (titleCache) {
                         titleCache.clear();
                         for (int i = 0; i < items.length(); i++) {
@@ -227,18 +192,20 @@ public class OpencodeServerMonitor extends ServerMonitor {
         } catch (Exception e) {
             return;
         }
-        // v2 /global/event：type 在 payload 内层；v1 /event type 在顶层。
-        JSONObject inner = json.optJSONObject("payload");
+        // v2 /api/event：负载在 data 内层；更早的包装用 payload；v1 直接平铺。
+        JSONObject inner = json.optJSONObject("data");
+        if (inner == null) inner = json.optJSONObject("payload");
         if (inner == null) inner = json;
-        String type = inner.optString("type", "");
+        String type = inner.optString("type", json.optString("type", ""));
         // durable 事件带 .N 尾缀（session.created.5），归一化。
         int dot = type.lastIndexOf('.');
         if (dot > 0) {
             String suffix = type.substring(dot + 1);
             if (suffix.matches("\\d+")) type = type.substring(0, dot);
         }
+        // v2 的会话字段直接放在 data 内；v1 走 properties。
         JSONObject props = inner.optJSONObject("properties");
-        if (props == null) props = new JSONObject();
+        if (props == null) props = inner;
         String sessionId = props.optString("sessionID", props.optString("session_id", ""));
         Log.d(TAG, server.name + " << " + type + " session=" + sessionId);
         switch (type) {
@@ -266,6 +233,17 @@ public class OpencodeServerMonitor extends ServerMonitor {
                 }
                 break;
             }
+            // v2：一次执行回合的开始与结束决定忙闲。
+            case "session.execution.started": {
+                if (!sessionId.isEmpty()) setBusy(sessionId, true);
+                break;
+            }
+            case "session.execution.succeeded":
+            case "session.execution.failed": {
+                if (!sessionId.isEmpty()) setBusy(sessionId, false);
+                break;
+            }
+            // v1 兼容。
             case "session.status": {
                 JSONObject status = props.optJSONObject("status");
                 boolean busy = status != null && !"idle".equals(status.optString("type", ""));

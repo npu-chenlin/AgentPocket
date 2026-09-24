@@ -1,5 +1,6 @@
-//! 一次性探测已配置服务器（在线/版本/忙碌会话数）。
-//! REST 语义与 GUI monitor 一致：kimi /api/v1/meta + /api/v2/sessions；dsh /api/session.list；opencode /config + /session/status。
+//! 一次性探测已配置服务器（在线/版本/会话数）。
+//! REST 语义与 GUI monitor 一致：kimi `/api/v1/meta` + `/api/v2/sessions`；
+//! dsh `/api/session.list`；opencode v2 `/api/config` + `/api/session`（HTTP Basic 认证）。
 
 use std::time::Duration;
 
@@ -155,57 +156,75 @@ fn probe_dsh(server: &ServerConfig, timeout: Duration) -> Result<(Option<String>
     Ok((None, busy))
 }
 
-/// 简易百分号编码（仅用于 opencode directory query 参数）。
-fn urlquery(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
-/// opencode 探测：GET /config 验证在线；GET /session/status?directory=<dir> 获取忙碌会话。
+/// opencode 探测：GET /api/config 验证在线与认证；GET /api/session 统计会话总数。
+///
+/// v2 没有一次性可轮询的忙闲端点（忙闲只在 `/api/event` SSE 里体现，daemon 的
+/// 一次性探测不维持长连接），因此这里把在线判断建立在配置接口上，并顺带回报
+/// 会话数量。
 fn probe_opencode(
     server: &ServerConfig,
     timeout: Duration,
 ) -> Result<(Option<String>, usize), String> {
-    let mut auth = Vec::new();
-    if !server.opencode_token().is_empty() {
-        auth.push(("Authorization", format!("Bearer {}", server.opencode_token())));
+    let mut auth: Vec<(&str, String)> = Vec::new();
+    if let Some(header) = server.opencode_basic_header() {
+        auth.push(("Authorization", header));
     }
     let auth_refs: Vec<(&str, &str)> = auth.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
-    let resp = client::get(&server.host, server.port, "/config", &auth_refs, timeout)
-        .map_err(|e| e.to_string())?;
+    let resp = client::get(
+        &server.host,
+        server.port,
+        "/api/config",
+        &auth_refs,
+        timeout,
+    )
+    .map_err(|e| e.to_string())?;
+    if resp.status == 401 || resp.status == 403 {
+        return Err(format!(
+            "认证失败（HTTP {}）：token 字段应填 user:pass",
+            resp.status
+        ));
+    }
     if resp.status != 200 {
         return Err(format!("config HTTP {}", resp.status));
     }
     let val: serde_json::Value =
         serde_json::from_str(&resp.body).map_err(|e| format!("invalid JSON: {}", e))?;
-    if !val.is_object() {
-        return Err("config response is not a JSON object".to_string());
+    if !val.is_object() && !val.is_array() {
+        return Err("config response is neither a JSON object nor array".to_string());
     }
 
-    let dir = agentpocket_core::server_url::opencode_directory(server);
-    let path = format!("/session/status?directory={}", urlquery(&dir));
-    let resp = client::get(&server.host, server.port, &path, &auth_refs, timeout)
-        .map_err(|e| e.to_string())?;
+    // 顺带拉一次会话列表：既能确认业务 API 可用，也能回报顶层会话数。
+    let resp = client::get(
+        &server.host,
+        server.port,
+        "/api/session?limit=200",
+        &auth_refs,
+        timeout,
+    )
+    .map_err(|e| e.to_string())?;
     if resp.status != 200 {
-        return Err(format!("session.status HTTP {}", resp.status));
+        return Err(format!("session HTTP {}", resp.status));
     }
     let val: serde_json::Value =
         serde_json::from_str(&resp.body).map_err(|e| format!("invalid JSON: {}", e))?;
-    let busy = val
-        .as_object()
-        .map(|m| m.values().filter(|v| v.as_bool().unwrap_or(false)).count())
+    let sessions = val
+        .get("data")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter(|s| {
+                    // 过滤 subagent：父会话字段 parentID 为空才是顶层会话。
+                    s.get("parentID")
+                        .map(|p| p.is_null())
+                        .unwrap_or(true)
+                })
+                .count()
+        })
         .unwrap_or(0);
 
-    Ok((None, busy))
+    Ok((None, sessions))
 }
 
 #[cfg(test)]
