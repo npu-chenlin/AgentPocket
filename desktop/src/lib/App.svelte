@@ -32,6 +32,14 @@
   let selectedId = $state<string | null>(null);
   let selectedSessionId = $state<string | null>(null);
   let pinned = $state(false);
+  /**
+   * 侧边栏折叠。
+   *
+   * 存 localStorage 而不是配置文件：这是纯界面偏好，不该跟着 config.json
+   * 同步给 daemon 和手机端。读失败就退回展开——折叠与否不该因为存储坏了
+   * 就让用户找不到服务。
+   */
+  let sidebarCollapsed = $state(false);
   let toasts = $state<Toast[]>([]);
   let toastSeq = 0;
 
@@ -89,10 +97,31 @@
   async function selectServer(id: string): Promise<void> {
     selectedId = id;
     selectedSessionId = null;
+    // 折叠态点图标虽然看不到会话列表，但展开意图要留着：用户回到展开态后
+    // 服务仍处于展开状态，不会出现"点开就没了"的错觉。
+    if (sidebarCollapsed && (statusForServer(id)?.sessions.length ?? 0) > 0) {
+      expanded = new Set(expanded).add(id);
+    }
     try {
       await api.openServer(id, null);
     } catch (error) {
       toast(`打开失败：${errorMessage(error)}`, "error");
+    }
+  }
+
+  const SIDEBAR_KEY = "agentpocket.sidebarCollapsed";
+
+  function statusForServer(id: string): ServerStatus | undefined {
+    return view?.statuses[id];
+  }
+
+  function toggleSidebar(): void {
+    sidebarCollapsed = !sidebarCollapsed;
+    try {
+      localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "1" : "0");
+    } catch {
+      // 隐私模式或存储写满时无法持久化。不影响本次会话内的使用，
+      // 下次启动回到展开即可，不值得为此打扰用户。
     }
   }
 
@@ -382,12 +411,52 @@
   }
 
   // 订阅后端事件只做一次。这里必须用 onMount 而不是 $effect：$effect 会把
-  // 订阅后端事件只做一次。这里必须用 onMount 而不是 $effect：$effect 会把
   // effect 体里读到的状态当成依赖，而 applyView() 会写 view，那样会自触发成
   // 无限循环（表现为白屏 + IPC 风暴）。
   onMount(() => {
     const cleanup: Array<() => void> = [];
+
+    // 恢复上次的折叠状态。读不到就用展开态——找不到侧边栏比多占点宽度更糟。
+    try {
+      sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "1";
+    } catch {
+      sidebarCollapsed = false;
+    }
+
+    // Ctrl/Cmd+B 交给原生菜单的 accelerator 处理，这里不再自己监听 keydown：
+    // 两处都响应同一次按键会切换两次，净效果是"按了没反应"。菜单项里声明了
+    // 快捷键，顺带也让它出现在菜单文字旁边，可发现性更好。
+
     cleanup.push(api.onStateChanged(applyView));
+
+    // 原生菜单栏的动作。菜单项在主进程，这里接到渲染进程已有的函数上。
+    cleanup.push(
+      api.onMenuAction((action) => {
+        switch (action) {
+          case "import":
+            pasteOpen = true;
+            break;
+          case "export":
+            void openExport();
+            break;
+          case "phone-pair":
+            void openSync();
+            break;
+          case "settings":
+            openSettings();
+            break;
+          case "toggle-sidebar":
+            toggleSidebar();
+            break;
+          case "toggle-always-on-top":
+            void togglePinned();
+            break;
+          default:
+            // 认不出的动作直接忽略：菜单与渲染进程版本不一致时不该把界面搞坏。
+            break;
+        }
+      }),
+    );
     cleanup.push(
       api.onAgentEvent((payload) => {
         // 手机端配对取走配置后主进程会广播，这里给出反馈。
@@ -417,55 +486,7 @@
 </script>
 
 <div class="app-shell">
-  <header class="app-header">
-    <div class="brand">
-      <!-- 和应用图标/托盘图标同一个"口袋"标记，纯路径绘制，不依赖字体里的符号 -->
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="17" height="17"
-          ><path
-            d="M7 8.5h10a1.5 1.5 0 0 1 1.5 1.5v6a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3v-6A1.5 1.5 0 0 1 7 8.5Z"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.7"
-          /><path
-            d="M5.8 10.2h12.4"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.7"
-            stroke-linecap="round"
-          /></svg
-        >
-      </span>
-      <div class="brand-copy">
-        <h1>AgentPocket</h1>
-        <p>编码 Agent 桌面伴侣</p>
-      </div>
-    </div>
-    <nav class="header-actions" aria-label="全局操作">
-      <button class="ghost-button" type="button" onclick={() => (pasteOpen = true)}>导入</button>
-      <button class="ghost-button" type="button" onclick={openExport}>导出</button>
-      <button class="ghost-button" type="button" onclick={openSync}>手机配对</button>
-      <button class="ghost-button" type="button" onclick={openSettings}>设置</button>
-    </nav>
-    <button
-      class="pin-toggle"
-      class:pin-toggle--on={pinned}
-      type="button"
-      aria-pressed={pinned}
-      aria-label="窗口置顶"
-      title="窗口置顶"
-      onclick={togglePinned}
-    >
-      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"
-        ><path
-          d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"
-          fill="currentColor"
-        /></svg
-      >
-    </button>
-  </header>
-
-  <div class="workspace">
+  <div class="workspace{sidebarCollapsed ? ' workspace--collapsed' : ''}">
     {#if view}
       <Sidebar
         servers={view.servers}
@@ -473,6 +494,8 @@
         {expanded}
         {selectedId}
         {selectedSessionId}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={toggleSidebar}
         onSelectServer={selectServer}
         onSelectSession={selectSession}
         onToggleExpand={toggleExpand}

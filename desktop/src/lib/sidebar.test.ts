@@ -34,6 +34,8 @@ function renderSidebar(overrides: Record<string, unknown> = {}) {
     onEdit: vi.fn(),
     onDelete: vi.fn(),
     onAdd: vi.fn(),
+    onToggleCollapsed: vi.fn(),
+    collapsed: false,
     ...overrides,
   };
   return { props, ...render(Sidebar, props) };
@@ -74,6 +76,59 @@ describe("Sidebar", () => {
     renderSidebar({ servers: [], statuses: {} });
     expect(screen.getByText("还没有服务连接")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "添加第一个" })).toBeInTheDocument();
+  });
+
+  describe("折叠态", () => {
+    it("隐藏服务名与元信息，但保留可点击的导航", () => {
+      renderSidebar({ collapsed: true, onToggleCollapsed: vi.fn() });
+      // 文字信息全部让位给宽度
+      expect(screen.queryByText("工作站")).not.toBeInTheDocument();
+      expect(screen.queryByText("在线")).not.toBeInTheDocument();
+      // 但仍能通过 aria-label 点开
+      expect(screen.getByRole("button", { name: "打开 工作站" })).toBeInTheDocument();
+    });
+
+    it("折叠态点击图标仍回调 onSelectServer", () => {
+      const { props } = renderSidebar({ collapsed: true, onToggleCollapsed: vi.fn() });
+      screen.getByRole("button", { name: "打开 工作站" }).click();
+      expect(props.onSelectServer).toHaveBeenCalledWith("s1");
+    });
+
+    it("折叠态不显示会话列表与底部操作", () => {
+      const withSession = {
+        expanded: new Set(["s1"]),
+        collapsed: true,
+        onToggleCollapsed: vi.fn(),
+        statuses: {
+          s1: status({ sessions: [{ id: "a", title: "重构登录", activity: null, pinned: false, done: false }] }),
+          s2: status({ connected: false }),
+        },
+      };
+      renderSidebar(withSession);
+      expect(screen.queryByText("重构登录")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "编辑" })).not.toBeInTheDocument();
+    });
+
+    it("折叠态用角标显示运行中任务数——不能因为折叠把信息丢了", () => {
+      renderSidebar({
+        collapsed: true,
+        onToggleCollapsed: vi.fn(),
+        statuses: { s1: status({ activeCount: 3 }), s2: status({ connected: false }) },
+      });
+      expect(screen.getByLabelText("3 个运行中任务")).toBeInTheDocument();
+    });
+
+    it("提供展开按钮并回调", () => {
+      const { props } = renderSidebar({ collapsed: true, onToggleCollapsed: vi.fn() });
+      screen.getByRole("button", { name: "展开侧边栏" }).click();
+      expect(props.onToggleCollapsed).toHaveBeenCalled();
+    });
+
+    it("展开态提供折叠按钮", () => {
+      const { props } = renderSidebar({ collapsed: false, onToggleCollapsed: vi.fn() });
+      screen.getByRole("button", { name: "折叠侧边栏" }).click();
+      expect(props.onToggleCollapsed).toHaveBeenCalled();
+    });
   });
 
   it("点击服务名回调 onSelectServer", async () => {

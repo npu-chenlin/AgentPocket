@@ -7,6 +7,7 @@ import { AppState, registerCommands, type AppView } from "./commands";
 import { ConfigStore } from "./config-store";
 import { Notifier } from "./notification";
 import { defaultSettings, type DesktopSettings, type ServerSummary } from "./model";
+import { installMenu } from "./menu";
 import { TrayController, enforceSingleInstance } from "./tray";
 
 /**
@@ -29,7 +30,9 @@ function createWindow(): BrowserWindow {
     // 默认隐藏，由配置决定何时显示，避免开机弹窗。
     show: false,
     title: "AgentPocket",
-    autoHideMenuBar: true,
+    // 菜单栏常驻：导入/导出/手机配对/设置都收在里面了，标题栏只留品牌与窗口操作。
+    // 代价是 Linux 上多占约 25px 垂直空间。
+    autoHideMenuBar: false,
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
       contextIsolation: true,
@@ -132,6 +135,7 @@ if (!enforceSingleInstance(() => {
     });
 
     registerCommands(window, state, tray, dir);
+    installMenu(window);
     tray.install();
 
     const config = await state.start();

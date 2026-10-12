@@ -31,11 +31,8 @@
   --radius: 10px;
   --radius-sm: 7px;
   --radius-lg: 14px;
-  --shadow-card: 0 1px 2px rgba(24, 33, 31, 0.04);
   --shadow-pop: 0 8px 24px rgba(24, 33, 31, 0.1), 0 2px 6px rgba(24, 33, 31, 0.06);
   --shadow-lift: 0 10px 28px rgba(24, 33, 31, 0.12);
-
-  --header-h: 56px;
 
   color: var(--text);
   background: var(--bg);
@@ -80,7 +77,6 @@
     --online: #45c39b;
     --offline: #59635e;
 
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
     --shadow-lift: 0 10px 28px rgba(0, 0, 0, 0.5);
 
@@ -169,76 +165,27 @@ p {
   border: 0;
 }
 
-.app-header {
-  display: flex;
-  flex: 0 0 var(--header-h);
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 clamp(12px, 2.5vw, 20px);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.brand-mark {
-  display: grid;
-  flex: 0 0 28px;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border-radius: 8px;
-  color: #fff;
-  background: linear-gradient(140deg, #2f9c86, #0f5347);
-  font-size: 0.95rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  box-shadow: var(--shadow-card);
-}
-
-.brand-copy {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
-.brand-copy h1 {
-  overflow: hidden;
-  font-size: 0.88rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.brand-copy p {
-  overflow: hidden;
-  color: var(--text-faint);
-  font-size: 0.66rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.header-actions {
-  display: flex;
-  gap: 4px;
-}
-
-/* 工作区：左侧服务栏 + 右侧 WebView 承载区 */
+/* 工作区：左侧服务栏 + 右侧 Agent 视图承载区 */
 .workspace {
   display: grid;
   flex: 1;
   min-height: 0;
-  /* 第二列必须写 minmax(0, 1fr)：裸的 1fr 最小尺寸是 min-content，
-     Agent 页面里一段长文本就会把整列撑宽，横向多出一条滚动条。 */
-  grid-template-columns: minmax(210px, 268px) minmax(0, 1fr);
+  /*
+   * 第二列必须写 minmax(0, 1fr)：裸的 1fr 最小尺寸是 min-content，
+   * Agent 页面里一段长文本就会把整列撑宽，横向多出一条滚动条。
+   * 第一列同理要跟着折叠态变，--sidebar-w 由下面两种状态分别赋值。
+   */
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   overflow: hidden;
+}
+
+/* 展开态 268px，折叠态 52px——只留头像，仍可点开导航 */
+.workspace {
+  --sidebar-w: minmax(210px, 268px);
+}
+
+.workspace--collapsed {
+  --sidebar-w: 52px;
 }
 
 /* 服务侧边栏 */
@@ -270,6 +217,77 @@ p {
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
+}
+
+.sidebar__head-actions {
+  display: flex;
+  gap: 2px;
+}
+
+/* ---------- 折叠态 ---------- */
+
+.sidebar--collapsed {
+  padding: 10px 6px;
+  align-items: stretch;
+}
+
+.sidebar--collapsed .sidebar__head {
+  justify-content: center;
+  padding: 2px 0 4px;
+}
+
+.sidebar--collapsed .sidebar__list {
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar--collapsed .sidebar__row {
+  justify-content: center;
+  padding: 6px;
+}
+
+.sidebar--collapsed .sidebar__mark {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  font-size: 0.76rem;
+}
+
+/* 头像底下的透明按钮：撑满整行让点击区够大，而不是只有 28px 的头像可点 */
+.sidebar__compact-hit {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sidebar--collapsed .sidebar__row {
+  position: relative;
+}
+
+/* 运行中任务数：折叠态没有文字，放个角标补上这个信息 */
+.sidebar__compact-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: grid;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  place-items: center;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--accent);
+  font-size: 0.58rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.sidebar--collapsed .sidebar__group--active > .sidebar__row {
+  background: var(--accent-soft);
 }
 
 .sidebar__list {
@@ -1261,20 +1279,6 @@ input[role="switch"]:checked::after {
 /* ---------- 响应式与动效偏好 ---------- */
 
 @media (max-width: 700px) {
-  .app-header {
-    flex-wrap: wrap;
-  }
-
-  .brand {
-    flex: 1 1 180px;
-  }
-
-  .header-actions {
-    flex: 0 1 auto;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
-
   .modal__actions {
     flex-wrap: wrap;
   }
@@ -1291,10 +1295,6 @@ input[role="switch"]:checked::after {
 @media (max-width: 620px) {
   body {
     min-width: 360px;
-  }
-
-  .brand-copy p {
-    display: none;
   }
 
   .form-grid {

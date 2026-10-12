@@ -7,6 +7,9 @@
     expanded: ReadonlySet<string>;
     selectedId: string | null;
     selectedSessionId: string | null;
+    /** 折叠为图标条：省出宽度给内容区，导航仍可用。 */
+    collapsed?: boolean;
+    onToggleCollapsed?: () => void;
     onSelectServer: (id: string) => void;
     onSelectSession: (id: string, sessionId: string) => void;
     onToggleExpand: (id: string) => void;
@@ -22,6 +25,8 @@
     expanded,
     selectedId,
     selectedSessionId,
+    collapsed = false,
+    onToggleCollapsed,
     onSelectServer,
     onSelectSession,
     onToggleExpand,
@@ -40,10 +45,51 @@
   }
 </script>
 
-<nav class="sidebar" aria-label="服务连接">
+<nav class="sidebar{collapsed ? ' sidebar--collapsed' : ''}" aria-label="服务连接">
   <div class="sidebar__head">
-    <h2 class="sidebar__title">服务</h2>
-    <button class="icon-button" type="button" onclick={onAdd} aria-label="添加服务连接">＋</button>
+    {#if collapsed}
+      <button
+        class="icon-button sidebar__expand"
+        type="button"
+        aria-label="展开侧边栏"
+        title="展开侧边栏"
+        onclick={() => onToggleCollapsed?.()}
+      >
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"
+          ><path
+            d="M14.5 7 9.5 12l5 5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          /></svg
+        >
+      </button>
+    {:else}
+      <h2 class="sidebar__title">服务</h2>
+      <div class="sidebar__head-actions">
+        <button
+          class="icon-button"
+          type="button"
+          onclick={() => onToggleCollapsed?.()}
+          aria-label="折叠侧边栏"
+          title="折叠侧边栏"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"
+            ><path
+              d="M9.5 7l5 5-5 5"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            /></svg
+          >
+        </button>
+        <button class="icon-button" type="button" onclick={onAdd} aria-label="添加服务连接">＋</button>
+      </div>
+    {/if}
   </div>
 
   {#if servers.length === 0}
@@ -58,14 +104,17 @@
         {@const sessions = status?.sessions ?? []}
         {@const isExpanded = expanded.has(server.id)}
         {@const connected = status?.connected === true}
-        <li class="sidebar__group" class:sidebar__group--active={selectedId === server.id}>
+        <li
+          class="sidebar__group"
+          class:sidebar__group--active={selectedId === server.id}
+        >
           <div class="sidebar__row">
             <span
               class="sidebar__mark backend-logo backend-logo--{server.backend}{connected
                 ? ''
                 : ' backend-logo--offline'}"
               data-backend={server.backend}
-              title={label(server.backend)}
+              title="{label(server.backend)} · {server.name}（{connected ? '在线' : '离线'}）"
               aria-label={label(server.backend)}
             >
               {mark(server.backend)}
@@ -74,37 +123,55 @@
                 title={connected ? "已连接" : "未连接"}
               ></span>
             </span>
-            <button
-              class="sidebar__name"
-              type="button"
-              aria-current={selectedId === server.id ? "true" : undefined}
-              onclick={() => onSelectServer(server.id)}
-            >
-              <span class="sidebar__label">{server.name}</span>
-              <span class="sidebar__meta">
-                <span>{connected ? "在线" : "离线"}</span>
-                {#if status?.serverVersion}
-                  <span class="sidebar__version" title="服务端版本">v{status.serverVersion}</span>
-                {/if}
-                {#if status?.activeCount}
-                  <span class="sidebar__count">{status.activeCount} 个任务</span>
-                {/if}
-              </span>
-            </button>
-            {#if connected && sessions.length > 0}
+            {#if !collapsed}
               <button
-                class="icon-button sidebar__toggle"
+                class="sidebar__name"
                 type="button"
-                aria-expanded={isExpanded}
-                aria-label="展开 {server.name} 的会话"
-                onclick={() => onToggleExpand(server.id)}
+                aria-current={selectedId === server.id ? "true" : undefined}
+                onclick={() => onSelectServer(server.id)}
               >
-                <span class="status-chevron" class:status-chevron--open={isExpanded} aria-hidden="true">▾</span>
+                <span class="sidebar__label">{server.name}</span>
+                <span class="sidebar__meta">
+                  <span>{connected ? "在线" : "离线"}</span>
+                  {#if status?.serverVersion}
+                    <span class="sidebar__version" title="服务端版本">v{status.serverVersion}</span>
+                  {/if}
+                  {#if status?.activeCount}
+                    <span class="sidebar__count">{status.activeCount} 个任务</span>
+                  {/if}
+                </span>
               </button>
+              {#if connected && sessions.length > 0}
+                <button
+                  class="icon-button sidebar__toggle"
+                  type="button"
+                  aria-expanded={isExpanded}
+                  aria-label="展开 {server.name} 的会话"
+                  onclick={() => onToggleExpand(server.id)}
+                >
+                  <span class="status-chevron" class:status-chevron--open={isExpanded} aria-hidden="true"
+                    >▾</span
+                  >
+                </button>
+              {/if}
+            {:else}
+              <!-- 折叠态：整个图标可点，标题走 title 提示 -->
+              <button
+                class="sidebar__compact-hit"
+                type="button"
+                aria-current={selectedId === server.id ? "true" : undefined}
+                aria-label="打开 {server.name}"
+                onclick={() => onSelectServer(server.id)}
+              ></button>
+              {#if status?.activeCount}
+                <span class="sidebar__compact-badge" aria-label="{status.activeCount} 个运行中任务">
+                  {status.activeCount}
+                </span>
+              {/if}
             {/if}
           </div>
 
-          {#if isExpanded && connected && sessions.length > 0}
+          {#if !collapsed && isExpanded && connected && sessions.length > 0}
             <ul class="sidebar__sessions">
               {#each sessions as session (session.id)}
                 {@const active = selectedSessionId === session.id && selectedId === server.id}
@@ -147,7 +214,7 @@
     </ul>
   {/if}
 
-  {#if selectedId}
+  {#if selectedId && !collapsed}
     <div class="sidebar__foot">
       <button class="text-button" type="button" onclick={() => onEdit(selectedId)}>编辑</button>
       <button class="text-button" type="button" onclick={() => onDelete(selectedId)}>删除</button>

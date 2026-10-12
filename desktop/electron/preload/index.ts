@@ -4,6 +4,7 @@ import type { AppView } from "../main/commands";
 import type { ImportMode, ImportPreviewData } from "../main/config-store";
 import type { Backend, DesktopSettings, ServerConfig, ServerForEdit } from "../main/model";
 import type { KimiSyncResult, MeshPeerView } from "../main/mesh";
+import { MENU_ACTION_CHANNEL, type MenuAction } from "../main/menu";
 import type { SyncInfo } from "../main/sync";
 
 /**
@@ -63,6 +64,16 @@ const api = {
     const handler = (_event: unknown, payload: unknown): void => callback(payload);
     ipcRenderer.on("app:event", handler);
     return () => ipcRenderer.removeListener("app:event", handler);
+  },
+
+  /**
+   * 订阅原生菜单动作。菜单项本身在主进程，这里只收动作名并交给渲染进程执行，
+   * 避免同一份业务逻辑在两边各写一遍。
+   */
+  onMenuAction: (callback: (action: MenuAction) => void): (() => void) => {
+    const handler = (_event: unknown, action: MenuAction): void => callback(action);
+    ipcRenderer.on(MENU_ACTION_CHANNEL, handler);
+    return () => ipcRenderer.removeListener(MENU_ACTION_CHANNEL, handler);
   },
 };
 

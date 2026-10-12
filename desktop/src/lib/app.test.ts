@@ -36,6 +36,7 @@ function stubApi(overrides: Partial<Record<string, unknown>> = {}): Record<strin
     openServer: vi.fn(async () => {}),
     onStateChanged: vi.fn(() => () => {}),
     onAgentEvent: vi.fn(() => () => {}),
+    onMenuAction: vi.fn(() => () => {}),
     ...overrides,
   };
 }
@@ -48,8 +49,21 @@ describe("App", () => {
   it("挂载后渲染外壳与服务列表", async () => {
     const { default: App } = await import("./App.svelte");
     render(App);
-    expect(await screen.findByText("AgentPocket")).toBeInTheDocument();
+    // 应用名已移入原生菜单栏，界面上不再出现——这里确认服务列表挂出来了。
     expect(await screen.findByText("工作站")).toBeInTheDocument();
+    expect(screen.queryByText("AgentPocket")).not.toBeInTheDocument();
+  });
+
+  it("没有标题栏，窗口级操作全在菜单里", async () => {
+    const { default: App } = await import("./App.svelte");
+    const { container } = render(App);
+    await screen.findByText("工作站");
+    // 置顶移进「视图」菜单后，标题栏连同它一起删了。
+    expect(container.querySelector(".app-header")).toBeNull();
+    expect(screen.queryByRole("button", { name: "窗口置顶" })).not.toBeInTheDocument();
+    // 侧边栏与内容区占满整个窗口
+    expect(container.querySelector(".sidebar")).not.toBeNull();
+    expect(container.querySelector(".stage")).not.toBeNull();
   });
 
   it("启动后把内容区矩形上报给主进程", async () => {

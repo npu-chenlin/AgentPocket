@@ -49,6 +49,7 @@ function stubApi(overrides: Record<string, unknown> = {}): Record<string, unknow
     toggleSessionPin: vi.fn(async () => true),
     onStateChanged: vi.fn(() => () => {}),
     onAgentEvent: vi.fn(() => () => {}),
+    onMenuAction: vi.fn(() => () => {}),
     ...overrides,
   };
 }

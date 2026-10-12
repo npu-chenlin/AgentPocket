@@ -147,3 +147,13 @@ export function onStateChanged(callback: Parameters<AgentPocketApi["onStateChang
 export function onAgentEvent(callback: (payload: unknown) => void) {
   return bridge().onAgentEvent(callback);
 }
+
+/**
+ * 订阅原生菜单动作。
+ *
+ * 导入/导出/手机配对/设置已移进应用菜单栏，这里只收动作名，由调用方执行——
+ * 业务逻辑留在渲染进程，不在两边各写一遍。
+ */
+export function onMenuAction(callback: Parameters<AgentPocketApi["onMenuAction"]>[0]) {
+  return bridge().onMenuAction(callback);
+}
