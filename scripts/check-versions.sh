@@ -36,10 +36,10 @@ check() {
 
 check core/Cargo.toml "$(read_value core/Cargo.toml '/^version = / s/.*"\([^"]*\)".*/\1/p')"
 check daemon/Cargo.toml "$(read_value daemon/Cargo.toml '/^version = / s/.*"\([^"]*\)".*/\1/p')"
+# 桌面端已是 Electron：版本只在 desktop/package.json 与 package-lock.json 里
+# （旧版还要校验 src-tauri 的 Cargo.toml 与 tauri.conf.json）。
 check desktop/package.json "$(read_value desktop/package.json '/^[[:space:]]*"version"/ s/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 check desktop/package-lock.json "$(sed -n '3s/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/desktop/package-lock.json")"
-check desktop/src-tauri/Cargo.toml "$(read_value desktop/src-tauri/Cargo.toml '/^version = / s/.*"\([^"]*\)".*/\1/p')"
-check desktop/src-tauri/tauri.conf.json "$(read_value desktop/src-tauri/tauri.conf.json '/^[[:space:]]*"version"/ s/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 check app/build.gradle "$(sed -n "/versionName[[:space:]]/s/.*versionName[[:space:]]*['\"]\([^'\"]*\)['\"].*/\1/p" "$ROOT/app/build.gradle" | head -n 1)"
 
 echo "版本一致：$EXPECTED"

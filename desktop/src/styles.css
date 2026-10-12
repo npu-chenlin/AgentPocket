@@ -76,7 +76,17 @@ p {
 .app-shell {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .app-header {
@@ -129,11 +139,208 @@ p {
   gap: 6px;
 }
 
-.content {
+/* 工作区：左侧服务栏 + 右侧 WebView 承载区 */
+.workspace {
+  display: grid;
   flex: 1;
-  width: min(960px, 100%);
-  margin: 0 auto;
-  padding: 20px clamp(14px, 3vw, 28px) 40px;
+  min-height: 0;
+  /* 第二列必须写 minmax(0, 1fr)：裸的 1fr 最小尺寸是 min-content，
+     Agent 页面里一段长文本就会把整列撑宽，横向多出一条滚动条。 */
+  grid-template-columns: minmax(210px, 268px) minmax(0, 1fr);
+  overflow: hidden;
+}
+
+/* 服务侧边栏 */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 8px;
+  padding: 12px 10px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.sidebar__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 4px 2px;
+}
+
+.sidebar__title {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sidebar__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sidebar__item {
+  border-radius: 9px;
+}
+
+.sidebar__item--active > .sidebar__row {
+  background: var(--accent-soft);
+}
+
+.sidebar__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 6px;
+  border-radius: 9px;
+}
+
+.sidebar__row:hover {
+  background: var(--surface-hover);
+}
+
+.sidebar__name {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  text-align: left;
+  background: none;
+  cursor: pointer;
+}
+
+.sidebar__label {
+  overflow: hidden;
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-faint);
+  font-size: 0.68rem;
+}
+
+/* 版本号：比状态文字更次要，压暗一档免得跟在线状态抢注意力 */
+.sidebar__version {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.sidebar__badge {
+  padding: 0 5px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--accent);
+  font-size: 0.62rem;
+  line-height: 1.5;
+}
+
+.sidebar__sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 2px 0 4px 30px;
+  list-style: none;
+}
+
+.sidebar__session {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 7px;
+}
+
+.sidebar__session:hover {
+  background: var(--surface-hover);
+}
+
+.sidebar__session-main {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 1px;
+  padding: 5px 6px;
+  border: 0;
+  text-align: left;
+  background: none;
+  cursor: pointer;
+}
+
+.sidebar__session-title {
+  overflow: hidden;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__session-activity {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__session--done .sidebar__session-title {
+  color: var(--text-faint);
+}
+
+.sidebar__foot {
+  display: flex;
+  gap: 6px;
+  margin-top: auto;
+  padding: 8px 4px 0;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar__empty {
+  display: grid;
+  gap: 8px;
+  padding: 14px 8px;
+  color: var(--text-faint);
+  font-size: 0.78rem;
+}
+
+/* WebView 承载区：原生 webview 由 JS 量出这块矩形后覆盖上来 */
+.stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.stage__empty {
+  display: grid;
+  height: 100%;
+  padding: 24px;
+  color: var(--text-faint);
+  font-size: 0.84rem;
+  place-items: center;
+  text-align: center;
+}
+
+.stage__backdrop {
+  display: grid;
+  height: 100%;
+  color: var(--text-faint);
+  place-items: center;
+  font-size: 0.84rem;
 }
 
 .section-heading {

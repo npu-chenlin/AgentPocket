@@ -4,7 +4,7 @@
 
 | 功能 | Android | Desktop | Daemon |
 | --- | :---: | :---: | :---: |
-| 打开 Kimi Code / dsh / OpenCode Web | 支持 | 支持（系统浏览器） | — |
+| 打开 Kimi Code / dsh / OpenCode Web | 支持 | 支持（主窗口内嵌视图） | — |
 | 保存、编辑、删除服务连接 | 支持 | 支持 | 读取同机共享配置 |
 | 拖拽排序服务连接 | 支持 | — | — |
 | 自动识别 Kimi / dsh / OpenCode | 支持 | 支持 | 状态探测支持 |

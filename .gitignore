@@ -16,3 +16,7 @@
 /core/target/
 /daemon/target/
 /dist/
+
+# Electron 构建与安装包产物
+/desktop/out/
+/desktop/release/

@@ -19,6 +19,9 @@ AgentPocket 不运行 Coding Agent 本身，也不替代 Kimi Code、DeepSeek Ha
 | 多节点 | 节点管理 | 发现 Tailnet 内的电脑，分发 Kimi 配置、升级 CLI、管理 Kimi Web |
 | 常驻 | 各端可靠运行 | 托盘常驻、开机自启、应用更新、daemon 自更新 |
 
+桌面端是 Electron 应用：点服务或会话时，Agent 页面直接嵌在主窗口的内容区里（`WebContentsView`），
+不跳系统浏览器，也不额外开窗口。详见 [docs/desktop.md](docs/desktop.md)。
+
 支持的后端：**Kimi Code**、**DeepSeek Harness（dsh）**、**OpenCode**。
 
 ## 界面速览
@@ -44,7 +47,7 @@ Android / Desktop / Daemon
 | 组件 | 适合谁 | 主要能力 |
 | --- | --- | --- |
 | Android | 需要移动访问的人 | 内嵌 Agent Web、多服务连接、后台状态监听、任务通知、悬浮入口、扫码同步服务连接 |
-| Desktop | 需要在电脑上常驻管理的人 | 系统托盘、状态监控、通知、浏览器跳转、服务连接导入导出、手机配对、节点管理 |
+| Desktop | 需要在电脑上常驻管理的人 | 系统托盘、状态监控、通知、在主窗口内嵌打开服务/会话、服务连接导入导出、手机配对、节点管理 |
 | Daemon | 管理无显示器或多台 Linux 机器的人 | 节点发现、Kimi 配置分发、Kimi CLI 管理、Kimi Web 生命周期、自更新 |
 
 ## 快速开始
@@ -102,8 +105,9 @@ v2 起 Web 与 API 都要求登录：未设 `OPENCODE_SERVER_PASSWORD` 时服务
 | OpenCode | `http://<Tailscale IP>:4096` | 登录密码，或 `用户名:密码`（默认用户 `opencode`） |
 
 > **OpenCode 认证**：服务端的密码是 `OPENCODE_SERVER_PASSWORD`，在 AgentPocket 的 token
-> 字段填同一个密码即可（填 `opencode:密码` 或只填密码都行）。凭据由各端以 HTTP Basic
-> 头发出，手机端由 WebView 的认证回调自动应答，不会弹登录框。
+> 字段填同一个密码即可（填 `opencode:密码` 或只填密码都行）。Android 由 WebView 的认证
+> 回调自动应答，不会弹登录框；Desktop 在应用内嵌的 Agent 视图里打开，Electron 会为该服务的
+> origin 补齐 Basic 凭据，浏览器侧同样不需要登录。
 >
 > OpenCode v2 Web 前端会直接从 `/api/project` 与 `/api/session` 加载项目与会话，
 > 通过 LAN/Tailscale IP 访问时不再需要 AgentPocket 播种浏览器本地项目注册表。
@@ -120,7 +124,7 @@ v2 起 Web 与 API 都要求登录：未设 `OPENCODE_SERVER_PASSWORD` 时服务
 
 | 功能 | Android | Desktop | Daemon |
 | --- | :---: | :---: | :---: |
-| 打开 Kimi / dsh / OpenCode Web | 支持 | 支持 | — |
+| 打开 Kimi / dsh / OpenCode Web | 支持 | 支持（应用内 WebView） | — |
 | 服务连接管理 | 支持 | 支持 | 读取共享配置 |
 | 自动识别后端 | 支持 | 支持 | 探测支持 |
 | 任务完成/失败/等待通知 | 支持 | 支持 | — |

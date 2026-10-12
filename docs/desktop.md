@@ -1,15 +1,49 @@
 # Desktop
 
-Desktop 是一个 Tauri 托盘应用，适合在电脑上常驻监控多个 Agent 服务，并管理服务连接和节点。
+Desktop 是一个 Electron 托盘应用，适合在电脑上常驻监控多个 Agent 服务，并管理服务连接和节点。
+
+> **为什么是 Electron 而不是 Tauri**：桌面端最关键的能力是把 Agent 的 Web UI 嵌进主窗口并
+> 精确定位。Tauri 在 Linux 上做不到——上游 tauri-apps/tauri#10420 从 2024-07-30 起至今未实现，
+> `tauri-runtime-wry` 把子 webview 塞进纵向 `gtk::Box`，wry 的 `add_to_container` 走 `pack_start`
+> 会丢弃 position/size，`set_bounds` 仅在 `is_in_fixed_parent` 时生效，而 tao 全仓从不创建
+> `GtkFixed`。Electron 的 `WebContentsView.setBounds` 是官方支持且实测精确生效的。代价是安装包
+> 体积更大。
 
 ## 能力
 
 - 托盘常驻，关闭窗口后继续监听。**默认开启开机自启**（可在设置或托盘菜单里关掉）。
-- 同时监控多个 Kimi/dsh Agent 服务，显示在线状态、版本和活跃会话。
-- 任务完成、失败或中断、等待审批、等待回答时发送系统通知；可从托盘或主窗口在浏览器中打开服务/会话。
+- 同时监控多个 Kimi/dsh/OpenCode Agent 服务，在侧边栏显示在线状态、版本号和活跃会话数。
+- 任务完成、失败或中断、等待审批、等待回答时发送系统通知；可从托盘或主窗口在应用内打开服务/会话。
 - 添加、编辑、删除服务连接；导入/导出与 Android 兼容的统一服务连接配置。
 - 生成二维码与 Android 做手机配对 / 服务连接同步。
 - 节点面板发现 AgentPocket 节点，查看 Kimi CLI 和 Kimi Web 状态，获取/发送 Kimi 配置，升级 CLI，并按需重启 Kimi Web。
+
+## 内嵌 Agent 视图
+
+点击服务或会话时，Agent 页面会嵌在主窗口的内容区里，而不是跳到系统浏览器：
+
+- 每个服务一个 `WebContentsView`，切换时只改可见性不重建，页面状态因此得以保留。
+- 前端用 CSS 决定布局，把内容区矩形上报给主进程；主进程据此调用 `WebContentsView.setBounds`。
+  坐标系与 DOM 视口一致，原生只跟随，不自己算布局——所以窗口移动/缩放不需要额外同步。
+- 视图只允许导航到当前服务的 origin，站外链接交给系统浏览器打开。
+- 渲染进程与 Agent 视图都启用了 `contextIsolation`；Agent 视图跑在 `sandbox: true` 下且拿不到
+  我们的 preload，因此远程页面无法调用 AgentPocket 的任何命令。
+
+### 凭据处理
+
+- **Kimi**：访问令牌通过 URL fragment 传递，由前端消费，不走网络。
+- **dsh**：无令牌。
+- **OpenCode v2**：页面与 API 都要求 HTTP Basic。Electron 在 `session.webRequest.onBeforeSendHeaders`
+  里为该服务的 origin 注入 `Authorization` 头。
+
+  这里**没有**用 `app.on('login')`：那只在主框架导航收到 401 挑战时触发，而 OpenCode 的页面本身是
+  静态的（能正常加载），真正 401 的是它随后发起的 `/api/*` 请求——XHR/fetch 的 401 不会走到
+  login 事件。只注册 login 的症状恰好是「页面打开了但一直卡在 Connect to a server」。
+
+  旧版 Tauri 为此写了一个 522 行的本机回环 HTTP 代理，Electron 下不再需要。
+
+- 每个服务用独立的 session（partition 为 `persist:server-<id>`）：cookie 不会在服务之间串台，
+  登录状态也能跨重启保留。注入前会检查请求是否已带 `Authorization`，避免用户改密码后被本地旧值钉住。
 
 ## 服务连接
 
@@ -17,15 +51,16 @@ Desktop 是一个 Tauri 托盘应用，适合在电脑上常驻监控多个 Agen
 
 - Kimi：主机为 Tailscale IP，端口 `58627`
 - dsh：主机为 Tailscale IP，端口 `3080`（或你设置的转发端口）
+- OpenCode：主机为 Tailscale IP，端口 `4096`
 
 “同步”指手机配对和服务连接同步；节点面板中的“拉取/推送”指节点间 Kimi 配置分发，两者不要混用。
 
 ## 安装与构建
 
-Linux 需要 Node.js 22、Rust stable，以及 Tauri 所需的 WebKitGTK、AppIndicator、OpenSSL 和构建工具。Ubuntu 22.04 可安装：
+Linux 需要 Node.js 22。Electron 自带运行时，除此之外只需构建工具：
 
 ```shell
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+sudo apt install build-essential
 ```
 
 开发版：
@@ -33,34 +68,39 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev
 ```shell
 cd desktop
 npm ci
-npm run tauri dev
+npm run dev
 ```
 
 测试和构建：
 
 ```shell
-npm test
-npm run tauri build
+npm test        # vitest
+npm run build   # tsc --noEmit && electron-vite build
+npm run dist    # electron-vite build && electron-builder
 ```
 
-安装包 `deb` 里除了托盘应用，还会装上节点 CLI `agentpocket`（`/usr/bin/agentpocket`，静态 musl 二进制）。因此 `agentpocket mcp` 这类客户端侧能力**不需要再单独跑节点安装脚本**——装完执行一次 `agentpocket mcp install` 就接好了。代价是打包前必须先产出该二进制，否则 `deb` 构建会失败：
+产物位于 `desktop/release/`（Linux 为 AppImage 与 `deb`，macOS 为 `dmg`，Windows 为 `nsis`）。
+macOS 未配置 Developer ID 时生成的是临时签名、未公证的本地构建包。Windows 与 macOS 尚未进行正式发布验证。
+
+应用图标与托盘图标由 `resources/make-icons.py` 生成（纯几何绘制，不依赖外部素材），改动后重跑即可：
 
 ```shell
-scripts/build-daemon.sh x86_64     # 产出 dist/agentpocket-x86_64-linux-musl
-npm run tauri build                # 打包时把它映射到 /usr/bin/agentpocket
+python3 resources/make-icons.py
 ```
 
-`deb` 只针对 amd64；节点侧仍用 `scripts/install.sh` 安装带 systemd 服务的版本（`/usr/local/bin/agentpocket`，在 PATH 上优先于 `deb` 装的那份）。
+配置目录默认沿用旧版路径 `~/.local/share/com.local.agentpocket.desktop`，这样从 Tauri 迁移后
+已有的服务连接可直接使用；也可用 `AGENTPOCKET_CONFIG_DIR` 覆盖。
 
-若只产出二进制（不打安装包），必须启用 `custom-protocol`：
+## 已知限制
 
-```shell
-npm run build && cargo build --release --features tauri/custom-protocol
-```
-
-不带该 feature 的二进制是开发模式：它不会嵌入前端资源，启动后会尝试加载 `localhost:1420`；未运行开发服务器时将出现连接失败。
-
-产物位于 `desktop/src-tauri/target/release/bundle/`。macOS DMG 可使用 `--bundles dmg` 构建；未配置 Developer ID 时生成的是临时签名、未公证的本地构建包。Windows 与 macOS 尚未进行正式发布验证。
+- **重连后活动行会清空**。忙碌状态能用权威端点重建（opencode 的
+  `/api/session/active`），但“正在跑什么工具”没有对应端点，只能靠事件实时累积。
+  Kimi 与 opencode 都有这个特性。
+- **dsh 不显示版本号**。版本采集只覆盖 Kimi（`/api/v1/meta` 的 `data.server_version`）
+  与 opencode（`/api/info` 的 `version`）。dsh 没有对应的版本端点。取不到的服务
+  不留空位，所以界面上表现为没有版本号而不是显示空值。
+- **opencode 不处理审批通知**。该服务的权限是全开的，`Permission.Effect` 的 `ask`
+  分支不会触发，因此不会有「等待审批」通知。提问（`form.*`）是支持的。
 
 ## 安全提示
 
