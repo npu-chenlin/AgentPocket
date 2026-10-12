@@ -1,31 +1,91 @@
 :root {
-  --bg: #f4f5f1;
+  /* 中性色：略带暖调的灰，避免纯灰的塑料感 */
+  --bg: #f2f3ef;
   --surface: #ffffff;
-  --surface-dim: #f7f8f5;
-  --border: #e2e6e1;
-  --border-strong: #cfd6d0;
-  --text: #1a2321;
-  --text-dim: #64706c;
-  --text-faint: #6d7874;
-  --accent: #1a6a5c;
-  --accent-hover: #14574b;
-  --accent-soft: #e4efeb;
-  --danger: #b4453f;
+  --surface-dim: #f7f8f4;
+  /* 悬停底色：之前这个变量根本没定义，导致所有 hover 静默失效 */
+  --surface-hover: #f0f2ed;
+  --surface-active: #e9ede7;
+  --border: #e4e7e1;
+  --border-strong: #d2d8d1;
+
+  --text: #18211f;
+  --text-dim: #5d6a66;
+  --text-faint: #7b8682;
+
+  /* 主色：深青。深色底上也能读，才敢拿来做强调 */
+  --accent: #16705f;
+  --accent-hover: #115a4c;
+  --accent-soft: #e2efea;
+  --accent-line: #9cc9ba;
+
+  --danger: #b03f39;
   --danger-soft: #f9e9e7;
   --warning-soft: #fff6dc;
   --warning-border: #e6ca7d;
   --warning-text: #7a5810;
-  --radius: 12px;
-  --shadow-card: 0 1px 2px rgba(24, 35, 31, 0.05);
-  --shadow-lift: 0 10px 28px rgba(24, 35, 31, 0.12);
+
+  --online: #2f9e7b;
+  --offline: #aab3ae;
+
+  --radius: 10px;
+  --radius-sm: 7px;
+  --radius-lg: 14px;
+  --shadow-card: 0 1px 2px rgba(24, 33, 31, 0.04);
+  --shadow-pop: 0 8px 24px rgba(24, 33, 31, 0.1), 0 2px 6px rgba(24, 33, 31, 0.06);
+  --shadow-lift: 0 10px 28px rgba(24, 33, 31, 0.12);
+
+  --header-h: 56px;
 
   color: var(--text);
   background: var(--bg);
   font-family:
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    "Noto Sans SC", sans-serif;
+    "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * 深色模式跟随系统。
+ * 只换令牌，不改结构——Agent 页面在独立的 WebContentsView 里，各走各的
+ * 主题，不会出现外壳深色、内容浅色的割裂。
+ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131614;
+    --surface: #1a1e1c;
+    --surface-dim: #202522;
+    --surface-hover: #242a26;
+    --surface-active: #2b332e;
+    --border: #2c332f;
+    --border-strong: #3a423d;
+
+    --text: #e7ece9;
+    --text-dim: #a3b0ab;
+    --text-faint: #7f8c87;
+
+    --accent: #4dbd9c;
+    --accent-hover: #63c9aa;
+    --accent-soft: #1c322c;
+    --accent-line: #2f5a4d;
+
+    --danger: #e0796f;
+    --danger-soft: #35211f;
+    --warning-soft: #332a12;
+    --warning-border: #5d4a1c;
+    --warning-text: #e3c375;
+
+    --online: #45c39b;
+    --offline: #59635e;
+
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+    --shadow-lift: 0 10px 28px rgba(0, 0, 0, 0.5);
+
+    color-scheme: dark;
+  }
 }
 
 * {
@@ -36,11 +96,23 @@ html,
 body,
 #app {
   margin: 0;
-  min-height: 100%;
+  /*
+   * 整条链用 height 而不是 100vh。
+   *
+   * 之前 .app-shell 用 100vh，于是只要页面上有任何一点横向溢出，就会长出
+   * 横向滚动条；滚动条吃掉 15px 高度，100vh 反而比可视区高，又长出纵向
+   * 滚动条——两条滚动条互相触发。实测表现为标题栏被顶出视野。
+   *
+   * html 也要 overflow:hidden：只锁 body 的话 documentElement 仍会多出 1px
+   * 可滚，底部留一条细滚动条。
+   */
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
   min-width: 480px;
+  overflow: hidden;
   background: var(--bg);
 }
 
@@ -76,7 +148,8 @@ p {
 .app-shell {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -84,17 +157,25 @@ p {
   position: absolute;
   width: 1px;
   height: 1px;
+  /*
+   * margin:-1px 不能省：绝对定位若不定 top，元素会停在它在文档里的位置。
+   * 标记放在 DOM 末尾时正好在视口下沿外侧，1px 的高度就把整页撑出可滚动区域。
+   */
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+  border: 0;
 }
 
 .app-header {
   display: flex;
+  flex: 0 0 var(--header-h);
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 13px clamp(14px, 3vw, 28px);
+  padding: 0 clamp(12px, 2.5vw, 20px);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
@@ -108,35 +189,45 @@ p {
 
 .brand-mark {
   display: grid;
-  flex: 0 0 30px;
-  width: 30px;
-  height: 30px;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
   place-items: center;
-  border-radius: 9px;
+  border-radius: 8px;
   color: #fff;
-  background: linear-gradient(135deg, #2a8a78, #12564a);
-  font-size: 1.05rem;
+  background: linear-gradient(140deg, #2f9c86, #0f5347);
+  font-size: 0.95rem;
   font-weight: 800;
+  letter-spacing: -0.02em;
+  box-shadow: var(--shadow-card);
 }
 
 .brand-copy {
   display: grid;
   gap: 1px;
+  min-width: 0;
 }
 
 .brand-copy h1 {
-  font-size: 0.95rem;
+  overflow: hidden;
+  font-size: 0.88rem;
+  font-weight: 650;
   letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand-copy p {
+  overflow: hidden;
   color: var(--text-faint);
-  font-size: 0.68rem;
+  font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .header-actions {
   display: flex;
-  gap: 6px;
+  gap: 4px;
 }
 
 /* 工作区：左侧服务栏 + 右侧 WebView 承载区 */
@@ -155,11 +246,14 @@ p {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  gap: 8px;
-  padding: 12px 10px;
+  gap: 6px;
+  padding: 10px 8px;
   overflow-y: auto;
+  overflow-x: hidden;
   border-right: 1px solid var(--border);
   background: var(--surface);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 .sidebar__head {
@@ -167,44 +261,64 @@ p {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 4px 2px;
+  padding: 2px 6px 4px;
 }
 
 .sidebar__title {
   color: var(--text-faint);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
 }
 
 .sidebar__list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.sidebar__item {
-  border-radius: 9px;
+/* 选中态用左侧竖条标记：比整块染色更安静，也更容易在长列表里扫出来 */
+.sidebar__group {
+  position: relative;
 }
 
-.sidebar__item--active > .sidebar__row {
+.sidebar__group--active > .sidebar__row {
   background: var(--accent-soft);
 }
 
+.sidebar__group--active > .sidebar__row::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 3px;
+  height: 20px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-line);
+  content: "";
+  transform: translateY(-50%);
+}
+
 .sidebar__row {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 6px;
-  border-radius: 9px;
+  gap: 9px;
+  padding: 7px 7px;
+  border-radius: var(--radius-sm);
+  transition: background-color 0.12s ease;
 }
 
 .sidebar__row:hover {
   background: var(--surface-hover);
+}
+
+.sidebar__group--active > .sidebar__row:hover {
+  background: var(--accent-soft);
 }
 
 .sidebar__name {
@@ -221,8 +335,9 @@ p {
 
 .sidebar__label {
   overflow: hidden;
-  font-size: 0.84rem;
+  font-size: 0.83rem;
   font-weight: 600;
+  letter-spacing: -0.005em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -232,42 +347,78 @@ p {
   align-items: center;
   gap: 5px;
   color: var(--text-faint);
-  font-size: 0.68rem;
+  font-size: 0.66rem;
+  line-height: 1.2;
 }
 
-/* 版本号：比状态文字更次要，压暗一档免得跟在线状态抢注意力 */
+/* 版本号：用等宽数字，免得多个服务对齐不齐；同时压暗一档不抢注意力 */
 .sidebar__version {
   font-variant-numeric: tabular-nums;
-  opacity: 0.75;
+  opacity: 0.7;
 }
 
-.sidebar__badge {
-  padding: 0 5px;
+/* 任务数：唯一需要一眼看到的元信息，给个小徽标 */
+.sidebar__count {
+  padding: 1px 5px;
   border-radius: 999px;
-  color: #fff;
-  background: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   font-size: 0.62rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   line-height: 1.5;
 }
 
+/* 会话列表：缩进 + 左侧轨道，明确表达归属关系 */
 .sidebar__sessions {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 1px;
-  margin: 0;
-  padding: 2px 0 4px 30px;
+  margin: 1px 0 3px;
+  padding: 2px 0 2px 22px;
   list-style: none;
+}
+
+/* 轨道：从父级头像下方延伸下来，视觉上把会话挂在服务下。
+   选中的会话自带左侧竖条，这段轨道整条让位，免得两条线并排打架。 */
+.sidebar__sessions:has(.sidebar__session--active)::before {
+  background: transparent;
+}
+
+.sidebar__sessions::before {
+  position: absolute;
+  top: 0;
+  bottom: 4px;
+  left: 14px;
+  width: 1px;
+  background: var(--border);
+  content: "";
 }
 
 .sidebar__session {
   display: flex;
   align-items: center;
-  gap: 4px;
-  border-radius: 7px;
+  gap: 2px;
+  border-radius: 6px;
+  transition: background-color 0.12s ease;
 }
 
 .sidebar__session:hover {
   background: var(--surface-hover);
+}
+
+/*
+ * 选中的会话不能和选中的服务同色——两块贴在一起会糊成一片，看不出层级。
+ * 会话改用"中性底 + 左侧竖条"，与服务行的整块染色区分开。
+ */
+.sidebar__session--active {
+  background: var(--surface-hover);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.sidebar__session--active:hover {
+  background: var(--surface-active);
 }
 
 .sidebar__session-main {
@@ -284,7 +435,8 @@ p {
 
 .sidebar__session-title {
   overflow: hidden;
-  font-size: 0.76rem;
+  font-size: 0.75rem;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -292,13 +444,19 @@ p {
 .sidebar__session-activity {
   overflow: hidden;
   color: var(--text-faint);
-  font-size: 0.66rem;
+  font-size: 0.64rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sidebar__session--done .sidebar__session-title {
+.sidebar__session--active .sidebar__session-title {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sidebar__session-activity--done {
   color: var(--text-faint);
+  opacity: 0.75;
 }
 
 .sidebar__foot {
@@ -311,48 +469,74 @@ p {
 
 .sidebar__empty {
   display: grid;
-  gap: 8px;
-  padding: 14px 8px;
+  gap: 10px;
+  justify-items: start;
+  padding: 18px 10px;
   color: var(--text-faint);
   font-size: 0.78rem;
 }
 
-/* WebView 承载区：原生 webview 由 JS 量出这块矩形后覆盖上来 */
+/* WebView 承载区：原生 Agent 视图由前端量出这块矩形后覆盖上来 */
 .stage {
   position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  background: var(--bg);
 }
 
 .stage__empty {
   display: grid;
   height: 100%;
   padding: 24px;
-  color: var(--text-faint);
-  font-size: 0.84rem;
   place-items: center;
+}
+
+.empty-state {
+  display: grid;
+  justify-items: center;
+  max-width: 320px;
+  gap: 10px;
   text-align: center;
 }
 
+.empty-state__icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  margin-bottom: 2px;
+  place-items: center;
+  border-radius: 14px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.empty-state__icon--muted {
+  color: var(--text-faint);
+  background: var(--surface-hover);
+}
+
+.empty-state__title {
+  font-size: 0.95rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.empty-state__text {
+  color: var(--text-faint);
+  font-size: 0.8rem;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+/* 切换服务时露出的底色，避免 Agent 视图加载期间闪白 */
 .stage__backdrop {
   display: grid;
   height: 100%;
   color: var(--text-faint);
+  background: var(--bg);
+  font-size: 0.82rem;
   place-items: center;
-  font-size: 0.84rem;
-}
-
-.section-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.section-heading h2 {
-  font-size: 0.92rem;
 }
 
 /* ---------- 按钮 ---------- */
@@ -363,7 +547,7 @@ p {
 .ghost-button,
 .icon-button {
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius);
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
@@ -413,20 +597,25 @@ p {
   width: 28px;
   height: 28px;
   border: none;
-  border-radius: 7px;
-  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
   background: transparent;
+  transition: color 120ms ease, background-color 120ms ease;
   cursor: pointer;
 }
 
 .pin-toggle:hover {
   color: var(--text);
-  background: var(--accent-soft);
+  background: var(--surface-hover);
 }
 
 .pin-toggle[aria-pressed="true"] {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.pin-toggle[aria-pressed="true"]:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .text-button,
@@ -442,6 +631,10 @@ p {
 .icon-button:hover {
   color: var(--text);
   background: var(--accent-soft);
+}
+
+.icon-button:active {
+  background: var(--surface-active);
 }
 
 .icon-button--danger {
@@ -469,10 +662,10 @@ p {
 .toast {
   padding: 10px 13px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   color: var(--text);
   background: var(--surface);
-  box-shadow: var(--shadow-lift);
+  box-shadow: var(--shadow-pop);
   font-size: 0.8rem;
   line-height: 1.45;
   animation: toast-in 160ms ease-out;
@@ -503,103 +696,47 @@ p {
   }
 }
 
-/* ---------- 服务器列表 ---------- */
-
-.server-list {
-  display: grid;
-  gap: 8px;
-}
-
-.server-card {
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow-card);
-  transition: border-color 120ms ease, box-shadow 120ms ease;
-}
-
-.server-card:hover,
-.server-card:focus-within {
-  border-color: var(--border-strong);
-  box-shadow: 0 4px 14px rgba(24, 35, 31, 0.08);
-}
-
-.server-card--offline {
-  background: var(--surface-dim);
-}
-
-/* 卡片第一行：徽标 + 名称 + 操作 + 打开提示 */
-.server-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.server-open {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  min-width: 0;
-  padding: 11px 4px 11px 2px;
-  border: 0;
-  color: inherit;
-  background: transparent;
-  text-align: left;
-}
-
-/* 左侧下拉开关槽位：无会话时留空，保持各卡片图标列对齐 */
-.expander-slot {
-  display: flex;
-  flex: 0 0 22px;
-  justify-content: center;
-  margin-left: 6px;
-}
-
-.session-expander {
-  display: grid;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  place-items: center;
-  color: var(--text-faint);
-  background: transparent;
-  cursor: pointer;
-  font-size: 0.68rem;
-}
-
-.session-expander:hover {
-  color: var(--text);
-  background: var(--accent-soft);
-}
+/* ---------- 后端标识与状态 ---------- */
 
 .status-chevron {
   display: inline-block;
+  font-size: 0.6rem;
   transition: transform 140ms ease;
 }
 
-.session-expander[aria-expanded="true"] .status-chevron {
+/*
+ * 展开态的旋转。
+ *
+ * 原来挂在 .session-expander 上，那是旧标记的名字；当前标记用的是
+ * .sidebar__toggle，所以箭头从来没转过。
+ */
+.sidebar__toggle[aria-expanded="true"] .status-chevron {
   transform: rotate(180deg);
 }
 
-.server-badge {
-  position: relative;
-  flex: 0 0 auto;
-  margin-right: 11px;
-}
-
 .backend-logo {
+  position: relative;
   display: grid;
-  width: 36px;
-  height: 36px;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
   place-items: center;
-  border-radius: 10px;
+  border-radius: 9px;
   color: #fff;
   background: #2b78c2;
-  font-weight: 900;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  user-select: none;
+}
+
+/* 各后端一个色相，长列表里靠颜色也能区分 */
+.backend-logo[data-backend="kimi"] {
+  background: linear-gradient(140deg, #3f7fe0, #2a5cb8);
+}
+
+.backend-logo[data-backend="opencode"] {
+  background: linear-gradient(140deg, #4a4f57, #2b2f36);
 }
 
 .backend-logo--dsh {
@@ -612,133 +749,36 @@ p {
   opacity: 0.55;
 }
 
+/*
+ * 在线状态做成头像右下角的角标。
+ *
+ * 之前这条规则是绝对定位、却没有定位祖先，于是 7 个状态点全飞到窗口右下角
+ * 叠在一起，每行"在线"前面反而是空的。放在头像上是它的本来设计——颜色和
+ * 图形双通道，一长串里扫一眼就知道哪些活着。
+ */
 .status-dot {
   position: absolute;
   right: -2px;
   bottom: -2px;
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
   border: 2px solid var(--surface);
   border-radius: 50%;
-  background: #b6bdb9;
+  background: var(--offline);
 }
 
 .status-dot--online {
-  background: #2f9e7b;
+  background: var(--online);
 }
 
-.server-copy {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
+/* 离线时整行压暗，减少视觉噪音 */
+.sidebar__group:has(.backend-logo--offline) > .sidebar__row {
+  opacity: 0.62;
 }
 
-.server-title-row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-}
-
-.server-title-row strong {
-  overflow: hidden;
-  font-size: 0.88rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.server-meta {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-  font-size: 0.72rem;
-}
-
-.server-address {
-  overflow: hidden;
-  color: var(--text-dim);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.server-meta-sep {
-  flex: none;
-  color: var(--text-faint);
-}
-
-.server-status {
-  flex: none;
-  color: var(--text-faint);
-}
-
-.server-status--online {
-  color: #1f7a63;
-  font-weight: 700;
-}
-
-.server-open-hint {
-  flex: none;
-  padding: 0 13px 0 4px;
-  color: var(--text-faint);
-  font-size: 0.85rem;
-}
-
-/* 操作按钮平时收起，悬停/键盘聚焦时出现 */
-.server-actions {
-  display: flex;
-  flex: none;
-  gap: 2px;
-  padding-right: 6px;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.server-card:hover .server-actions,
-.server-card:focus-within .server-actions {
+.sidebar__group:has(.backend-logo--offline) > .sidebar__row:hover,
+.sidebar__group--active:has(.backend-logo--offline) > .sidebar__row {
   opacity: 1;
-}
-
-.server-card:hover .server-open-hint,
-.server-card:focus-within .server-open-hint {
-  display: none;
-}
-
-/* ---------- 运行中会话下拉面板 ---------- */
-
-.session-list {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-  padding: 7px 12px 9px 30px;
-  border-top: 1px solid var(--border);
-  list-style: none;
-}
-
-.session-row {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  border-radius: 8px;
-}
-
-.session-row:hover,
-.session-row--pinned {
-  background: var(--accent-soft);
-}
-
-/* 打开会话的主体按钮；置顶按钮是行尾独立按钮，不能嵌套。 */
-.session-main {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 5px 4px 5px 8px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
 }
 
 /* 行尾置顶按钮：hover 行时浮现，已置顶常亮。 */
@@ -758,9 +798,9 @@ p {
   transition: opacity 0.12s ease;
 }
 
-.session-row:hover .session-pin,
-.session-pin--active,
-.session-pin:focus-visible {
+.session-pin:hover,
+.session-pin:focus-visible,
+.session-pin--active {
   opacity: 1;
 }
 
@@ -772,94 +812,6 @@ p {
 .session-pin--active {
   color: var(--accent);
 }
-
-.session-done-mark {
-  flex: none;
-  width: 15px;
-  color: var(--accent);
-  font-size: 0.8rem;
-  text-align: center;
-}
-
-.session-copy {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.session-title {
-  overflow: hidden;
-  font-size: 0.8rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-activity {
-  overflow: hidden;
-  color: var(--text-dim);
-  font-size: 0.7rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-activity--done {
-  color: var(--accent);
-}
-
-.session-spinner {
-  flex: none;
-  width: 11px;
-  height: 11px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: session-spin 0.9s linear infinite;
-}
-
-@keyframes session-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* ---------- 空状态 ---------- */
-
-.empty-state {
-  display: grid;
-  justify-items: center;
-  padding: 56px 20px 60px;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius);
-  color: var(--text-dim);
-  text-align: center;
-}
-
-.empty-state__icon {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  margin-bottom: 12px;
-  place-items: center;
-  border-radius: 13px;
-  color: var(--accent);
-  background: var(--accent-soft);
-  font-size: 1.5rem;
-}
-
-.empty-state h2 {
-  color: var(--text);
-  font-size: 0.95rem;
-}
-
-.empty-state p {
-  max-width: 340px;
-  margin: 7px 0 16px;
-  font-size: 0.8rem;
-  line-height: 1.55;
-}
-
 /* ---------- 设置 ---------- */
 
 .settings-body {
@@ -1050,7 +1002,7 @@ input[role="switch"]:checked::after {
   min-width: 0;
   padding: 8px 10px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius);
   outline: none;
   color: var(--text);
   background: var(--surface);
@@ -1250,7 +1202,7 @@ input[role="switch"]:checked::after {
   margin: 0 0 10px;
   padding: 8px 10px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius);
   outline: none;
   color: var(--text);
   background: var(--surface);
@@ -1341,16 +1293,8 @@ input[role="switch"]:checked::after {
     min-width: 360px;
   }
 
-  .app-header {
-    padding: 11px 14px;
-  }
-
   .brand-copy p {
     display: none;
-  }
-
-  .content {
-    padding: 16px 14px 32px;
   }
 
   .form-grid {
@@ -1363,12 +1307,9 @@ input[role="switch"]:checked::after {
     grid-column: 1;
   }
 
-  .server-actions {
+  /* 窄屏下没有鼠标悬停，操作按钮必须常驻可见 */
+  .session-pin {
     opacity: 1;
-  }
-
-  .server-open-hint {
-    display: none;
   }
 }
 

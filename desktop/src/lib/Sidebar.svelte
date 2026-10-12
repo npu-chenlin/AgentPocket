@@ -69,6 +69,10 @@
               aria-label={label(server.backend)}
             >
               {mark(server.backend)}
+              <span
+                class="status-dot{connected ? ' status-dot--online' : ''}"
+                title={connected ? "已连接" : "未连接"}
+              ></span>
             </span>
             <button
               class="sidebar__name"
@@ -78,7 +82,6 @@
             >
               <span class="sidebar__label">{server.name}</span>
               <span class="sidebar__meta">
-                <span class="status-dot{connected ? ' status-dot--online' : ''}" aria-hidden="true"></span>
                 <span>{connected ? "在线" : "离线"}</span>
                 {#if status?.serverVersion}
                   <span class="sidebar__version" title="服务端版本">v{status.serverVersion}</span>

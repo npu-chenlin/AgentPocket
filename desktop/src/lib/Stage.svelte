@@ -47,15 +47,49 @@
 <section class="stage" bind:this={stage} aria-label={selectedName ?? "内容区"}>
   {#if !hasServers}
     <div class="stage__empty">
-      <div class="empty-state__icon" aria-hidden="true">⌁</div>
-      <p>添加 Kimi / OpenCode / dsh 服务后，这里会直接显示它的 Web 界面。</p>
+      <div class="empty-state">
+        <div class="empty-state__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22"
+            ><path
+              d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-9Z"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+            /><path
+              d="M8.5 9.5v5M15.5 9.5v5"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            /></svg
+          >
+        </div>
+        <h2 class="empty-state__title">还没有服务连接</h2>
+        <p class="empty-state__text">
+          添加 Kimi / OpenCode / dsh 之后，这里会直接显示它的 Web 界面，不必切到浏览器。
+        </p>
+      </div>
     </div>
   {:else if !selectedName}
     <div class="stage__empty">
-      <p>从左侧选择一个服务或会话。</p>
+      <div class="empty-state">
+        <div class="empty-state__icon empty-state__icon--muted" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22"
+            ><path
+              d="M9 6 4.5 12 9 18M15 6l4.5 6-4.5 6"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            /></svg
+          >
+        </div>
+        <p class="empty-state__text">从左侧选择一个服务或会话。</p>
+      </div>
     </div>
   {:else}
-    <!-- WebView 覆盖在这一块上，这里只留底色避免切换时闪烁。 -->
+    <!-- Agent 视图覆盖在这一块上，这里只留底色避免切换时闪烁。 -->
     <div class="stage__backdrop" data-backend={selectedBackend} aria-hidden="true">
       <span>{selectedName}</span>
     </div>

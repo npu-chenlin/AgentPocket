@@ -33,9 +33,11 @@
   $effect(() => {
     if (syncInfo && !selectedAddress) selectedAddress = syncInfo.selected;
   });
+
+  import { modal } from "./modal";
 </script>
 
-<dialog {open} class="modal modal--small" aria-labelledby="settings-dialog-title" onclose={onClose} onclick={(e) => e.target === e.currentTarget && onClose()}>
+<dialog use:modal={open} class="modal modal--small" aria-labelledby="settings-dialog-title" onclose={onClose} onclick={(e) => e.target === e.currentTarget && onClose()}>
   <div class="modal__heading">
     <h2 id="settings-dialog-title">设置</h2>
     <button class="modal__close" type="button" onclick={onClose} aria-label="关闭">×</button>

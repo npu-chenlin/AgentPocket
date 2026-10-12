@@ -20,6 +20,7 @@
   import * as api from "./api";
   import { errorMessage } from "./api";
   import MeshPanel from "./MeshPanel.svelte";
+  import { modal } from "./modal";
   import SettingsDialog from "./SettingsDialog.svelte";
   import Sidebar from "./Sidebar.svelte";
   import Stage from "./Stage.svelte";
@@ -418,7 +419,23 @@
 <div class="app-shell">
   <header class="app-header">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true">⌁</span>
+      <!-- 和应用图标/托盘图标同一个"口袋"标记，纯路径绘制，不依赖字体里的符号 -->
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="17" height="17"
+          ><path
+            d="M7 8.5h10a1.5 1.5 0 0 1 1.5 1.5v6a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3v-6A1.5 1.5 0 0 1 7 8.5Z"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          /><path
+            d="M5.8 10.2h12.4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+          /></svg
+        >
+      </span>
       <div class="brand-copy">
         <h1>AgentPocket</h1>
         <p>编码 Agent 桌面伴侣</p>
@@ -493,7 +510,7 @@
 
 <dialog
   class="modal"
-  open={serverOpen}
+  use:modal={serverOpen}
   aria-labelledby="server-dialog-title"
   onclose={() => (serverOpen = false)}
   onclick={(event) => {
@@ -545,7 +562,7 @@
 
 <dialog
   class="modal modal--small"
-  open={importOpen}
+  use:modal={importOpen}
   aria-labelledby="import-dialog-title"
   onclose={() => (importOpen = false)}
   onclick={(event) => {
@@ -580,7 +597,7 @@
 
 <dialog
   class="modal modal--small"
-  open={pasteOpen}
+  use:modal={pasteOpen}
   aria-labelledby="paste-dialog-title"
   onclose={() => (pasteOpen = false)}
   onclick={(event) => {
@@ -612,7 +629,7 @@
 
 <dialog
   class="modal"
-  open={exportOpen}
+  use:modal={exportOpen}
   aria-labelledby="export-dialog-title"
   onclose={() => (exportOpen = false)}
   onclick={(event) => {
@@ -636,7 +653,7 @@
 
 <dialog
   class="modal modal--small"
-  open={syncOpen}
+  use:modal={syncOpen}
   aria-labelledby="sync-dialog-title"
   onclose={closeSync}
   onclick={(event) => {
