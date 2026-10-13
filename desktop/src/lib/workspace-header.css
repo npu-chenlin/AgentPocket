@@ -1,0 +1,59 @@
+.workspace-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 100%;
+  padding: 0 4px;
+}
+.workspace-header-actions .workspace-header-button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #5b6675;
+  cursor: pointer;
+}
+.workspace-header-actions .workspace-header-button:hover,
+.workspace-header-actions .workspace-header-button[aria-expanded="true"] {
+  background: #dde3ea;
+  color: #1f2733;
+}
+.workspace-header-button:focus-visible,
+.workspace-header-menu button:focus-visible {
+  outline: 2px solid #2282f4;
+  outline-offset: -2px;
+}
+.workspace-header-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 164px;
+  max-width: calc(100vw - 8px);
+  max-height: calc(100vh - 8px);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 4px;
+  border: 1px solid #d8dde4;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 4px 16px #172b4d24;
+}
+.workspace-header-menu button {
+  display: block;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #354152;
+  font: 12px/1.5 system-ui, sans-serif;
+  text-align: left;
+  cursor: pointer;
+}
+.workspace-header-menu button:hover,
+.workspace-header-menu button:focus-visible {
+  background: #edf0f4;
+}

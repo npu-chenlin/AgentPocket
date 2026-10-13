@@ -1,0 +1,122 @@
+/* 工作区 Dockview 外观：基于 themeLight 的变量覆盖，VS Code 风格的紧凑标签栏。
+   全部挂在 .dock-host 下，不污染应用其他区域。 */
+
+.dock-host .dockview-theme-light {
+  --workspace-accent: #2282f4;
+
+  /* 标签栏整体 */
+  --dv-tabs-and-actions-container-height: 34px;
+  --dv-tabs-and-actions-container-background-color: #e9edf2;
+  --dv-tabs-and-actions-container-font-size: 12px;
+
+  /* 标签配色：激活白底深字，未激活融进标签栏 */
+  --dv-group-view-background-color: #ffffff;
+  --dv-activegroup-visiblepanel-tab-background-color: #ffffff;
+  --dv-activegroup-visiblepanel-tab-color: #1f2733;
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-activegroup-hiddenpanel-tab-color: #5b6675;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #f4f6f9;
+  --dv-inactivegroup-visiblepanel-tab-color: #4b5563;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-inactivegroup-hiddenpanel-tab-color: #8a94a3;
+
+  --dv-tab-divider-color: #d4dae2;
+  --dv-separator-border: #d4dae2;
+  --dv-icon-hover-background-color: rgb(31 39 51 / 8%);
+
+  /* 分隔条：平时透明，按住/悬停时 accent 高亮 */
+  --dv-sash-color: transparent;
+  --dv-active-sash-color: var(--workspace-accent);
+  --dv-active-sash-transition-delay: 0.15s;
+
+  /* 拖拽指示色与 accent 一致 */
+  --dv-drag-over-background-color: rgb(34 130 244 / 12%);
+  --dv-drag-over-border-color: var(--workspace-accent);
+}
+
+/* 激活标签顶部 2px 强调条（用 inset 阴影，避开 dockview 自用的 ::before 分隔线） */
+.dock-host .dv-tab.dv-active-tab .dv-default-tab {
+  box-shadow: inset 0 2px 0 var(--workspace-accent);
+}
+
+/* 标签文字与关闭按钮的间距、悬停圆角 */
+.dock-host .dv-tab .dv-default-tab .dv-default-tab-action {
+  border-radius: 4px;
+  margin-right: 4px;
+}
+
+/* 分隔条 hover 反馈：过渡已在主题变量里，给 sash 一个更宽的命中提示色 */
+.dock-host .dv-sash:hover {
+  background-color: var(--workspace-accent);
+  transition: background-color 0.1s ease 0.15s;
+}
+
+/* 空工作区 */
+.workspace__empty {
+  gap: 8px;
+  color: #5b6675;
+  text-align: center;
+}
+.workspace__empty h2 {
+  margin: 0;
+  font: 600 16px/1.4 system-ui, sans-serif;
+  color: #1f2733;
+}
+.workspace__empty p {
+  margin: 0 0 8px;
+  font: 12px/1.6 system-ui, sans-serif;
+  max-width: 320px;
+}
+.workspace__empty button {
+  padding: 7px 18px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--workspace-accent, #2282f4);
+  color: #fff;
+  font: 13px/1.5 system-ui, sans-serif;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgb(12 56 160 / 25%);
+}
+.workspace__empty button:hover {
+  background: #1a6fd8;
+}
+
+/* 面板内容占位（连接中 / 布局调整中 / 加载失败） */
+.dock-host .agent-content {
+  position: relative;
+  overflow: hidden;
+  color: #8a94a3;
+  font: 12px/1.6 system-ui, sans-serif;
+}
+
+/* 模态遮挡时的虚化网页快照背景 */
+.dock-host .agent-cover {
+  position: absolute;
+  inset: -14px; /* 外扩，盖住模糊带来的边缘透明 */
+  background-size: cover;
+  background-position: top left;
+  filter: blur(9px);
+}
+.dock-host .agent-cover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgb(255 255 255 / 38%);
+}
+.dock-host .agent-content p {
+  margin: 0;
+}
+.dock-host .agent-content button {
+  margin-top: 8px;
+  padding: 5px 14px;
+  border: 1px solid #d4dae2;
+  border-radius: 5px;
+  background: #fff;
+  color: #354152;
+  font: 12px/1.5 system-ui, sans-serif;
+  cursor: pointer;
+}
+.dock-host .agent-content button:hover {
+  border-color: var(--workspace-accent, #2282f4);
+  color: var(--workspace-accent, #2282f4);
+}

@@ -15,7 +15,7 @@ export type MenuAction =
   | "export"
   | "phone-pair"
   | "settings"
-  | "toggle-sidebar"
+  | "toggle-launcher"
   | "toggle-always-on-top";
 
 /** 渲染进程收到这个 IPC 后执行对应动作。 */
@@ -70,21 +70,9 @@ export function menuTemplate(deps: MenuDeps): MenuItemConstructorOptions[] {
       ],
     },
     {
-      label: "编辑",
-      submenu: [
-        { role: "undo", label: "撤销" },
-        { role: "redo", label: "重做" },
-        { type: "separator" },
-        { role: "cut", label: "剪切" },
-        { role: "copy", label: "复制" },
-        { role: "paste", label: "粘贴" },
-        { role: "selectAll", label: "全选" },
-      ],
-    },
-    {
       label: "视图",
       submenu: [
-        { label: "折叠/展开侧边栏", click: () => send("toggle-sidebar") },
+        { label: "显示/隐藏悬浮球面板", click: () => send("toggle-launcher") },
         { label: "窗口置顶", click: () => send("toggle-always-on-top") },
         { type: "separator" },
         { role: "reload", label: "重新加载" },
@@ -113,7 +101,12 @@ export function menuTemplate(deps: MenuDeps): MenuItemConstructorOptions[] {
     },
     {
       label: "帮助",
-      submenu: [{ label: "项目主页", click: () => openExternal(HOMEPAGE) }],
+      submenu: [
+        // 系统原生「关于」面板：自动带上 package.json 里的版本号
+        { role: "about", label: "关于" },
+        { type: "separator" },
+        { label: "项目主页", click: () => openExternal(HOMEPAGE) },
+      ],
     },
   ];
 }

@@ -1,26 +1,19 @@
 import { describe, expect, it } from "vitest";
-
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ConfigStore } from "./config-store";
 
-/**
- * 确认 TS 版 ConfigStore 能读出 Tauri 版写下的真实配置。
- *
- * 这是迁移期的一次性核对：读不出来就说明两版格式对不上，属于真问题，
- * 不该用 try/catch 跳过去。
- */
-const REAL_CONFIG_DIR = `${process.env.HOME}/.local/share/com.local.agentpocket.desktop`;
-
-describe("真实配置兼容性", () => {
-  it("能读出 Tauri 版写下的配置", async () => {
-    const store = ConfigStore.open(REAL_CONFIG_DIR);
-    const config = await store.load();
-
-    console.log("schema:", config.schema, "activeId:", config.activeId);
-    console.log(
-      "服务:",
-      config.servers.map((s) => `${s.name}/${s.backend}/${s.host}:${s.port}`),
-    );
-    expect(config.schema).toBe(1);
-    expect(Array.isArray(config.servers)).toBe(true);
+describe("旧版配置格式兼容性（隔离样本）", () => {
+  it("读取旧版字段，不触碰 HOME 或真实用户配置", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agentpocket-config-test-"));
+    try {
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, "config.json"), JSON.stringify({ schema: 1, activeId: "sample",
+        servers: [{ id: "sample", name: "本地样本", host: "127.0.0.1", port: 3080, backend: "dsh", token: "synthetic" }] }));
+      const config = await ConfigStore.open(directory).load();
+      expect(config.schema).toBe(1);
+      expect(config.servers[0].id).toBe("sample");
+    } finally { await rm(directory, { recursive: true, force: true }); }
   });
 });

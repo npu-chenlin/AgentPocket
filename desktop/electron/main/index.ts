@@ -1,170 +1,101 @@
 import { BrowserWindow, app } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
+import { isolatedMode, isolatedConfigDir } from "./runtime";
 import * as agentView from "./agent-view";
+import { createBallWindow } from "./ball-window";
+import { closeDropOverlay, createDropOverlay } from "./drop-overlay";
 import { AppState, registerCommands, type AppView } from "./commands";
 import { ConfigStore } from "./config-store";
 import { Notifier } from "./notification";
-import { defaultSettings, type DesktopSettings, type ServerSummary } from "./model";
+import { defaultSettings, type DesktopSettings } from "./model";
 import { installMenu } from "./menu";
 import { TrayController, enforceSingleInstance } from "./tray";
 
-/**
- * 配置目录沿用旧版路径，这样迁移后用户已有的服务连接直接可用，不用重新录入。
- * Electron 默认的 userData 是另一处路径。
- */
-function configDir(): string {
-  return (
-    process.env.AGENTPOCKET_CONFIG_DIR ??
-    join(homedir(), ".local", "share", "com.local.agentpocket.desktop")
-  );
+let mainWindow: BrowserWindow | null = null;
+function showMain(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 }
 
-function createWindow(): BrowserWindow {
-  const window = new BrowserWindow({
-    width: 1100,
-    height: 720,
-    minWidth: 720,
-    minHeight: 480,
-    // 默认隐藏，由配置决定何时显示，避免开机弹窗。
-    show: false,
-    title: "AgentPocket",
-    // 菜单栏常驻：导入/导出/手机配对/设置都收在里面了，标题栏只留品牌与窗口操作。
-    // 代价是 Linux 上多占约 25px 垂直空间。
-    autoHideMenuBar: false,
-    webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      // preload 需要 require，给渲染进程开 sandbox 会挡住它。
-      sandbox: false,
+async function start(): Promise<void> {
+  const dir = isolatedConfigDir ?? process.env.AGENTPOCKET_CONFIG_DIR
+    ?? join(homedir(), ".local", "share", "com.local.agentpocket.desktop");
+  const store = ConfigStore.open(dir);
+  const window = new BrowserWindow({ width: 1100, height: 720, minWidth: 720, minHeight: 480,
+    show: false, title: "AgentPocket", autoHideMenuBar: false,
+    icon: join(__dirname, "../../resources/icon.png"),
+    webPreferences: { preload: join(__dirname, "../preload/index.mjs"),
+      contextIsolation: true, nodeIntegration: false, sandbox: false },
+  });
+  mainWindow = window;
+  // 隔离模式（e2e/预览）：真实系统鼠标会命中坐标处最上层窗口，桌面上其他置顶窗口
+  // （如旧版悬浮球、置顶应用）盖住测试窗口就会吃掉点击，这里用最高层级保证可测。
+  if (isolatedMode) window.setAlwaysOnTop(true, "screen-saver");
+  window.on("close", event => {
+    if (!app.isQuitting) { event.preventDefault(); window.hide(); }
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", event => event.preventDefault());
+  const notifier = new Notifier(new Date());
+  let latest: AppView | null = null;
+  const state = new AppState(store, view => {
+    latest = view;
+    if (!window.isDestroyed()) window.webContents.send("app:state", view);
+  }, event => {
+    if (window.isDestroyed()) return;
+    window.webContents.send("app:event", event);
+    const server = latest?.servers.find(s => s.id === event.serverId);
+    if (server && !isolatedMode) notifier.notify(event, server, latest?.settings.notifications ?? true);
+  });
+  const tray = new TrayController(window, {
+    onShowWindow: showMain,
+    onReconnectAll: () => state.monitor.reconnectAll(),
+    onToggleAutostart: async value => {
+      if (!isolatedMode) app.setLoginItemSettings({ openAtLogin: value });
+      const config = await store.load();
+      const next: DesktopSettings = { ...config.settings, autostart: value };
+      await store.save({ ...config, settings: next });
+      await state.publish();
+      tray.refresh();
+      return next;
     },
+    onQuit: () => app.quit(),
+    getSnapshot: () => ({ settings: latest?.settings ?? defaultSettings(),
+      statuses: latest?.statuses ?? {}, serverCount: latest?.servers.length ?? 0 }),
   });
-
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void window.loadURL(process.env.ELECTRON_RENDERER_URL);
-  } else {
-    void window.loadFile(join(__dirname, "../renderer/index.html"));
+  app.on("before-quit", () => {
+    app.isQuitting = true;
+    closeDropOverlay();
+    agentView.closeAll(window);
+    state.monitor.shutdown();
+  });
+  const config = await state.start();
+  registerCommands(window, state, tray, dir);
+  installMenu(window);
+  if (!isolatedMode) {
+    tray.install();
+    app.setLoginItemSettings({ openAtLogin: config.settings.autostart });
   }
-
-  window.on("close", (event) => {
-    // 点叉只收起到托盘，除非用户明确点了"退出"。
-    if (!app.isQuitting) {
-      event.preventDefault();
-      window.hide();
-    }
-  });
-
-  // 窗口重新显示时，Agent 视图要跟着回来，否则恢复后是一片空白。
-  window.on("show", () => agentView.setOverlaid(false));
-
-  return window;
+  if (process.env.ELECTRON_RENDERER_URL && !isolatedMode) await window.loadURL(process.env.ELECTRON_RENDERER_URL);
+  else await window.loadFile(join(__dirname, "../renderer/index.html"));
+  try { createBallWindow(window); }
+  catch (error) {
+    console.error("悬浮球初始化失败", error);
+    window.webContents.send("app:event", { "ball-error": String(error) });
+  }
+  try { createDropOverlay(window); }
+  catch (error) { console.error("投放指示层初始化失败", error); }
+  if (!process.argv.includes("--hidden") && (isolatedMode || !app.isPackaged || !config.settings.startHidden)) showMain();
+  app.on("activate", showMain);
 }
 
-if (!enforceSingleInstance(() => {
-  const [existing] = BrowserWindow.getAllWindows();
-  existing?.show();
-  existing?.focus();
-})) {
-  app.quit();
-} else {
-  void app.whenReady().then(async () => {
-    app.isQuitting = false;
-
-    const window = createWindow();
-    const dir = configDir();
-    const store = ConfigStore.open(dir);
-
-    // 通知的时间基准：应用启动时刻。启动瞬间拉回来的服务端基线都是
-    // "已经发生过"的事件，拿它们通知用户等于报陈年旧账。
-    const notifier = new Notifier(new Date());
-
-    let latestView: AppView | null = null;
-    let servers = new Map<string, ServerSummary>();
-
-    const push = (view: AppView): void => {
-      latestView = view;
-      servers = new Map(view.servers.map((server) => [server.id, server]));
-      // 视图是 AppState 汇总好的，原样转发即可；在这里再拼一次会把
-      // statuses 和 activeId 抹掉。
-      window.webContents.send("app:state", view);
-    };
-
-    const state = new AppState(store, push, (event) => {
-      window.webContents.send("app:event", event);
-      const server = servers.get(event.serverId);
-      if (!server) {
-        // 服务已被删除，事件无处可指。记一笔而不是编一个名字出来。
-        console.error(`收到未知服务 ${event.serverId} 的事件，已忽略：`, event.kind);
-        return;
-      }
-      try {
-        notifier.notify(event, server, latestView?.settings.notifications ?? true);
-      } catch (error) {
-        // 通知失败不该拖垮监控，但要让用户知道为什么没弹通知。
-        console.error("发送通知失败：", error);
-      }
-    });
-
-    const tray = new TrayController(window, {
-      onShowWindow: () => {
-        window.show();
-        window.focus();
-      },
-      onReconnectAll: () => state.monitor.reconnectAll(),
-      onToggleAutostart: async (value) => {
-        app.setLoginItemSettings({ openAtLogin: value });
-        const config = await store.load();
-        const next: DesktopSettings = { ...config.settings, autostart: value };
-        await store.save({ ...config, settings: next });
-        tray.refresh();
-        return next;
-      },
-      onQuit: () => {
-        app.isQuitting = true;
-        agentView.closeAll(window);
-        state.monitor.shutdown();
-        app.quit();
-      },
-      getSnapshot: () => ({
-        settings: latestView?.settings ?? defaultSettings(),
-        statuses: latestView?.statuses ?? {},
-        serverCount: latestView?.servers.length ?? 0,
-      }),
-    });
-
-    registerCommands(window, state, tray, dir);
-    installMenu(window);
-    tray.install();
-
-    const config = await state.start();
-    app.setLoginItemSettings({ openAtLogin: config.settings.autostart });
-    tray.refresh();
-
-    const hidden = process.argv.includes("--hidden");
-    if (!hidden && (app.isPackaged === false || !config.settings.startHidden)) {
-      window.show();
-    }
-
-    app.on("activate", () => {
-      const [existing] = BrowserWindow.getAllWindows();
-      if (!existing) createWindow();
-      else {
-        existing.show();
-        existing.focus();
-      }
-    });
-  });
-
-  // 托盘常驻应用不因窗口全关而退出。
+if (!isolatedMode && !enforceSingleInstance(showMain)) app.quit();
+else {
+  app.isQuitting = false;
+  void app.whenReady().then(start).catch(error => { console.error("应用启动失败", error); app.exit(1); });
   app.on("window-all-closed", () => {});
 }
-
-declare global {
-  namespace Electron {
-    interface App {
-      isQuitting: boolean;
-    }
-  }
-}
+declare global { namespace Electron { interface App { isQuitting: boolean } } }

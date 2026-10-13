@@ -35,6 +35,7 @@ export interface ImportPreview {
 export interface ImportPreviewData {
   preview: ImportPreview;
   config: AppConfig;
+  issues?: { index: number; reason: string }[];
 }
 
 export class ConfigError extends Error {
@@ -113,19 +114,34 @@ export class ConfigStore {
 
   /** 解析内存中的导入内容（粘贴 JSON），不碰文件系统。 */
   async previewImportText(content: string): Promise<ImportPreviewData> {
-    return importPreviewFromParsed(parseConfig(content));
+    let value: any;
+    try { value = JSON.parse(content); }
+    catch (error) { throw new ConfigError(`configuration JSON is invalid: ${(error as Error).message}`); }
+    if (Array.isArray(value)) value = { schema: 1, servers: value };
+    const result = importPreviewFromParsed(parseConfig(JSON.stringify(value)));
+    const issues: { index: number; reason: string }[] = [];
+    for (const [index, entry] of (Array.isArray(value?.servers) ? value.servers : []).entries()) {
+      try {
+        if (!entry || typeof entry.name !== "string" || typeof entry.host !== "string" || typeof entry.backend !== "string")
+          throw new Error("缺少名称、主机或 Agent 类型");
+        validateServer({ ...entry, port: Number(entry.port ?? 0) });
+      } catch (error) { issues.push({ index, reason: (error as Error).message }); }
+    }
+    return { ...result, issues };
   }
 
   async applyImportAndSave(data: ImportPreviewData, mode: ImportMode): Promise<AppConfig> {
     if (data.config.servers.length === 0) {
       throw new ConfigError("import contains no valid servers");
     }
-    return this.queue.then(async () => {
+    const task = this.queue.then(async () => {
       const current = await this.load();
       const merged = mergeImport(current, data, mode);
       await this.save(merged);
       return merged;
     });
+    this.queue = task.then(() => undefined, () => undefined);
+    return task;
   }
 
   /**

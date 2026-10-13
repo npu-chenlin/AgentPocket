@@ -25,8 +25,13 @@ function stubApi() {
   let menuHandler: ((action: string) => void) | null = null;
   const api: Record<string, unknown> = {
     getAppView: vi.fn(async () => appView()),
-    setWebviewBounds: vi.fn(async () => {}),
-    setWebviewOverlaid: vi.fn(async () => {}),
+    syncWorkspace: vi.fn(async () => {}),
+    retryTab: vi.fn(async () => {}),
+    setDropIndicator: vi.fn(async () => {}),
+    captureViews: vi.fn(async () => ({})),
+    onTabStatus: vi.fn(() => () => {}),
+    onTabFocus: vi.fn(() => () => {}),
+    discoverMeshPeers: vi.fn(async () => []),
     setAlwaysOnTop: vi.fn(async () => {}),
     exportConfigText: vi.fn(async () => "{}"),
     startSyncServer: vi.fn(async () => {
@@ -34,6 +39,8 @@ function stubApi() {
     }),
     onStateChanged: vi.fn(() => () => {}),
     onAgentEvent: vi.fn(() => () => {}),
+    onBallToggle: vi.fn(() => () => {}),
+    publishBallState: vi.fn(async () => {}),
     onMenuAction: vi.fn((cb: (action: string) => void) => {
       menuHandler = cb;
       return () => {
@@ -62,7 +69,7 @@ describe("原生菜单栏", () => {
     (globalThis as { agentpocket?: unknown }).agentpocket = api;
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByText("工作站");
+    await screen.findByText("选一个服务打开");
 
     // 这些都搬进菜单了，界面上不该再有
     expect(screen.queryByRole("button", { name: "导入" })).not.toBeInTheDocument();
@@ -76,7 +83,7 @@ describe("原生菜单栏", () => {
     (globalThis as { agentpocket?: unknown }).agentpocket = api;
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByText("工作站");
+    await screen.findByText("选一个服务打开");
     expect(hasHandler()).toBe(true);
   });
 
@@ -85,7 +92,7 @@ describe("原生菜单栏", () => {
     (globalThis as { agentpocket?: unknown }).agentpocket = api;
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByText("工作站");
+    await screen.findByText("选一个服务打开");
 
     fireMenu("import");
     await screen.findByRole("dialog");
@@ -96,7 +103,7 @@ describe("原生菜单栏", () => {
     (globalThis as { agentpocket?: unknown }).agentpocket = api;
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByText("工作站");
+    await screen.findByText("选一个服务打开");
 
     fireMenu("settings");
     await waitFor(() => {
@@ -110,7 +117,7 @@ describe("原生菜单栏", () => {
     (globalThis as { agentpocket?: unknown }).agentpocket = api;
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByText("工作站");
+    await screen.findByText("选一个服务打开");
 
     fireMenu("export");
     await waitFor(() => {
@@ -119,17 +126,20 @@ describe("原生菜单栏", () => {
     });
   });
 
-  it("菜单「折叠侧边栏」切换侧边栏", async () => {
+  it("菜单「显示/隐藏悬浮球面板」开合悬浮球面板", async () => {
     const { api, fireMenu } = stubApi();
     (globalThis as { agentpocket?: unknown }).agentpocket = api;
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByText("工作站");
+    await screen.findByText("选一个服务打开");
 
-    expect(document.querySelector(".workspace")?.className).not.toContain("collapsed");
-    fireMenu("toggle-sidebar");
+    expect(screen.queryByRole("dialog", { name: "悬浮球面板" })).not.toBeInTheDocument();
+    fireMenu("toggle-launcher");
+    await screen.findByRole("dialog", { name: "悬浮球面板" });
+
+    fireMenu("toggle-launcher");
     await waitFor(() => {
-      expect(document.querySelector(".workspace")?.className).toContain("collapsed");
+      expect(screen.queryByRole("dialog", { name: "悬浮球面板" })).not.toBeInTheDocument();
     });
   });
 
@@ -138,7 +148,7 @@ describe("原生菜单栏", () => {
     (globalThis as { agentpocket?: unknown }).agentpocket = api;
     const { default: App } = await import("./App.svelte");
     render(App);
-    await screen.findByText("工作站");
+    await screen.findByText("选一个服务打开");
 
     // 标题栏已删，置顶只剩菜单这一个入口：点了必须真的调主进程。
     fireMenu("toggle-always-on-top");
@@ -157,12 +167,11 @@ describe("原生菜单栏", () => {
     (globalThis as { agentpocket?: unknown }).agentpocket = api;
     const { default: App } = await import("./App.svelte");
     const { container } = render(App);
-    await screen.findByText("工作站");
+    await screen.findByText("选一个服务打开");
 
     expect(() => fireMenu("future-action-from-newer-menu")).not.toThrow();
     // 只看本次渲染的容器：同文件里前面的用例可能还留着异步收尾，
     // 断言全局 DOM 会受牵连。
-    expect(container.querySelector(".sidebar")).not.toBeNull();
-    expect(container.textContent).toContain("工作站");
+    expect(container.querySelector(".workspace")).not.toBeNull();
   });
 });

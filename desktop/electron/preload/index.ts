@@ -1,11 +1,21 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import type { AppView } from "../main/commands";
-import type { ImportMode, ImportPreviewData } from "../main/config-store";
+import type { ImportMode, ImportPreview, PinToggleResult } from "../../src/model";
+import type { WorkspaceSnapshot, TabStatus } from "../../shared/workspace";
 import type { Backend, DesktopSettings, ServerConfig, ServerForEdit } from "../main/model";
 import type { KimiSyncResult, MeshPeerView } from "../main/mesh";
 import { MENU_ACTION_CHANNEL, type MenuAction } from "../main/menu";
+import type { BallState } from "../main/ball-ipc";
 import type { SyncInfo } from "../main/sync";
+
+/** 原生视图占据的矩形，坐标系与渲染进程视口一致。 */
+export interface WebviewRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 /**
  * 渲染进程可见的全部接口。
@@ -17,30 +27,32 @@ const api = {
   getAppView: (): Promise<AppView> => ipcRenderer.invoke("app:get-view"),
   getServerForEdit: (id: string): Promise<ServerForEdit> =>
     ipcRenderer.invoke("server:for-edit", id),
-  saveServer: (server: ServerConfig): Promise<void> => ipcRenderer.invoke("server:save", server),
-  deleteServer: (id: string): Promise<void> => ipcRenderer.invoke("server:delete", id),
-  probeBackend: (server: ServerConfig): Promise<Backend> =>
-    ipcRenderer.invoke("server:probe", server),
+  saveServer: (server: ServerConfig): Promise<AppView> => ipcRenderer.invoke("server:save", server),
+  deleteServer: (id: string): Promise<AppView> => ipcRenderer.invoke("server:delete", id),
+  probeBackend: (server: ServerConfig): Promise<Backend> => ipcRenderer.invoke("server:probe", server),
   reconnectAll: (): Promise<void> => ipcRenderer.invoke("server:reconnect-all"),
-
-  openServer: (id: string, sessionId: string | null): Promise<void> =>
-    ipcRenderer.invoke("agent:open", id, sessionId),
-  setWebviewBounds: (rect: { x: number; y: number; width: number; height: number }): Promise<void> =>
-    ipcRenderer.invoke("agent:set-bounds", rect),
-  setWebviewOverlaid: (overlaid: boolean): Promise<void> =>
-    ipcRenderer.invoke("agent:set-overlaid", overlaid),
-
-  setAlwaysOnTop: (pinned: boolean): Promise<void> =>
-    ipcRenderer.invoke("window:set-always-on-top", pinned),
-  toggleSessionPin: (serverId: string, sessionId: string): Promise<boolean> =>
+  syncWorkspace: (snapshot: WorkspaceSnapshot): Promise<void> => ipcRenderer.invoke("workspace:sync", snapshot),
+  retryTab: (id: string): Promise<void> => ipcRenderer.invoke("workspace:retry", id),
+  /** 拖拽标签悬停内容区时，在网页上方显示半透明投放指示；null 表示隐藏。 */
+  setDropIndicator: (rect: WebviewRect | null): Promise<void> => ipcRenderer.invoke("workspace:drop-indicator", rect),
+  /** 模态遮挡前抓取可见网页的快照，用于虚化背景。 */
+  captureViews: (): Promise<Record<string, string>> => ipcRenderer.invoke("workspace:capture"),
+  onTabStatus: (callback: (status: TabStatus) => void): (() => void) => {
+    const listener = (_event: unknown, status: TabStatus) => callback(status);
+    ipcRenderer.on("workspace:status", listener);
+    return () => ipcRenderer.removeListener("workspace:status", listener);
+  },
+  onTabFocus: (callback: (id: string) => void): (() => void) => {
+    const listener = (_event: unknown, id: string) => callback(id);
+    ipcRenderer.on("workspace:focus", listener);
+    return () => ipcRenderer.removeListener("workspace:focus", listener);
+  },
+  setAlwaysOnTop: (pinned: boolean): Promise<void> => ipcRenderer.invoke("window:set-always-on-top", pinned),
+  toggleSessionPin: (serverId: string, sessionId: string): Promise<PinToggleResult> =>
     ipcRenderer.invoke("pin:toggle", serverId, sessionId),
-
-  updateSettings: (settings: DesktopSettings): Promise<void> =>
-    ipcRenderer.invoke("settings:update", settings),
-  previewImportText: (content: string): Promise<ImportPreviewData> =>
-    ipcRenderer.invoke("import:preview-text", content),
-  applyImport: (data: ImportPreviewData, mode: ImportMode): Promise<void> =>
-    ipcRenderer.invoke("import:apply", data, mode),
+  updateSettings: (settings: DesktopSettings): Promise<AppView> => ipcRenderer.invoke("settings:update", settings),
+  previewImportText: (content: string): Promise<ImportPreview> => ipcRenderer.invoke("import:preview-text", content),
+  applyImport: (id: string, mode: ImportMode): Promise<AppView> => ipcRenderer.invoke("import:apply", id, mode),
   exportConfigText: (): Promise<string> => ipcRenderer.invoke("export:text"),
   chooseExportPath: (): Promise<string | null> => ipcRenderer.invoke("dialog:choose-export-path"),
   exportConfig: (path: string): Promise<void> => ipcRenderer.invoke("export:to", path),
@@ -76,6 +88,17 @@ const api = {
     ipcRenderer.on(MENU_ACTION_CHANNEL, handler);
     return () => ipcRenderer.removeListener(MENU_ACTION_CHANNEL, handler);
   },
+
+  /** 悬浮球窗口点了一下，请求开合面板。 */
+  onBallToggle: (callback: () => void): (() => void) => {
+    const handler = (): void => callback();
+    ipcRenderer.on("ball:toggle-request", handler);
+    return () => ipcRenderer.removeListener("ball:toggle-request", handler);
+  },
+
+  /** 把表情状态推给悬浮球窗口；它看不到服务状态，只能由主窗口算好推过去。 */
+  publishBallState: (state: BallState): Promise<void> =>
+    ipcRenderer.invoke("ball:publish-state", state),
 };
 
 export type AgentPocketApi = typeof api;

@@ -19,7 +19,8 @@ AgentPocket 不运行 Coding Agent 本身，也不替代 Kimi Code、DeepSeek Ha
 | 多节点 | 节点管理 | 发现 Tailnet 内的电脑，分发 Kimi 配置、升级 CLI、管理 Kimi Web |
 | 常驻 | 各端可靠运行 | 托盘常驻、开机自启、应用更新、daemon 自更新 |
 
-桌面端是 Electron 应用：点服务或会话时，Agent 页面直接嵌在主窗口的内容区里（`WebContentsView`），
+桌面端是 Electron 应用：Agent 页面以独立标签嵌在主窗口里（每个标签一个 `WebContentsView`，会话与草稿互不影响），
+可以把多个服务/会话拖到边缘分屏并排，拖放时有半透明投放指示；悬浮球贴在窗口边缘，点一下唤起服务面板。
 不跳系统浏览器，也不额外开窗口。详见 [docs/desktop.md](docs/desktop.md)。
 
 支持的后端：**Kimi Code**、**DeepSeek Harness（dsh）**、**OpenCode**。
@@ -47,7 +48,7 @@ Android / Desktop / Daemon
 | 组件 | 适合谁 | 主要能力 |
 | --- | --- | --- |
 | Android | 需要移动访问的人 | 内嵌 Agent Web、多服务连接、后台状态监听、任务通知、悬浮入口、扫码同步服务连接 |
-| Desktop | 需要在电脑上常驻管理的人 | 系统托盘、状态监控、通知、在主窗口内嵌打开服务/会话、服务连接导入导出、手机配对、节点管理 |
+| Desktop | 需要在电脑上常驻管理的人 | 系统托盘、状态监控、通知、多标签分屏工作区（应用内嵌打开服务/会话）、悬浮球面板、服务连接导入导出、手机配对、节点管理 |
 | Daemon | 管理无显示器或多台 Linux 机器的人 | 节点发现、Kimi 配置分发、Kimi CLI 管理、Kimi Web 生命周期、自更新 |
 
 ## 快速开始

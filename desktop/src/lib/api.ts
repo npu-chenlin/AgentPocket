@@ -1,4 +1,4 @@
-import type { AgentPocketApi } from "../../electron/preload";
+import type { AgentPocketApi, WebviewRect } from "../../electron/preload";
 
 /**
  * 把任意异常转成可展示的短文案。
@@ -58,25 +58,12 @@ export function reconnectAll() {
   return bridge().reconnectAll();
 }
 
-/** 打开服务/会话到主窗口内的 Agent 视图。 */
-export function openServer(id: string, sessionId: string | null) {
-  return bridge().openServer(id, sessionId);
-}
-
-/** 上报内容区矩形，Agent 视图据此定位。 */
-export function setWebviewBounds(rect: {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}) {
-  return bridge().setWebviewBounds(rect);
-}
-
-/** 弹窗打开时收起 Agent 视图；它是原生控件，层级在 DOM 之上。 */
-export function setWebviewOverlaid(overlaid: boolean) {
-  return bridge().setWebviewOverlaid(overlaid);
-}
+export const syncWorkspace: AgentPocketApi["syncWorkspace"] = snapshot => bridge().syncWorkspace(snapshot);
+export const retryTab: AgentPocketApi["retryTab"] = id => bridge().retryTab(id);
+export const setDropIndicator: AgentPocketApi["setDropIndicator"] = rect => bridge().setDropIndicator(rect);
+export const captureViews: AgentPocketApi["captureViews"] = () => bridge().captureViews();
+export const onTabStatus: AgentPocketApi["onTabStatus"] = callback => bridge().onTabStatus(callback);
+export const onTabFocus: AgentPocketApi["onTabFocus"] = callback => bridge().onTabFocus(callback);
 
 export function setAlwaysOnTop(pinned: boolean) {
   return bridge().setAlwaysOnTop(pinned);
@@ -160,4 +147,14 @@ export function onAgentEvent(callback: (payload: unknown) => void) {
  */
 export function onMenuAction(callback: Parameters<AgentPocketApi["onMenuAction"]>[0]) {
   return bridge().onMenuAction(callback);
+}
+
+/** 订阅悬浮球窗口发来的"开合面板"请求。 */
+export function onBallToggle(callback: () => void) {
+  return bridge().onBallToggle(callback);
+}
+
+/** 把表情状态推给悬浮球窗口。 */
+export function publishBallState(state: import("../../electron/main/ball-ipc").BallState) {
+  return bridge().publishBallState(state);
 }

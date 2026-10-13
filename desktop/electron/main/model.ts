@@ -38,7 +38,7 @@ export const DEFAULT_SCHEMA = 1;
 
 export function defaultSettings(): DesktopSettings {
   return {
-    startHidden: true,
+    startHidden: false,
     // 托盘监控类应用的意义就是常驻：装完即后台常驻，用户可在设置里关掉。
     autostart: true,
     notifications: true,
@@ -64,6 +64,9 @@ export class ValidationError extends Error {
 
 /** host 字段只接受裸主机名/IP，不含 scheme、路径、空白或端口。 */
 export function validateServer(server: ServerConfig): void {
+  if (!server || !["kimi", "dsh", "opencode"].includes(server.backend)) {
+    throw new ValidationError("unknown agent backend");
+  }
   if (!Number.isInteger(server.port) || server.port <= 0 || server.port > 65535) {
     throw new ValidationError("port must be greater than zero");
   }

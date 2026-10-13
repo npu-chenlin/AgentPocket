@@ -82,12 +82,11 @@ export class TrayController {
         { label: "管理窗口", click: () => this.actions.onShowWindow() },
         { label: reconnectLabel(running), click: () => this.actions.onReconnectAll() },
         { type: "separator" },
+        // 不用 checkbox：原生菜单会为勾选框预留整列空白，普通项更紧凑
         {
-          label: "开机启动",
-          type: "checkbox",
-          checked: settings.autostart,
-          click: (item) => {
-            void this.actions.onToggleAutostart(item.checked);
+          label: settings.autostart ? "开机启动：开" : "开机启动：关",
+          click: () => {
+            void this.actions.onToggleAutostart(!settings.autostart);
           },
         },
         { type: "separator" },

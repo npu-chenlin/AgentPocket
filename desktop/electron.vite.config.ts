@@ -22,16 +22,26 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        input: resolve(__dirname, "electron/preload/index.ts"),
+        // 两个 preload：主窗口的，和悬浮球窗口的（它只暴露三个接口）。
+        input: {
+          index: resolve(__dirname, "electron/preload/index.ts"),
+          ball: resolve(__dirname, "electron/preload/ball.ts"),
+        },
       },
     },
   },
   renderer: {
+    // root 指向 src/ 后，插件会在 src/ 下找 svelte.config.js 而找不到，
+    // 于是 runes、preprocess 这些设置全走默认值。显式指回仓库根目录的那份。
     root: resolve(__dirname, "src"),
-    plugins: [svelte()],
+    plugins: [svelte({ configFile: resolve(__dirname, "svelte.config.js") })],
     build: {
       rollupOptions: {
-        input: resolve(__dirname, "src/index.html"),
+        // 两个页面：主窗口和悬浮球窗口。
+        input: {
+          index: resolve(__dirname, "src/index.html"),
+          ball: resolve(__dirname, "src/ball.html"),
+        },
       },
     },
   },

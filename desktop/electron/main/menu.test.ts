@@ -16,7 +16,7 @@ interface Probe {
   /** 菜单里所有点击回调实际发出的动作名。 */
   sent: MenuAction[];
   opened: string[];
-  template: ReturnType<typeof menuTemplate>;
+  template: (Omit<Electron.MenuItemConstructorOptions, "submenu"> & { submenu?: Electron.MenuItemConstructorOptions[] })[];
 }
 
 function probe(isMac = false): Probe {
@@ -28,7 +28,7 @@ function probe(isMac = false): Probe {
     appName: "AgentPocket",
     openExternal: (url) => opened.push(url),
   });
-  return { sent, opened, template };
+  return { sent, opened, template: template as Probe["template"] };
 }
 
 /** 点开模板里每一项的 click，收集发出的动作。 */
@@ -64,7 +64,7 @@ describe("原生菜单栏模板", () => {
       "export",
       "phone-pair",
       "settings",
-      "toggle-sidebar",
+      "toggle-launcher",
       "toggle-always-on-top",
     ];
     for (const action of expected) {
@@ -82,11 +82,11 @@ describe("原生菜单栏模板", () => {
     expect(fileLabels).toContain("设置");
   });
 
-  it("侧边栏折叠与窗口置顶在「视图」下", () => {
+  it("悬浮球面板开关与窗口置顶在「视图」下", () => {
     const { template } = probe();
     const view = template.find((m) => m.label === "视图");
     const viewLabels = (view?.submenu ?? []).map((c) => (c as { label?: string }).label ?? "");
-    expect(viewLabels).toContain("折叠/展开侧边栏");
+    expect(viewLabels).toContain("显示/隐藏悬浮球面板");
     expect(viewLabels).toContain("窗口置顶");
   });
 
@@ -107,10 +107,12 @@ describe("原生菜单栏模板", () => {
   it("项目主页走外部浏览器，不在应用内开新窗", () => {
     const { opened, template } = probe();
     const help = template.find((m) => m.label === "帮助");
-    const item = (help?.submenu ?? [])[0] as { label?: string; click?: () => void };
-    expect(item.label).toBe("项目主页");
+    const item = (help?.submenu ?? []).find((c) => (c as { label?: string }).label === "项目主页") as { click?: () => void };
     item.click?.();
     expect(opened).toEqual(["https://github.com/npu-chenlin/AgentPocket"]);
+    // 「关于」用系统原生面板，自动显示 package.json 里的版本号
+    const about = (help?.submenu ?? []).find((c) => (c as { role?: string }).role === "about");
+    expect((about as { label?: string })?.label).toBe("关于");
   });
 
   it("非 macOS 不显示应用菜单，退出放在「文件」下", () => {
@@ -129,12 +131,12 @@ describe("原生菜单栏模板", () => {
     expect(roles).toContain("minimize");
   });
 
-  it("顶层菜单顺序：文件、编辑、视图、窗口、帮助", () => {
+  it("顶层菜单顺序：文件、视图、窗口、帮助（编辑菜单已按用户要求移除）", () => {
     const { template } = probe();
     const top = template
       .map((m) => String(m.label ?? ""))
-      // macOS 的应用菜单没有 label 语义的差异，这里只看中文那五个。
+      // macOS 的应用菜单没有 label 语义的差异，这里只看中文那几个。
       .filter((l) => l !== "AgentPocket");
-    expect(top).toEqual(["文件", "编辑", "视图", "窗口", "帮助"]);
+    expect(top).toEqual(["文件", "视图", "窗口", "帮助"]);
   });
 });

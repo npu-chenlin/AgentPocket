@@ -9,6 +9,7 @@ export default defineConfig(({ mode }) => ({
     strictPort: true,
   },
   test: {
+    include: ["src/**/*.test.ts", "electron/**/*.test.ts"],
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test-setup.ts"],

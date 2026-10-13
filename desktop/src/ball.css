@@ -1,0 +1,117 @@
+/*
+ * 球窗口专用的样式。
+ *
+ * 不引主样式表：那里面有整站主题、弹窗、分屏等一大堆用不到的东西，
+ * 而这个窗口只有 72px 见方，加载整套 CSS 纯属浪费。
+ */
+
+:root {
+  --accent: #2282f4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  /* 透明：窗口本身无边框，靠 body 透明露出桌面。 */
+  background: transparent;
+  overflow: hidden;
+  /* 球体拖动时不该选中任何文字。 */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ---------- 悬浮球 ---------- */
+
+/*
+ * 球体。窗口比球大一圈（见 ball-window.ts 的 MARGIN），留出投影空间。
+ *
+ * 三层叠加复刻 Android 的 styleServerHandle：主体渐变 + 底部内阴影 + 顶部玻璃高光。
+ * 用 CSS 而不是画进 canvas，是因为描边、内阴影这些在 canvas 里要手动裁剪，
+ * 而 CSS 的 border-radius + box-shadow 天然就对。
+ */
+.ball {
+  position: relative;
+  display: block;
+  width: 56px;
+  height: 56px;
+  margin: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  /* 与 Android 的 elevation 8dp 对应的投影 */
+  box-shadow: 0 3px 8px rgb(12 56 160 / 35%);
+  cursor: grab;
+  touch-action: none;
+  transition: opacity 180ms ease, transform 180ms ease;
+  /* 拖动时不要让浏览器把它当文本拖走 */
+  -webkit-app-region: no-drag;
+}
+
+.ball:active {
+  cursor: grabbing;
+}
+
+/* 主体：带方向光的深蓝渐变 + 1dp 淡蓝描边 */
+.ball__body,
+.ball__shade,
+.ball__gloss {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.ball__body {
+  inset: 0;
+  background: linear-gradient(135deg, #60bcff 0%, #2282f4 50%, #0c38a0 100%);
+  box-shadow: inset 0 0 0 1px rgb(215 240 255 / 37%);
+}
+
+/* 底部内阴影，增加立体感 */
+.ball__shade {
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgb(3 16 60 / 0%) 0%,
+    rgb(3 16 60 / 0%) 60%,
+    rgb(3 16 64 / 28%) 100%
+  );
+}
+
+/* 顶部玻璃高光：Android 里是 inset(7, 3, 7, 19) 的一层 */
+.ball__gloss {
+  left: 7px;
+  right: 7px;
+  top: 3px;
+  bottom: 19px;
+  background: linear-gradient(
+    to bottom,
+    rgb(255 255 255 / 47%) 0%,
+    rgb(255 255 255 / 11%) 55%,
+    rgb(255 255 255 / 0%) 100%
+  );
+}
+
+/* 表情铺满球面，与上面三层同心 */
+.ball__face {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* 睡眠态：缩小、变淡 */
+.ball--asleep {
+  opacity: 0.72;
+  transform: scale(0.94);
+}
+
+.ball--dragging {
+  transform: scale(1.06);
+}

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      球窗口只画一个球，不加载任何远程内容，所以收得比主窗口更紧：
+      连 connect-src 都只留 ipc。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    />
+    <title>AgentPocket 悬浮球</title>
+  </head>
+  <body class="ball-page">
+    <div id="ball"></div>
+    <script type="module" src="/ball.ts"></script>
+  </body>
+</html>

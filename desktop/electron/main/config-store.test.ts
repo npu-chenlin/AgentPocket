@@ -135,12 +135,12 @@ describe("ConfigStore", () => {
     expect(data.preview.invalidServers).toBe(1);
   });
 
-  it("导入内容不是对象时报错", async () => {
+  it("支持粘贴数组并准确指出无效条目的位置", async () => {
     const store = await scratch();
-    // 错误文案沿用 Rust 侧原样（那边同样只接受对象）。
-    await expect(store.previewImportText("[]")).rejects.toThrow(
-      /must be an object or an array/,
-    );
+    const data = await store.previewImportText(JSON.stringify([serverEntry({ id: "ok" }), { name: "bad" }]));
+    expect(data.preview.validServers).toBe(1);
+    expect(data.issues?.[0].index).toBe(1);
+    await expect(store.previewImportText("42")).rejects.toThrow(/must be an object or an array/);
   });
 
   it("merge 模式按 id 覆盖，其余保留", async () => {

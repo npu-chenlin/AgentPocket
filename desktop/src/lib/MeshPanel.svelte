@@ -4,7 +4,7 @@
   interface Props {
     peers: MeshPeerView[];
     loading: boolean;
-    onAction: (action: string, host: string) => void;
+    onAction: (action: string, host: string, note?: string) => void;
   }
 
   let { peers, loading, onAction }: Props = $props();
@@ -51,7 +51,7 @@
   <div class="mesh-toolbar">
     <input class="mesh-input" bind:value={host} placeholder="100.x.x.x 或 MagicDNS 名" aria-label="节点地址" />
     <input class="mesh-input" bind:value={name} placeholder="备注名（可选）" aria-label="节点备注" />
-    <button class="secondary-button" type="button" onclick={() => onAction("add", "")}>添加</button>
+    <button class="secondary-button" type="button" onclick={() => onAction("add", host, name)}>添加</button>
     <button class="text-button" type="button" onclick={() => onAction("refresh", "")}>刷新</button>
   </div>
 </div>

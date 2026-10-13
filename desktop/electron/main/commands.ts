@@ -5,9 +5,15 @@
  * 不做静默兜底。
  */
 
-import { BrowserWindow, Notification, dialog, ipcMain, shell } from "electron";
-
+import { BrowserWindow, app, dialog, ipcMain, shell } from "electron";
+import { randomUUID } from "node:crypto";
+import type { WorkspaceSnapshot } from "../../shared/workspace";
+import type { PinToggleResult } from "../../src/model";
+import { isolatedMode } from "./runtime";
 import * as agentView from "./agent-view";
+import { ballWindowRef, dragBall, ballSnapshot, publishBallState } from "./ball-window";
+import { setDropIndicator, type DropIndicatorRect } from "./drop-overlay";
+import type { BallDrag, BallState, BallSnapshot } from "./ball-ipc";
 import { ConfigStore, type ImportMode, type ImportPreviewData } from "./config-store";
 import {
   toForEdit,
@@ -47,13 +53,7 @@ export interface AppView {
   statuses: Record<string, ServerStatusView>;
 }
 
-export interface ImportPreview {
-  importId: string;
-  validCount: number;
-  invalidCount: number;
-  servers: ServerSummary[];
-  issues: string[];
-}
+import type { ImportPreview } from "../../src/model";
 
 export class AppState {
   readonly store: ConfigStore;
@@ -116,7 +116,10 @@ export class AppState {
       settings: config.settings,
       servers: config.servers.map(toSummary),
       activeId: config.activeId,
-      statuses: Object.fromEntries(this.statuses),
+      statuses: Object.fromEntries([...this.statuses].map(([id, status]) => [id, {
+        ...status, sessions: status.sessions.map(session => ({ ...session,
+          pinned: this.pinned.has(id, session.id), done: session.done && this.pinned.has(id, session.id) })),
+      }])), 
     };
   }
 }
@@ -147,7 +150,18 @@ export function registerCommands(
     channel: string,
     handler: (...args: never[]) => Promise<T> | T,
   ): void => {
-    ipcMain.handle(channel, async (_event, ...args) => handler(...(args as never[])));
+    ipcMain.handle(channel, async (event, ...args) => {
+      const ballOnly = ["ball:toggle", "ball:drag", "ball:get-state"].includes(channel);
+      const allowed = ballOnly ? ballWindowRef()?.webContents : window.webContents;
+      if (!allowed || event.sender !== allowed || event.senderFrame !== allowed.mainFrame) {
+        throw new Error("IPC sender denied");
+      }
+      if (isolatedMode && (channel.startsWith("mesh:") || channel.startsWith("sync:"))) {
+        if (channel === "mesh:discover") return [];
+        throw new Error("隔离模式禁止外部节点及配对操作");
+      }
+      return handler(...(args as never[]));
+    });
   };
 
   handle<AppView>("app:get-view", async () => {
@@ -163,55 +177,41 @@ export function registerCommands(
     return toForEdit(server);
   });
 
-  handle<void>("server:save", async (draft: ServerConfig) => {
+  handle<AppView>("server:save", async (draft: ServerConfig) => {
     validateServer(draft);
     const name = draft.name.trim();
-    if (name.length === 0) throw new Error("名称不能为空");
-
-    const saved = await state.store.update((config) => {
-      const existing = config.servers.findIndex((item) => item.id === draft.id);
-      if (existing >= 0) config.servers[existing] = { ...draft, name };
-      else config.servers.push({ ...draft, name });
-      if (!config.activeId) config.activeId = draft.id;
+    if (!name) throw new Error("名称不能为空");
+    const server = { ...draft, name, id: draft.id || randomUUID() };
+    const saved = await state.store.update(config => {
+      const index = config.servers.findIndex(item => item.id === server.id);
+      if (index >= 0) config.servers[index] = server; else config.servers.push(server);
+      if (!config.activeId) config.activeId = server.id;
     });
-    // 凭据变了必须重建视图，否则会一直用旧 cookie。
-    agentView.closeServer(window, draft.id);
+    agentView.refreshServers(window, saved.servers);
     await state.publish(saved);
+    return state.peekView();
   });
 
-  handle<void>("server:delete", async (id: string) => {
-    agentView.closeServer(window, id);
+  handle<AppView>("server:delete", async (id: string) => {
     state.pinned.removeServer(id);
-    const saved = await state.store.update((config) => {
-      config.servers = config.servers.filter((item) => item.id !== id);
+    const saved = await state.store.update(config => {
+      config.servers = config.servers.filter(item => item.id !== id);
       if (config.activeId === id) config.activeId = config.servers[0]?.id ?? null;
     });
+    agentView.refreshServers(window, saved.servers);
     await state.publish(saved);
+    return state.peekView();
   });
 
-  handle<Backend>("server:probe", (draft: ServerConfig) =>
-    probeBackend(draft).catch((error: ProbeError) => {
-      throw new Error(error.message);
-    }),
-  );
-
-  handle<void>("server:reconnect-all", () => {
-    state.monitor.reconnectAll();
-  });
-
-  handle<void>("agent:open", async (id: string, sessionId: string | null) => {
-    const config = await state.store.load();
-    const server = config.servers.find((item) => item.id === id);
-    if (!server) throw new Error(`找不到服务连接：${id}`);
-    await agentView.openServer(window, server, sessionId);
-  });
-
-  handle<void>("agent:set-bounds", (rect: agentView.AgentBounds) => {
-    agentView.setBounds(rect);
-  });
-
-  handle<void>("agent:set-overlaid", (overlaid: boolean) => {
-    agentView.setOverlaid(overlaid);
+  handle<Backend>("server:probe", (draft: ServerConfig) => probeBackend(draft));
+  handle<void>("server:reconnect-all", () => state.monitor.reconnectAll());
+  handle<void>("workspace:sync", (snapshot: WorkspaceSnapshot) =>
+    agentView.syncWorkspace(window, snapshot, async () => (await state.store.load()).servers));
+  handle<void>("workspace:retry", (id: string) => agentView.retryTab(window, id));
+  handle<void>("workspace:drop-indicator", (rect: DropIndicatorRect | null) => setDropIndicator(window, rect));
+  handle<Record<string, string>>("workspace:capture", () => agentView.captureVisible(window));
+  window.webContents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
+    if (mainFrame && !inPlace) agentView.closeAll(window);
   });
 
   handle<void>("window:set-always-on-top", (pinned: boolean) => {
@@ -219,27 +219,39 @@ export function registerCommands(
     tray.refresh();
   });
 
-  handle<boolean>("pin:toggle", (serverId: string, sessionId: string) => {
-    const changed = state.pinned.toggle(serverId, sessionId);
-    void state.publish();
-    return changed;
+  handle<PinToggleResult>("pin:toggle", async (serverId: string, sessionId: string) => {
+    state.pinned.toggle(serverId, sessionId);
+    const pinned = state.pinned.has(serverId, sessionId);
+    await state.publish();
+    return { pinned, view: state.peekView() };
   });
 
-  handle<void>("settings:update", async (settings: DesktopSettings) => {
-    const saved = await state.store.update((config) => {
-      config.settings = settings;
-    });
+  handle<AppView>("settings:update", async (settings: DesktopSettings) => {
+    const saved = await state.store.update(config => { config.settings = settings; });
+    if (!isolatedMode) app.setLoginItemSettings({ openAtLogin: settings.autostart });
     tray.refresh();
     await state.publish(saved);
+    return state.peekView();
   });
 
-  handle<ImportPreviewData>("import:preview-text", (content: string) =>
-    state.store.previewImportText(content),
-  );
+  const previews = new Map<string, ImportPreviewData>();
+  handle<ImportPreview>("import:preview-text", async (content: string) => {
+    const data = await state.store.previewImportText(content);
+    const importId = randomUUID();
+    previews.clear();
+    previews.set(importId, data);
+    return { importId, validCount: data.preview.validServers,
+      invalid: data.issues ?? [] };
+  });
 
-  handle<void>("import:apply", async (data: ImportPreviewData, mode: ImportMode) => {
+  handle<AppView>("import:apply", async (id: string, mode: ImportMode) => {
+    const data = previews.get(id);
+    if (!data || !["merge", "replace"].includes(mode)) throw new Error("导入预览已失效");
     const saved = await state.store.applyImportAndSave(data, mode);
+    previews.delete(id);
+    agentView.refreshServers(window, saved.servers);
     await state.publish(saved);
+    return state.peekView();
   });
 
   handle<string>("export:text", () => state.store.load().then((config) => state.store.exportText(config)));
@@ -285,4 +297,17 @@ export function registerCommands(
 
   handle<SyncInfo>("sync:start", () => startServer(state.store));
   handle<void>("sync:stop", () => stopServer());
+
+  handle<void>("ball:toggle", () => {
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+    window.webContents.send("ball:toggle-request");
+  });
+  handle<void>("ball:drag", (action: BallDrag) => {
+    if (!["start", "move", "end", "cancel"].includes(action)) throw new Error("无效拖动动作");
+    dragBall(action);
+  });
+  handle<BallSnapshot>("ball:get-state", () => ballSnapshot());
+  handle<void>("ball:publish-state", (state: BallState) => publishBallState(state));
 }

@@ -1,17 +1,22 @@
 {
   "name": "agentpocket-desktop",
   "private": true,
-  "version": "2.17.1",
+  "version": "2.18.0",
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "tsc --noEmit && electron-vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit",
+    "build": "npm run check && electron-vite build",
     "preview": "electron-vite preview",
     "test": "vitest run",
-    "dist": "electron-vite build && electron-builder"
+    "test:e2e": "playwright test",
+    "dist": "npm run build && electron-builder"
   },
-  "dependencies": {},
+  "dependencies": {
+    "dockview": "8.5.1"
+  },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@sveltejs/vite-plugin-svelte": "^6.2.4",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/svelte": "^5.4.2",
@@ -20,6 +25,7 @@
     "electron-vite": "^5.0.0",
     "jsdom": "^29.1.1",
     "svelte": "^5.57.2",
+    "svelte-check": "^4.7.6",
     "typescript": "^5.7.0",
     "vite": "^7.0.0",
     "vitest": "^3.0.0"
@@ -34,6 +40,8 @@
     },
     "files": [
       "out/**/*",
+      "resources/*.png",
+      "resources/*.ico",
       "package.json"
     ],
     "extraMetadata": {

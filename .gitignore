@@ -20,3 +20,7 @@
 # Electron 构建与安装包产物
 /desktop/out/
 /desktop/release/
+/desktop/test-results/
+/desktop/.preview-*/
+/desktop/*.png
+!/desktop/resources/*.png

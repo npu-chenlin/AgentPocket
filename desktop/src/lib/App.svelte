@@ -10,36 +10,33 @@
   import { emptyServerDraft } from "../model";
   import type {
     AppView,
+    Backend,
     ImportMode,
     ImportPreview,
     MeshPeerView,
     ServerDraft,
+    ServerStatus,
     SyncOption,
   } from "../model";
   import { hasValidationErrors, validateServerDraft } from "../validation";
   import * as api from "./api";
   import { errorMessage } from "./api";
-  import MeshPanel from "./MeshPanel.svelte";
+  import LauncherPanel from "./LauncherPanel.svelte";
+  import AgentWorkspace from "./AgentWorkspace.svelte";
+  import type { WorkspaceController } from "./workspace-controller";
+  import type { WorkspaceTab } from "../../shared/workspace";
   import { modal } from "./modal";
   import SettingsDialog from "./SettingsDialog.svelte";
-  import Sidebar from "./Sidebar.svelte";
-  import Stage from "./Stage.svelte";
-
+  import { baseFaceState, faceReactionForEvent, faceSignalsFromServers, type FaceState } from "./face/expression-state";
   type Toast = { id: number; text: string; kind: "info" | "error" | "success" };
 
   let view = $state<AppView | null>(null);
   let expanded = $state<Set<string>>(new Set());
-  let selectedId = $state<string | null>(null);
-  let selectedSessionId = $state<string | null>(null);
+  let controller: WorkspaceController | null = null;
+  let tabs = $state<WorkspaceTab[]>([]);
+  let activeTabId = $state<string | null>(null);
   let pinned = $state(false);
-  /**
-   * 侧边栏折叠。
-   *
-   * 存 localStorage 而不是配置文件：这是纯界面偏好，不该跟着 config.json
-   * 同步给 daemon 和手机端。读失败就退回展开——折叠与否不该因为存储坏了
-   * 就让用户找不到服务。
-   */
-  let sidebarCollapsed = $state(false);
+  let launcherOpen = $state(false);
   let toasts = $state<Toast[]>([]);
   let toastSeq = 0;
 
@@ -72,8 +69,6 @@
   let meshPeers = $state<MeshPeerView[]>([]);
   let meshLoading = $state(false);
 
-  let selectedServer = $derived(view?.servers.find((s) => s.id === selectedId) ?? null);
-
   function toast(text: string, kind: Toast["kind"] = "info"): void {
     if (!text) return;
     const id = ++toastSeq;
@@ -87,52 +82,17 @@
     view = next;
   }
 
-  // WebView 是原生控件，层级在 DOM 之上；弹窗打开时必须收起，否则会被盖住。
-  $effect(() => {
-    const overlaid =
-      settingsOpen || serverOpen || importOpen || pasteOpen || exportOpen || syncOpen;
-    void api.setWebviewOverlaid(overlaid);
-  });
-
-  async function selectServer(id: string): Promise<void> {
-    selectedId = id;
-    selectedSessionId = null;
-    // 折叠态点图标虽然看不到会话列表，但展开意图要留着：用户回到展开态后
-    // 服务仍处于展开状态，不会出现"点开就没了"的错觉。
-    if (sidebarCollapsed && (statusForServer(id)?.sessions.length ?? 0) > 0) {
-      expanded = new Set(expanded).add(id);
-    }
-    try {
-      await api.openServer(id, null);
-    } catch (error) {
-      toast(`打开失败：${errorMessage(error)}`, "error");
-    }
+  function openServerIn(_paneId: string | null, serverId: string, sessionId: string | null): void {
+    const name = view?.servers.find(s => s.id === serverId)?.name ?? serverId;
+    controller?.open(serverId, sessionId, sessionId ? `${name} · ${sessionId}` : name);
   }
 
-  const SIDEBAR_KEY = "agentpocket.sidebarCollapsed";
+  function openInNewPane(id: string, sessionId: string | null): void {
+    controller?.open(id, sessionId, view?.servers.find(s => s.id === id)?.name ?? id, "right");
+  }
 
   function statusForServer(id: string): ServerStatus | undefined {
     return view?.statuses[id];
-  }
-
-  function toggleSidebar(): void {
-    sidebarCollapsed = !sidebarCollapsed;
-    try {
-      localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "1" : "0");
-    } catch {
-      // 隐私模式或存储写满时无法持久化。不影响本次会话内的使用，
-      // 下次启动回到展开即可，不值得为此打扰用户。
-    }
-  }
-
-  async function selectSession(id: string, sessionId: string): Promise<void> {
-    selectedId = id;
-    selectedSessionId = sessionId;
-    try {
-      await api.openServer(id, sessionId);
-    } catch (error) {
-      toast(`打开失败：${errorMessage(error)}`, "error");
-    }
   }
 
   function toggleExpand(id: string): void {
@@ -169,10 +129,6 @@
     if (!server || !window.confirm(`确定删除“${server.name}”吗？`)) return;
     try {
       applyView(await api.deleteServer(id));
-      if (selectedId === id) {
-        selectedId = null;
-        selectedSessionId = null;
-      }
       toast(`已删除“${server.name}”`, "success");
     } catch (error) {
       toast(`删除失败：${errorMessage(error)}`, "error");
@@ -203,14 +159,14 @@
     }
   }
 
-  async function probeBackend(event: SubmitEvent): Promise<void> {
+  async function probeBackend(event: MouseEvent): Promise<void> {
     event.preventDefault();
     const errors = validateServerDraft(draft);
     delete errors.name;
     formErrors = { ...errors };
     formMessage = "";
     if (hasValidationErrors(errors)) return;
-    const button = event.submitter as HTMLButtonElement | null;
+    const button = event.currentTarget as HTMLButtonElement | null;
     if (button) button.disabled = true;
     try {
       const backend = await api.probeBackend(draft);
@@ -237,10 +193,21 @@
     }
   }
 
-  async function handleMeshAction(action: string, host: string): Promise<void> {
+  async function handleMeshAction(action: string, host: string, note = ""): Promise<void> {
     const name = meshPeers.find((p) => p.host === host)?.name ?? host;
     try {
-      if (action === "pull") {
+      if (action === "refresh") {
+        await refreshMeshPeers();
+      } else if (action === "add") {
+        if (!view) return;
+        const address = host.trim();
+        if (!address || /[\s/:]/.test(address)) throw new Error("请填写裸主机名或 IPv4 地址");
+        applyView(await api.updateSettings({ ...view.settings, meshPeers: [
+          ...view.settings.meshPeers.filter(peer => peer.host !== address),
+          { host: address, name: note.trim() || address },
+        ] }));
+        await refreshMeshPeers();
+      } else if (action === "pull") {
         const result = await api.meshPull(host);
         const backup = result.backedUp ? "，旧文件已备份为 config.toml.bak" : "";
         toast(`已从 ${name} 获取 config.toml（${result.bytes} 字节）${backup}`, "success");
@@ -416,18 +383,11 @@
   onMount(() => {
     const cleanup: Array<() => void> = [];
 
-    // 恢复上次的折叠状态。读不到就用展开态——找不到侧边栏比多占点宽度更糟。
-    try {
-      sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "1";
-    } catch {
-      sidebarCollapsed = false;
-    }
-
-    // Ctrl/Cmd+B 交给原生菜单的 accelerator 处理，这里不再自己监听 keydown：
-    // 两处都响应同一次按键会切换两次，净效果是"按了没反应"。菜单项里声明了
-    // 快捷键，顺带也让它出现在菜单文字旁边，可发现性更好。
 
     cleanup.push(api.onStateChanged(applyView));
+
+    // 悬浮球在独立窗口里，它点一下要通过主进程转达"开合面板"。
+    cleanup.push(api.onBallToggle(() => (launcherOpen = !launcherOpen)));
 
     // 原生菜单栏的动作。菜单项在主进程，这里接到渲染进程已有的函数上。
     cleanup.push(
@@ -445,8 +405,8 @@
           case "settings":
             openSettings();
             break;
-          case "toggle-sidebar":
-            toggleSidebar();
+          case "toggle-launcher":
+            launcherOpen = !launcherOpen;
             break;
           case "toggle-always-on-top":
             void togglePinned();
@@ -459,6 +419,9 @@
     );
     cleanup.push(
       api.onAgentEvent((payload) => {
+        if (payload && typeof payload === "object" && "ball-error" in payload) {
+          toast(`悬浮球不可用，请使用工具栏或菜单打开面板：${String(payload["ball-error"])}`, "error");
+        }
         // 手机端配对取走配置后主进程会广播，这里给出反馈。
         if (payload && typeof payload === "object" && "phone-config-fetched" in payload) {
           toast("手机已获取配置", "success");
@@ -466,6 +429,10 @@
             syncStatus = "手机已获取配置";
             syncStatusKind = "success";
           }
+        }
+        // 任务完成/等待介入时让悬浮球表态。
+        if (payload && typeof payload === "object" && "kind" in payload) {
+          reactToFaceEvent(String((payload as { kind: unknown }).kind));
         }
       }),
     );
@@ -483,34 +450,56 @@
   let dialogOpen = $derived(
     settingsOpen || serverOpen || importOpen || pasteOpen || exportOpen || syncOpen,
   );
+
+  let activeServerId = $derived(tabs.find(t => t.id === activeTabId)?.serverId ?? null);
+  let baseFace = $derived(baseFaceState(faceSignalsFromServers({
+    loading: !view, servers: view?.servers ?? [], statuses: view?.statuses ?? {},
+  })));
+  let eventFace = $state<FaceState | null>(null);
+  let faceState = $derived(eventFace ?? baseFace);
+  let spinToken = $state(0);
+  let faceTimer: ReturnType<typeof setTimeout>;
+  $effect(() => { void api.publishBallState({ face: faceState, open: launcherOpen, spin: spinToken }); });
+  onMount(() => () => clearTimeout(faceTimer));
+
+  function reactToFaceEvent(event: string | null | undefined): void {
+    const reaction = faceReactionForEvent(event);
+    if (!reaction) return;
+    clearTimeout(faceTimer);
+    eventFace = reaction.state;
+    if (reaction.spin) spinToken += 1;
+    faceTimer = setTimeout(() => { eventFace = null; }, 3000);
+  }
 </script>
 
 <div class="app-shell">
-  <div class="workspace{sidebarCollapsed ? ' workspace--collapsed' : ''}">
-    {#if view}
-      <Sidebar
-        servers={view.servers}
-        statuses={view.statuses}
-        {expanded}
-        {selectedId}
-        {selectedSessionId}
-        collapsed={sidebarCollapsed}
-        onToggleCollapsed={toggleSidebar}
-        onSelectServer={selectServer}
-        onSelectSession={selectSession}
-        onToggleExpand={toggleExpand}
-        onTogglePin={togglePin}
-        onEdit={editServer}
-        onDelete={deleteServer}
-        onAdd={addServer}
-      />
-    {/if}
-    <Stage
-      selectedName={selectedServer?.name ?? null}
-      selectedBackend={selectedServer?.backend ?? null}
-      hasServers={(view?.servers.length ?? 0) > 0}
-    />
+  <div class="workspace" style="display:flex;flex-direction:column">
+    <AgentWorkspace servers={view?.servers ?? null} overlaid={dialogOpen || launcherOpen}
+      onReady={(value) => { controller = value; }}
+      onChange={(next, active) => { tabs = next; activeTabId = active; }}
+      onError={(message) => toast(message, "error")} onOpen={() => (launcherOpen = true)} />
   </div>
+
+  {#if launcherOpen}
+    <LauncherPanel
+      servers={view?.servers ?? []}
+      statuses={view?.statuses ?? {}}
+      activeServerId={activeServerId}
+      onOpen={(id, sessionId) => {
+        launcherOpen = false;
+        void openServerIn(null, id, sessionId);
+      }}
+      onOpenInNewPane={(id, sessionId) => {
+        launcherOpen = false;
+        openInNewPane(id, sessionId);
+      }}
+      onAdd={addServer}
+      onEdit={editServer}
+      onDelete={deleteServer}
+      onTogglePin={togglePin}
+      onClose={() => (launcherOpen = false)}
+    />
+  {/if}
 
   <div class="toast-root" aria-live="polite">
     {#each toasts as item (item.id)}
@@ -521,14 +510,13 @@
 
 <SettingsDialog
   open={settingsOpen}
-  settings={view?.settings ?? { startHidden: true, autostart: true, notifications: true, meshPeers: [] }}
+  settings={view?.settings ?? { startHidden: false, autostart: true, notifications: true, meshPeers: [] }}
   peers={meshPeers}
   peersLoading={meshLoading}
   onClose={() => (settingsOpen = false)}
   onToggleSetting={toggleSetting}
-  {reconnectAll}
+  onReconnectAll={reconnectAll}
   onMeshAction={handleMeshAction}
-  {refreshMeshPeers}
 />
 
 <dialog

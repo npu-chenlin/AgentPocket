@@ -8,12 +8,12 @@
     settings: DesktopSettings;
     peers: MeshPeerView[];
     peersLoading: boolean;
-    syncInfo: SyncInfo | null;
-    syncStatus: { text: string; kind: string };
+    syncInfo?: SyncInfo | null;
+    syncStatus?: { text: string; kind: string };
     onClose: () => void;
     onToggleSetting: (key: "startHidden" | "autostart" | "notifications") => void;
     onReconnectAll: () => void;
-    onMeshAction: (action: string) => void;
+    onMeshAction: (action: string, host: string, note?: string) => void;
   }
 
   let {

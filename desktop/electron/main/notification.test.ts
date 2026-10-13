@@ -8,8 +8,9 @@ import {
 } from "./discovery";
 import { validateToml } from "./kimi-config";
 import { NotificationPolicy, notificationBody, notificationTitle } from "./notification";
-import type { AgentEvent } from "./protocol/state";
-import { reconnectLabel, tooltipText, type ServerStatusView } from "./tray";
+import type { AgentEvent, AgentEventKind } from "./protocol/state";
+import { reconnectLabel, tooltipText } from "./tray";
+import type { ServerStatusView } from "./monitor/manager";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
