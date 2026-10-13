@@ -102,6 +102,10 @@ export function exportConfigText() {
   return bridge().exportConfigText();
 }
 
+export function chooseExportPath() {
+  return bridge().chooseExportPath();
+}
+
 export function exportConfig(path: string) {
   return bridge().exportConfig(path);
 }

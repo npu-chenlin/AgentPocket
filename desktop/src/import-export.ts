@@ -1,5 +1,5 @@
-import { save } from "@tauri-apps/plugin-dialog";
 import type { ImportPreview } from "./model";
+import { chooseExportPath as chooseExportPathViaBridge } from "./lib/api";
 
 export const CREDENTIAL_WARNING = "文件包含 Agent 服务访问凭据，请勿公开分享";
 
@@ -13,11 +13,7 @@ export function importIssueText(preview: ImportPreview): string[] {
 }
 
 export async function chooseExportPath(): Promise<string | null> {
-  return save({
-    title: "导出配置",
-    defaultPath: "agentpocket-config.json",
-    filters: [{ name: "JSON 配置", extensions: ["json"] }],
-  });
+  return chooseExportPathViaBridge();
 }
 
 /** 复制文本到系统剪贴板；优先 Clipboard API，回退到 execCommand。 */

@@ -42,6 +42,7 @@ const api = {
   applyImport: (data: ImportPreviewData, mode: ImportMode): Promise<void> =>
     ipcRenderer.invoke("import:apply", data, mode),
   exportConfigText: (): Promise<string> => ipcRenderer.invoke("export:text"),
+  chooseExportPath: (): Promise<string | null> => ipcRenderer.invoke("dialog:choose-export-path"),
   exportConfig: (path: string): Promise<void> => ipcRenderer.invoke("export:to", path),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("shell:open-external", url),
 

@@ -5,7 +5,7 @@
  * 不做静默兜底。
  */
 
-import { BrowserWindow, Notification, ipcMain, shell } from "electron";
+import { BrowserWindow, Notification, dialog, ipcMain, shell } from "electron";
 
 import * as agentView from "./agent-view";
 import { ConfigStore, type ImportMode, type ImportPreviewData } from "./config-store";
@@ -243,6 +243,15 @@ export function registerCommands(
   });
 
   handle<string>("export:text", () => state.store.load().then((config) => state.store.exportText(config)));
+
+  handle<string | null>("dialog:choose-export-path", async () => {
+    const result = await dialog.showSaveDialog(window, {
+      title: "导出配置",
+      defaultPath: "agentpocket-config.json",
+      filters: [{ name: "JSON 配置", extensions: ["json"] }],
+    });
+    return result.canceled ? null : (result.filePath ?? null);
+  });
 
   handle<void>("export:to", async (path: string) => {
     const config = await state.store.load();
