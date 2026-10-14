@@ -2,6 +2,14 @@
   "name": "agentpocket-desktop",
   "private": true,
   "version": "2.18.0",
+  "description": "把装在你电脑上的 Coding Agent 装进口袋",
+  "homepage": "https://github.com/npu-chenlin/AgentPocket",
+  "author": {
+    "name": "npu-chenlin",
+    "email": "npuchenlin@foxmail.com"
+  },
+  "license": "MIT",
+  "desktopName": "AgentPocket.desktop",
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
@@ -47,13 +55,29 @@
     "extraMetadata": {
       "main": "out/main/index.js"
     },
+    "extraResources": [
+      {
+        "from": "../dist/agentpocket-x86_64-linux-musl",
+        "to": "agentpocket"
+      }
+    ],
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
       "category": "Utility",
-      "icon": "resources"
+      "icon": "resources",
+      "syncDesktopName": true
+    },
+    "deb": {
+      "afterInstall": "build/after-install.sh",
+      "fpm": [
+        "--deb-field",
+        "Conflicts: agent-pocket",
+        "--deb-field",
+        "Replaces: agent-pocket"
+      ]
     },
     "mac": {
       "target": [

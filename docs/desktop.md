@@ -140,10 +140,16 @@ npm run dist    # electron-vite build && electron-builder
 产物位于 `desktop/release/`（Linux 为 AppImage 与 `deb`，macOS 为 `dmg`，Windows 为 `nsis`）。
 macOS 未配置 Developer ID 时生成的是临时签名、未公证的本地构建包。Windows 与 macOS 尚未进行正式发布验证。
 
-应用图标与托盘图标由 `resources/make-icons.py` 生成（纯几何绘制，不依赖外部素材），改动后重跑即可：
+`deb` 会额外做两件事：把 `dist/agentpocket-x86_64-linux-musl` 打进包内
+（`/opt/AgentPocket/resources/agentpocket`），并由 `build/after-install.sh` 安装到 `/usr/bin/agentpocket`；
+同时用 `Conflicts`/`Replaces` 顶掉 Tauri 时代的旧包名 `agent-pocket`。因此打 `deb` 前需要先跑
+`scripts/build-daemon.sh` 生成那个二进制。该脚本整体替换了 electron-builder 的内置模板，
+改动时记得同步上游模板（`app-builder-lib/templates/linux/after-install.tpl`）。
+
+打包时若 GitHub 下载超时（fpm、appimage 工具），可换镜像：
 
 ```shell
-python3 resources/make-icons.py
+ELECTRON_BUILDER_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/electron-builder-binaries npm run dist
 ```
 
 配置目录默认沿用旧版路径 `~/.local/share/com.local.agentpocket.desktop`，这样从 Tauri 迁移后
