@@ -35,8 +35,6 @@ const api = {
   retryTab: (id: string): Promise<void> => ipcRenderer.invoke("workspace:retry", id),
   /** 拖拽标签悬停内容区时，在网页上方显示半透明投放指示；null 表示隐藏。 */
   setDropIndicator: (rect: WebviewRect | null): Promise<void> => ipcRenderer.invoke("workspace:drop-indicator", rect),
-  /** 模态遮挡前抓取可见网页的快照，用于虚化背景。 */
-  captureViews: (): Promise<Record<string, string>> => ipcRenderer.invoke("workspace:capture"),
   onTabStatus: (callback: (status: TabStatus) => void): (() => void) => {
     const listener = (_event: unknown, status: TabStatus) => callback(status);
     ipcRenderer.on("workspace:status", listener);

@@ -114,19 +114,6 @@ export function retryTab(window: BrowserWindow, id: string): void {
   if (entry) load(window, entry);
 }
 
-/** 抓取当前可见原生视图的页面快照（dataURL），供渲染进程做模态虚化背景。 */
-export async function captureVisible(window: BrowserWindow): Promise<Record<string, string>> {
-  const shots: Record<string, string> = {};
-  if (window.isDestroyed()) return shots;
-  await Promise.all([...views.values()].map(async entry => {
-    if (!latest?.visible[entry.tab.id] || entry.state !== "ready") return;
-    try {
-      const image = await entry.view.webContents.capturePage();
-      if (!image.isEmpty()) shots[entry.tab.id] = image.toDataURL();
-    } catch { /* 页面崩溃等情况下没有快照，留白即可 */ }
-  }));
-  return shots;
-}
 export function closeServer(window: BrowserWindow, serverId: string): void {
   for (const [id, entry] of views) if (entry.tab.serverId === serverId) closeTab(window, id);
 }

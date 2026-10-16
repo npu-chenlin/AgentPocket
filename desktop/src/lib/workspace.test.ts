@@ -4,7 +4,7 @@ const controllers: WorkspaceController[] = [];
 function setup(onOpen = vi.fn()) {
   const host = document.createElement("div"); document.body.append(host);
   const bridge: WorkspaceBridge = { syncWorkspace: vi.fn(async () => {}), retryTab: vi.fn(async () => {}),
-    setDropIndicator: vi.fn(async () => {}), captureViews: vi.fn(async () => ({})),
+    setDropIndicator: vi.fn(async () => {}),
     onTabStatus: vi.fn(() => () => {}), onTabFocus: vi.fn(() => () => {}) };
   const errors = vi.fn();
   const controller = new WorkspaceController(host, bridge, vi.fn(), errors, onOpen);
@@ -121,16 +121,14 @@ describe("Dockview 适配器（非原生端到端）", () => {
     expect(snapshot()?.overlays).toEqual(["header-menu"]);
     subscription.dispose();
   });
-  it("遮挡时抓取快照做虚化背景，解除后恢复占位", async () => {
+  it("遮挡时清空面板内容、不做任何异步抓图", async () => {
+    // 遮罩由 CSS 画在窗格之上，所以这里只需保证不留下占位文字，
+    // 也不能再去抓快照——那正是白帧的来源。
     const { controller: c, bridge, host } = setup(); c.restore([{ id: "s1" }]); c.open("s1", null, "A");
-    const id = c.dock.activePanel!.id;
-    vi.mocked(bridge.captureViews).mockResolvedValue({ [id]: "data:image/png;base64,xyz" });
     c.setOverlay("modal", true);
-    expect(bridge.captureViews).toHaveBeenCalled();
-    await vi.waitFor(() => expect(host.querySelector(".agent-cover")).not.toBeNull());
     expect(host.querySelector(".agent-content p")).toBeNull();
-    c.setOverlay("modal", false);
     expect(host.querySelector(".agent-cover")).toBeNull();
+    c.setOverlay("modal", false);
     expect(host.querySelector(".agent-content p")).not.toBeNull();
   });
   it("损坏布局回退且通知", () => {

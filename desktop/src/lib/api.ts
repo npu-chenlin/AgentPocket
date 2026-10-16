@@ -61,7 +61,6 @@ export function reconnectAll() {
 export const syncWorkspace: AgentPocketApi["syncWorkspace"] = snapshot => bridge().syncWorkspace(snapshot);
 export const retryTab: AgentPocketApi["retryTab"] = id => bridge().retryTab(id);
 export const setDropIndicator: AgentPocketApi["setDropIndicator"] = rect => bridge().setDropIndicator(rect);
-export const captureViews: AgentPocketApi["captureViews"] = () => bridge().captureViews();
 export const onTabStatus: AgentPocketApi["onTabStatus"] = callback => bridge().onTabStatus(callback);
 export const onTabFocus: AgentPocketApi["onTabFocus"] = callback => bridge().onTabFocus(callback);
 

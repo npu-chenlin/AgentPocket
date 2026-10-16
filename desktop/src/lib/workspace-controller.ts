@@ -42,7 +42,6 @@ export interface WorkspaceBridge {
   syncWorkspace: (snapshot: WorkspaceSnapshot) => Promise<void>;
   retryTab: (id: string) => Promise<void>;
   setDropIndicator: (rect: { x: number; y: number; width: number; height: number } | null) => Promise<void>;
-  captureViews: () => Promise<Record<string, string>>;
   onTabStatus: (callback: (status: TabStatus) => void) => () => void;
   onTabFocus: (callback: (id: string) => void) => () => void;
 }
@@ -52,7 +51,6 @@ export class WorkspaceController {
   private elements = new Map<string, HTMLElement>();
   private statuses = new Map<string, TabStatus>();
   private overlays = new Set<string>();
-  private covers = new Map<string, string>();
   private revision = 0;
   private frame = 0;
   private ready = false;
@@ -201,40 +199,20 @@ export class WorkspaceController {
   setOverlay(reason: string, active: boolean): void {
     if (active === this.overlays.has(reason)) return;
     if (active) this.overlays.add(reason); else this.overlays.delete(reason);
-    if (active) {
-      // 遮挡期间隐藏原生网页；先抓页面快照，到达后把各面板替换成虚化背景
-      for (const id of this.elements.keys()) this.renderStatus(id);
-      void this.bridge.captureViews().then(shots => {
-        if (this.disposed || !this.overlays.size) return;
-        for (const [id, url] of Object.entries(shots)) {
-          this.covers.set(id, url);
-          this.renderStatus(id);
-        }
-      }).catch(error => this.error(String(error)));
-      this.flush();
-    } else {
-      if (!this.overlays.size) {
-        this.covers.clear();
-        for (const id of this.elements.keys()) this.renderStatus(id);
-      }
-      this.schedule();
-    }
+    // 遮挡只做两件事：把遮罩状态同步给界面（CSS 画一层半透明黑），
+    // 以及通过 flush 把 overlays 告诉主进程去隐藏原生视图。
+    // 遮罩是同步画出来的，主进程隐藏原生网页后底下立刻就是它，不会露白。
+    for (const id of this.elements.keys()) this.renderStatus(id);
+    this.flush();
   }
 
   private renderStatus(id: string): void {
     const element = this.elements.get(id);
     if (!element) return;
     element.replaceChildren();
-    const cover = this.covers.get(id);
-    if (cover) {
-      // 模态/菜单遮挡时：网页快照虚化作为背景，不再是生硬的占位文字
-      const div = document.createElement("div");
-      div.className = "agent-cover";
-      div.style.backgroundImage = `url("${cover}")`;
-      element.append(div);
-      return;
-    }
-    if (this.overlays.size && this.statuses.get(id)?.state === "ready") return; // 快照到达前留白
+    // 遮挡期间不填任何东西：遮罩由 CSS 画在窗格之上，底下是黑而非白，
+    // 所以不需要截图做背景，也就没有"异步等图"的空窗期。
+    if (this.overlays.size) return;
     const status = this.statuses.get(id);
     const text = document.createElement("p");
     text.textContent = status?.state === "error" ? `加载失败：${status.error ?? "页面已停止"}`
@@ -256,7 +234,7 @@ export class WorkspaceController {
     if (!this.ready || this.disposed) return;
     const tabs = this.dock.panels.map(p => this.tabs.get(p.id)!).filter(Boolean);
     const live = new Set(tabs.map(t => t.id));
-    for (const id of this.tabs.keys()) if (!live.has(id)) { this.tabs.delete(id); this.statuses.delete(id); this.covers.delete(id); }
+    for (const id of this.tabs.keys()) if (!live.has(id)) { this.tabs.delete(id); this.statuses.delete(id); }
     const visible: WorkspaceSnapshot["visible"] = {};
     for (const group of this.dock.groups) {
       const id = group.activePanel?.id;

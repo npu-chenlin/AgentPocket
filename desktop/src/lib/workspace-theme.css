@@ -89,20 +89,8 @@
   font: 12px/1.6 system-ui, sans-serif;
 }
 
-/* 模态遮挡时的虚化网页快照背景 */
-.dock-host .agent-cover {
-  position: absolute;
-  inset: -14px; /* 外扩，盖住模糊带来的边缘透明 */
-  background-size: cover;
-  background-position: top left;
-  filter: blur(9px);
-}
-.dock-host .agent-cover::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgb(255 255 255 / 38%);
-}
+/* 模态遮挡的视觉由 AgentWorkspace 的 .workspace-overlay 承担（一层半透明黑）。
+   这里不再需要虚化快照背景：它要异步截图，会在原生视图隐藏后留下白帧。 */
 .dock-host .agent-content p {
   margin: 0;
 }

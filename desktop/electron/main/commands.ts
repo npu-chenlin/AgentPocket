@@ -209,7 +209,6 @@ export function registerCommands(
     agentView.syncWorkspace(window, snapshot, async () => (await state.store.load()).servers));
   handle<void>("workspace:retry", (id: string) => agentView.retryTab(window, id));
   handle<void>("workspace:drop-indicator", (rect: DropIndicatorRect | null) => setDropIndicator(window, rect));
-  handle<Record<string, string>>("workspace:capture", () => agentView.captureVisible(window));
   window.webContents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
     if (mainFrame && !inPlace) agentView.closeAll(window);
   });

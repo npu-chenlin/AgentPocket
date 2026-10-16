@@ -11,7 +11,7 @@ export function stubBridge() {
   let status: (state: any) => void = () => {};
   const api = { getAppView: vi.fn(async () => testView()), syncWorkspace: vi.fn(async (_snapshot: any) => {}),
     retryTab: vi.fn(async () => {}), setDropIndicator: vi.fn(async () => {}),
-    captureViews: vi.fn(async () => ({})), onTabFocus: vi.fn(() => () => {}),
+    onTabFocus: vi.fn(() => () => {}),
     onTabStatus: vi.fn((cb: (state: any) => void) => { status = cb; return () => {}; }),
     onStateChanged: vi.fn(() => () => {}), onAgentEvent: vi.fn(() => () => {}),
     onBallToggle: vi.fn(() => () => {}), publishBallState: vi.fn(async () => {}),
