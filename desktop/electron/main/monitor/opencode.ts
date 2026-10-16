@@ -275,7 +275,9 @@ export function handleSse(
       case "session.status": {
         const status = properties.status as Record<string, unknown> | undefined;
         if (sessionId && status) {
-          updateBusy(state, sessionId, status.type !== "idle");
+          // 白名单活跃态，而不是"排除 idle"：status.type 是开放集合，
+          // 用排除法会把 failed / aborted 这类终态也当成在跑。
+          updateBusy(state, sessionId, status.type === "running" || status.type === "busy");
         }
         break;
       }
@@ -435,9 +437,29 @@ export function seedBusyFromActive(state: ProtocolState, active: Set<string>): v
   for (const id of affected) state.applyEffectiveBusy(id);
 }
 
+/**
+ * 会话列表里哪些会话已经"有结论"（agent 不再工作）。
+ *
+ * opencode 给已结束的会话带 `outcome`（实测取值 `succeeded` / `interrupted`）。
+ * 活跃列表只代表"仍在工作"，所以这些会话的忙碌状态必须清掉——否则一旦断线
+ * 就再没人清它：终态不会再发 `session.execution.*` 事件，本地推断的忙碌会
+ * 永远挂着。
+ */
+export function finishedSessions(items: unknown[]): Set<string> {
+  const finished = new Set<string>();
+  for (const raw of items) {
+    const item = raw as Record<string, unknown>;
+    if (typeof item?.id !== "string" || item.id.length === 0) continue;
+    const outcome = item.outcome;
+    if (typeof outcome === "string" && outcome.length > 0) finished.add(item.id);
+  }
+  return finished;
+}
+
 async function fetchBaseline(server: ServerConfig, context: MonitorContext): Promise<void> {
   const base = serverBaseUrl(server);
   const titles = new Map<string, string>();
+  const finished = new Set<string>();
   let cursor: string | null = null;
 
   for (let page = 0; page < 20; page += 1) {
@@ -470,6 +492,7 @@ async function fetchBaseline(server: ServerConfig, context: MonitorContext): Pro
         typeof item.title === "string" && item.title.length > 0 ? item.title : "OpenCode 会话";
       titles.set(item.id, title);
     }
+    for (const id of finishedSessions(envelope.data)) finished.add(id);
 
     const next = envelope.cursor?.next;
     cursor = typeof next === "string" && next.length > 0 ? next : null;
@@ -479,6 +502,10 @@ async function fetchBaseline(server: ServerConfig, context: MonitorContext): Pro
   // 收齐再整体替换，避免清空后只填到第一页。
   context.state.titles.clear();
   for (const [id, title] of titles) context.state.titles.set(id, title);
+  for (const id of finished) {
+    context.state.rawBusy.delete(id);
+    context.state.applyEffectiveBusy(id);
+  }
   context.state.baselineComplete = true;
 }
 

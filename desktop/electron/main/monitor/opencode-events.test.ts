@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { extractCommand, handleSse } from "./opencode";
+import { extractCommand, finishedSessions, handleSse } from "./opencode";
 import { ProtocolState } from "../protocol/state";
 
 function sse(payload: unknown): string {
@@ -275,6 +275,43 @@ describe("opencode 事件解析（真机负载）", () => {
       state,
     );
     expect(state.busy.has("s1")).toBe(true);
+  });
+
+  it("v1 的终态不再被当成忙碌", () => {
+    // 以前这里是 `status.type !== "idle"`，于是 failed/aborted 这类终态也被算成在跑。
+    // 活跃列表只代表"仍在工作"，先用 busy 把会话点亮，再用终态把它清掉。
+    for (const terminal of ["failed", "aborted", "interrupted", "something_new"]) {
+      const state = new ProtocolState();
+      handleSse(
+        "srv",
+        sse({ type: "session.status", properties: { sessionID: "s1", status: { type: "running" } } }),
+        state,
+      );
+      expect(state.busy.has("s1")).toBe(true);
+      handleSse(
+        "srv",
+        sse({ type: "session.status", properties: { sessionID: "s1", status: { type: terminal } } }),
+        state,
+      );
+      expect(state.busy.has("s1"), `终态 ${terminal} 应清掉忙碌`).toBe(false);
+    }
+  });
+});
+
+describe("opencode 已有结论的会话", () => {
+  it("带 outcome 的会话视为已结束", () => {
+    const finished = finishedSessions([
+      { id: "ses_a", outcome: "succeeded", title: "A" },
+      { id: "ses_b", outcome: "interrupted", title: "B" },
+      { id: "ses_c", outcome: null, title: "C" },
+      { id: "ses_d", title: "D" },
+      { id: "", outcome: "succeeded" },
+    ]);
+    expect([...finished].sort()).toEqual(["ses_a", "ses_b"]);
+  });
+
+  it("列表里没有 outcome 就不清忙碌", () => {
+    expect(finishedSessions([{ id: "ses_x" }, { id: "ses_y", outcome: "" }]).size).toBe(0);
   });
 });
 

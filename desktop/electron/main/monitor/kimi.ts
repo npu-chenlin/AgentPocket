@@ -37,6 +37,23 @@ interface SessionDetail {
   pending: string | null;
 }
 
+/**
+ * 会话列表里的 `activity.status` 是否代表"还在跑"。
+ *
+ * 用**白名单**而不是"排除 idle"：服务端这个字段是开放集合，实测出现过
+ * `idle` / `running` / `failed` / `aborted` 四种，其中 `failed` 与 `aborted`
+ * 是已经结束的终态。以前只排除 idle，终态就被当成忙碌，而它们**永远不会**
+ * 收到 `work_changed(busy=false)`（因为它们从没进入过运行期，是启动时被
+ * 直接标成忙碌的），于是永久留在"活跃会话"里。
+ *
+ * 反过来，未知状态一律按"没在跑"处理——宁可漏报也不误报。
+ */
+export function isActiveStatus(status: string): boolean {
+  return status === "running"
+    || status === "awaiting_approval"
+    || status === "awaiting_question";
+}
+
 /** 会话详情种子。字段缺失时 `mainTurnActive` 缺省视为活跃。 */
 export function parseSessionDetail(text: string): SessionDetail | null {
   let value: unknown;
@@ -178,7 +195,7 @@ async function fetchBaseline(
 
     const activity = item.activity as Record<string, unknown> | undefined;
     const status = typeof activity?.status === "string" ? activity.status : "idle";
-    if (status !== "idle") {
+    if (isActiveStatus(status)) {
       // 列表只有粗粒度状态；主回合活跃性先默认活跃，由种子校准。
       state.rawBusy.add(id);
       state.applyEffectiveBusy(id);
