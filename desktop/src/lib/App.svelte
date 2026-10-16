@@ -481,6 +481,17 @@
   </div>
 
   {#if launcherOpen}
+    <!--
+      点空白处收起面板。面板打开时 overlay 已让主进程隐藏原生网页
+      （可见 workspace-controller.setOverlay），所以整片内容区的点击
+      都能落到这层 DOM 上；否则会被 WebContentsView 吃掉。
+      放在面板之前，靠 DOM 顺序保证点面板本身不会命中外层。
+    -->
+    <div
+      class="launcher-scrim"
+      role="presentation"
+      onclick={() => (launcherOpen = false)}
+    ></div>
     <LauncherPanel
       servers={view?.servers ?? []}
       statuses={view?.statuses ?? {}}

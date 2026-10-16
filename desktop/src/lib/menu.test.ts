@@ -28,7 +28,6 @@ function stubApi() {
     syncWorkspace: vi.fn(async () => {}),
     retryTab: vi.fn(async () => {}),
     setDropIndicator: vi.fn(async () => {}),
-    captureViews: vi.fn(async () => ({})),
     onTabStatus: vi.fn(() => () => {}),
     onTabFocus: vi.fn(() => () => {}),
     discoverMeshPeers: vi.fn(async () => []),
@@ -173,5 +172,35 @@ describe("原生菜单栏", () => {
     // 只看本次渲染的容器：同文件里前面的用例可能还留着异步收尾，
     // 断言全局 DOM 会受牵连。
     expect(container.querySelector(".workspace")).not.toBeNull();
+  });
+
+  it("点面板外的空白处收起面板", async () => {
+    const { api, fireMenu } = stubApi();
+    (globalThis as { agentpocket?: unknown }).agentpocket = api;
+    const { default: App } = await import("./App.svelte");
+    const { container } = render(App);
+    await screen.findByText("选一个服务打开");
+
+    fireMenu("toggle-launcher");
+    await screen.findByRole("dialog", { name: "悬浮球面板" });
+
+    const scrim = container.querySelector(".launcher-scrim");
+    expect(scrim, "面板打开时应有承接空白点击的遮罩层").not.toBeNull();
+    (scrim as HTMLElement).click();
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "悬浮球面板" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("面板收起后不留下遮罩层", async () => {
+    const { api, fireMenu } = stubApi();
+    (globalThis as { agentpocket?: unknown }).agentpocket = api;
+    const { default: App } = await import("./App.svelte");
+    const { container } = render(App);
+    await screen.findByText("选一个服务打开");
+
+    // 遮罩不能常驻：它会挡住整个内容区的交互。
+    expect(container.querySelector(".launcher-scrim")).toBeNull();
   });
 });

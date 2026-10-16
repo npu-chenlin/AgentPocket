@@ -146,10 +146,18 @@ macOS 未配置 Developer ID 时生成的是临时签名、未公证的本地构
 `scripts/build-daemon.sh` 生成那个二进制。该脚本整体替换了 electron-builder 的内置模板，
 改动时记得同步上游模板（`app-builder-lib/templates/linux/after-install.tpl`）。
 
-打包时若 GitHub 下载超时（fpm、appimage 工具），可换镜像：
+打包时需要下载**两类**东西，各自的镜像变量不同，漏掉后一类会卡在从 GitHub 直连
+拉 120 MB 的 electron 运行时（表现为长时间无进展）：
+
+| 下载内容 | 环境变量 |
+| --- | --- |
+| electron 运行时本体 | `ELECTRON_MIRROR` |
+| electron-builder 的工具（fpm、appimage、7zip） | `ELECTRON_BUILDER_BINARIES_MIRROR` |
 
 ```shell
-ELECTRON_BUILDER_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/electron-builder-binaries npm run dist
+ELECTRON_MIRROR=https://registry.npmmirror.com/-/binary/electron/ \
+ELECTRON_BUILDER_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/electron-builder-binaries \
+npm run dist
 ```
 
 配置目录默认沿用旧版路径 `~/.local/share/com.local.agentpocket.desktop`，这样从 Tauri 迁移后
