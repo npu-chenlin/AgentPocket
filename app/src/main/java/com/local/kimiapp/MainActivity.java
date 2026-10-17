@@ -1595,15 +1595,10 @@ public class MainActivity extends ComponentActivity {
             List<ServerStore.Server> servers = new ArrayList<>(ServerStore.load(this));
             String id = editing == null ? ServerStore.newId() : editing.id;
             String backend = selectedBackend(backendRadios);
-            String tokenValue;
-            if (ServerStore.Server.BACKEND_KIMI.equals(backend)) {
-                tokenValue = token.getText().toString().trim();
-            } else if (ServerStore.Server.BACKEND_OPENCODE.equals(backend)) {
-                // opencode v2：token 字段承载 HTTP Basic 凭据 user:pass（只填密码时补默认用户）
-                tokenValue = token.getText().toString().trim();
-            } else {
-                tokenValue = "";
-            }
+            // token 字段对三种后端都要留着：kimi 是访问令牌，dsh 是签名密钥，
+            // opencode 是登录凭据。dsh 早先确实不需要，但 0.2 起页面与 /api 都
+            // 要它签 cookie；在这里清掉的话，添加时看着没问题，一打开就 401。
+            String tokenValue = token.getText().toString().trim();
             ServerStore.Server saved = new ServerStore.Server(id, displayName, host, p, tokenValue, backend);
             if (editing == null) servers.add(saved);
             else for (int i = 0; i < servers.size(); i++) if (servers.get(i).id.equals(id)) servers.set(i, saved);
