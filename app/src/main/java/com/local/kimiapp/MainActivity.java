@@ -1532,7 +1532,10 @@ public class MainActivity extends ComponentActivity {
             }
             ip.setText(parsed.host);
             port.setText(String.valueOf(parsed.port));
-            token.setText(parsed.token);
+            // 只在校验出的内容非空时才覆盖 token：dsh 的启动日志里没有那把签名密钥
+            // （只有每次启动都变的 launch token），识别结果必然是空的，无条件覆盖会把
+            // 用户刚填好的密钥清掉——症状正是"填了密钥还是 401"。
+            if (!parsed.token.isEmpty()) token.setText(parsed.token);
             if (name.getText().toString().trim().isEmpty()) name.setText(parsed.host + ":" + parsed.port);
             Toast.makeText(this, "已识别，正在探测 Agent 类型…", Toast.LENGTH_SHORT).show();
             probeBackend(parsed.host, parsed.port, token.getText().toString().trim(), backend -> runOnUiThread(() -> {
