@@ -1537,7 +1537,15 @@ public class MainActivity extends ComponentActivity {
             // 用户刚填好的密钥清掉——症状正是"填了密钥还是 401"。
             if (!parsed.token.isEmpty()) token.setText(parsed.token);
             if (name.getText().toString().trim().isEmpty()) name.setText(parsed.host + ":" + parsed.port);
-            Toast.makeText(this, "已识别，正在探测 Agent 类型…", Toast.LENGTH_SHORT).show();
+            // 回环地址在手机上指手机自身，连不上；dsh 绑回环时启动行里只有它，
+            // 用户很容易就这么存进去，然后在"打开页面 401 / 显示不在线"之间打转。
+            if (isLoopbackHost(parsed.host)) {
+                Toast.makeText(this,
+                        "识别到的是 127.0.0.1（本机回环），手机访问不到。请把主机改成服务器的 Tailscale 地址。",
+                        Toast.LENGTH_LONG).show();
+            } else {
+                Toast.makeText(this, "已识别，正在探测 Agent 类型…", Toast.LENGTH_SHORT).show();
+            }
             probeBackend(parsed.host, parsed.port, token.getText().toString().trim(), backend -> runOnUiThread(() -> {
                 String chosen = backend != null ? backend : parsed.backend;
                 for (RadioButton r : backendRadios) {
@@ -1593,6 +1601,14 @@ public class MainActivity extends ComponentActivity {
             try { p = Integer.parseInt(port.getText().toString()); } catch (Exception e) { p = -1; }
             if (host.isEmpty() || host.matches(".*[\\s/:?#].*") || p < 1 || p > 65535) {
                 Toast.makeText(this, "请检查 IP 和端口", Toast.LENGTH_SHORT).show(); return;
+            }
+            // 回环地址在手机上指手机自身。放它过去的话，添加时一切正常，
+            // 之后却永远连不上（不在线 + 打开 401），很难往"地址填错了"想。
+            if (isLoopbackHost(host)) {
+                Toast.makeText(this,
+                        "127.0.0.1 / localhost 是手机自己，连不到服务器。请填服务器的 Tailscale 地址（如 100.x.y.z）。",
+                        Toast.LENGTH_LONG).show();
+                return;
             }
             if (displayName.isEmpty()) displayName = host + ":" + p;
             List<ServerStore.Server> servers = new ArrayList<>(ServerStore.load(this));
@@ -1689,8 +1705,10 @@ public class MainActivity extends ComponentActivity {
             boolean isOc = text.contains("opencode serve") || text.contains("OpenCode") || text.contains("opencode");
             String raw = null;
             if (isDsh) {
-                // dsh 启动输出形如 "dsh web: http://127.0.0.1:3080 (LAN: http://100.x.y.z:3080)"，
-                // 优先取 LAN 地址（127.0.0.1 是手机自身，无法访问）。
+                // dsh 启动输出形如 "dsh web: http://127.0.0.1:3080/?token=… (LAN: http://100.x.y.z:3080/?token=…)",
+                // 优先取 LAN 地址。注意 dsh 只在绑 0.0.0.0 时才打印 LAN 段；
+                // 若它绑在回环上（常见做法：回环 + socat 转发到 tailnet），就只有 127.0.0.1，
+                // 那个地址在手机上指手机自身，必须让用户改填服务器的 Tailscale 地址。
                 Matcher lanMatch = Pattern.compile("LAN: (https?://[^\\s)]+)").matcher(text);
                 if (lanMatch.find()) raw = lanMatch.group(1);
             }
@@ -1733,6 +1751,14 @@ public class MainActivity extends ComponentActivity {
                             : isOc ? ServerStore.Server.BACKEND_OPENCODE
                                     : ServerStore.Server.BACKEND_KIMI);
         } catch (Exception ignored) { return null; }
+    }
+
+    /** 回环地址：在手机上指手机自身，永远连不到服务器。 */
+    private static boolean isLoopbackHost(String host) {
+        if (host == null) return false;
+        String h = host.trim().toLowerCase();
+        return h.equals("localhost") || h.equals("127.0.0.1") || h.startsWith("127.")
+                || h.equals("::1") || h.equals("[::1]");
     }
 
     /** 后端类型探测回调：backend 为 null 表示无法确认。 */
