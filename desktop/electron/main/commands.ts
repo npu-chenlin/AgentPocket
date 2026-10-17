@@ -207,7 +207,8 @@ export function registerCommands(
   handle<void>("server:reconnect-all", () => state.monitor.reconnectAll());
   handle<void>("workspace:sync", (snapshot: WorkspaceSnapshot) =>
     agentView.syncWorkspace(window, snapshot, async () => (await state.store.load()).servers));
-  handle<void>("workspace:retry", (id: string) => agentView.retryTab(window, id));
+  handle<void>("workspace:retry", async (id: string) =>
+    agentView.retryTab(window, id, (await state.store.load()).servers));
   handle<void>("workspace:drop-indicator", (rect: DropIndicatorRect | null) => setDropIndicator(window, rect));
   window.webContents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
     if (mainFrame && !inPlace) agentView.closeAll(window);

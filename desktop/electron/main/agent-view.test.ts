@@ -10,7 +10,7 @@ vi.mock("electron", () => ({ shell: { openExternal: vi.fn() }, WebContentsView: 
       close: vi.fn(), setWindowOpenHandler: vi.fn() }); mock.views.push(this);
   }
 } }));
-vi.mock("./auth", () => ({ installAuth: vi.fn(), sessionForServer: vi.fn(id => `session:${id}`) }));
+vi.mock("./auth", () => ({ prepareAuth: vi.fn(async () => {}), installAuth: vi.fn(), sessionForServer: vi.fn(id => `session:${id}`) }));
 import { syncWorkspace, closeAll, retryTab, refreshServers } from "./agent-view";
 const host = { contentView: { addChildView: vi.fn(), removeChildView: vi.fn() }, webContents: { send: vi.fn(), getZoomFactor: () => 1 },
   getContentSize: () => [800, 600], isDestroyed: () => false } as unknown as BrowserWindow;
@@ -23,7 +23,8 @@ beforeEach(() => { mock.views.length = 0; mock.loaders.length = 0; vi.clearAllMo
 afterEach(() => closeAll(host));
 describe("WebContentsView lifecycle", () => {
   it("每标签一份实例，布局/切换不重新加载，坐标整数化", async () => {
-    await syncWorkspace(host, snap(1, [tab, { ...tab, id: "b" }]), servers);
+    const syncing = syncWorkspace(host, snap(1, [tab, { ...tab, id: "b" }]), servers);
+    await syncing; await Promise.resolve();
     expect(mock.views).toHaveLength(2);
     await syncWorkspace(host, { ...snap(2, [tab, { ...tab, id: "b" }]), visible: {} }, servers);
     for (const view of mock.views) {
@@ -44,7 +45,8 @@ describe("WebContentsView lifecycle", () => {
   it("关闭后加载完成不会复活；关闭确实释放", async () => {
     let resolve!: () => void;
     mock.loaders.push(() => new Promise(r => { resolve = r; }));
-    await syncWorkspace(host, snap(1), servers);
+    const loading = syncWorkspace(host, snap(1), servers);
+    await loading; await Promise.resolve();
     const view = mock.views[0];
     await syncWorkspace(host, snap(2, []), servers);
     resolve(); await Promise.resolve();
@@ -55,7 +57,7 @@ describe("WebContentsView lifecycle", () => {
     mock.loaders.push(() => Promise.reject(Error("offline")));
     await syncWorkspace(host, snap(1), servers); await Promise.resolve();
     expect(host.webContents.send).toHaveBeenCalledWith("workspace:status", { tabId: "a", state: "error", error: "offline" });
-    retryTab(host, "a"); await Promise.resolve();
+    retryTab(host, "a", [server]); await Promise.resolve();
     expect(mock.views[0].webContents.loadURL).toHaveBeenCalledTimes(2);
     refreshServers(host, [{ ...server, token: "synthetic-new" }]);
     expect(mock.views).toHaveLength(2);
@@ -68,6 +70,7 @@ describe("WebContentsView lifecycle", () => {
     mock.views[0].webContents.emit("focus");
     expect(host.webContents.send).toHaveBeenCalledWith("workspace:focus", "a");
     await syncWorkspace(host, snap(2), servers);
+    await Promise.resolve();
     expect(mock.views[0].setVisible).toHaveBeenLastCalledWith(true);
   });
 });

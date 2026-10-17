@@ -1,5 +1,5 @@
 import { BrowserWindow, WebContentsView, shell } from "electron";
-import { installAuth, sessionForServer } from "./auth";
+import { prepareAuth, sessionForServer } from "./auth";
 import type { ServerConfig } from "./model";
 import { buildServerUrl } from "./server-url";
 import { clipBounds, validateSnapshot, type WorkspaceSnapshot, type WorkspaceTab, type TabStatus } from "../../shared/workspace";
@@ -41,8 +41,19 @@ function closeTab(window: BrowserWindow, id: string): void {
   entry.view.webContents.close();
 }
 
-function load(window: BrowserWindow, entry: Entry): void {
+/**
+ * 加载一个窗格。先备好凭据再导航——dsh 要等 daemon 代签的 cookie 种进罐里，
+ * 否则第一帧是 401 页面，而 dsh 不会自己跳回来。
+ */
+async function load(window: BrowserWindow, entry: Entry, server: ServerConfig): Promise<void> {
   publish(window, entry, "loading");
+  try {
+    await prepareAuth(sessionForServer(server.id), server);
+  } catch (error) {
+    publish(window, entry, "error", error instanceof Error ? error.message : String(error));
+    return;
+  }
+  if (views.get(entry.tab.id) !== entry || window.isDestroyed()) return;
   void entry.view.webContents.loadURL(entry.url).then(
     () => publish(window, entry, "ready"),
     (error: Error) => publish(window, entry, "error", error.message),
@@ -72,7 +83,6 @@ function reconcile(window: BrowserWindow, servers: ServerConfig[]): void {
       && previous.tab.sessionId === tab.sessionId && previous.tab.serverId === tab.serverId) continue;
     closeTab(window, tab.id);
     const session = sessionForServer(server.id);
-    installAuth(session, server);
     const view = new WebContentsView({ webPreferences: {
       session, contextIsolation: true, nodeIntegration: false, sandbox: true,
     } });
@@ -100,7 +110,7 @@ function reconcile(window: BrowserWindow, servers: ServerConfig[]): void {
     view.webContents.on("did-fail-load", (_event, code, description, _url, mainFrame) => {
       if (mainFrame && code !== -3) publish(window, entry, "error", description);
     });
-    load(window, entry);
+    void load(window, entry, server);
   }
   place(window);
 }
@@ -109,9 +119,10 @@ export function refreshServers(window: BrowserWindow, servers: ServerConfig[]): 
   ++generation;
   reconcile(window, servers);
 }
-export function retryTab(window: BrowserWindow, id: string): void {
+export function retryTab(window: BrowserWindow, id: string, servers: ServerConfig[]): void {
   const entry = views.get(id);
-  if (entry) load(window, entry);
+  const server = servers.find(s => s.id === entry?.tab.serverId);
+  if (entry && server) void load(window, entry, server);
 }
 
 export function closeServer(window: BrowserWindow, serverId: string): void {

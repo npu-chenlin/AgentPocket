@@ -10,8 +10,10 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.UUID;
 
@@ -26,23 +28,36 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 /**
- * DeepSeek Harness (dsh) web 服务器监听器。
+ * DeepSeek Harness (dsh) web 服务器监听器 —— 0.2 协议。
  *
- * 协议要点（实测）：
+ * 0.1 那套"一条全局下游流，帧里带 session/event、approval/requested"的模型在
+ * 0.2 已经没有了。现在分三条：
+ *
  * 1. HTTP RPC：POST /api/&lt;method&gt;，信封
- *    {"type":"client-request","rpcId":"...","method":"...","payload":{...}}
- *    响应 {"type":"server-response","rpcId":"...","result":{"ok":true,"value":{...}}}
- * 2. 会话列表：session.list → value.items[]（sessionId / running / projections.values.title）
- * 3. WebSocket：/api/events.mux 为纯下行流，客户端不发送任何消息（上行会被 1008 关闭）。
- *    帧为 server-request，method 有 session/event、session/subscribed、
- *    session/projection、approval/requested、question/requested 等。
- * 4. 无 token 鉴权：信任围栏按 Host 头（本机 IP 字面量）判定。
+ *    {"type":"client-request","rpcId":"...","method":"...","payload":{"args":{...}}}
+ *    session/list 的参数名是 <code>_request</code>，响应
+ *    {"type":"server-response","rpcId":"...","result":{"ok":true,"value":{...}}}
+ * 2. WebSocket /api/remote.mux：连接后先发 open 帧订阅，之后收 item 帧。
+ *    - <code>$events</code>：会话增删、running 变化、agent 失败、审批/提问请求
+ *    - <code>session/follow</code>：单会话的 turn/start、turn/end
+ * 3. 认证：/api 与页面都要求浏览器会话 cookie；由 DshAuth 向节点 daemon 代签。
+ *
+ * 审批与提问是 waterfall 帧，**必须回一条**：所有客户端都不回，服务端会一直
+ * 挂着等，真人那边的审批就被卡住了。这里只回 next，把决定权留给 Web UI。
  */
 public class DshServerMonitor extends ServerMonitor {
     private static final String TAG = "DshMonitor";
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
+    /** 与桌面端一致：会话再多也不该把连接数拉爆。 */
+    private static final int MAX_FOLLOWS = 16;
 
     private final Map<String, Boolean> busyBySession = Collections.synchronizedMap(new HashMap<>());
+    /** 子代理会话：不单独订阅，它们由父会话体现。 */
+    private final Set<String> subagentSessions = Collections.synchronizedSet(new HashSet<>());
+    /** 每个会话一条 follow 连接。 */
+    private final Map<String, WebSocket> follows = Collections.synchronizedMap(new HashMap<>());
+    /** $events 连接拿到的 clientId，应答 waterfall 时要带上。 */
+    private volatile String eventsClientId;
     /** 每次建立连接递增；旧 WebSocket 的回调不得影响当前连接。 */
     private final AtomicLong socketGeneration = new AtomicLong();
 
@@ -54,178 +69,330 @@ public class DshServerMonitor extends ServerMonitor {
         if (stopped) return;
         connected = false;
         notifySummary();
-        fetchSessionList(this::connectWebSocket);
+        new Thread(() -> {
+            List<String> followable = fetchSessionList();
+            if (stopped) return;
+            connectEvents();
+            for (String sessionId : followable) followSession(sessionId);
+        }, "dsh-monitor").start();
     }
 
     // ------------------------------------------------------------------
     // 会话列表（HTTP RPC）
     // ------------------------------------------------------------------
 
-    private void fetchSessionList(Runnable then) {
+    /** 拉一次会话列表；返回需要 follow 的非子代理会话 id。 */
+    private List<String> fetchSessionList() {
+        List<String> followable = new ArrayList<>();
+        String cookie = DshAuth.cookie(server);
+        if (cookie == null) {
+            Log.w(TAG, server.name + " 配置里没有可用的 dsh 密钥");
+            scheduleReconnect();
+            return followable;
+        }
+        // session/list 的参数名是 _request，不是 request。
         Request request = new Request.Builder()
-                .url(server.baseUrl() + "/api/session.list")
-                .post(RequestBody.create(rpc("session.list", "{}"), JSON))
+                .url(server.baseUrl() + "/api/session/list")
+                .header("Cookie", cookie)
+                .post(RequestBody.create(rpc("session/list", "{\"_request\":{}}"), JSON))
                 .build();
-        client.newCall(request).enqueue(new Callback() {
-            @Override public void onFailure(Call call, IOException e) {
-                Log.w(TAG, server.name + " RPC failed: " + e.getMessage());
-                scheduleReconnect();
+        try (Response response = client.newCall(request).execute()) {
+            if (response.code() == 401) {
+                // 配置里的密钥不对（dsh 重装换了密钥等），症状就是 401。
+                throw new IOException("dsh 认证失败：检查该服务连接里填的密钥");
             }
-            @Override public void onResponse(Call call, Response response) {
-                try (Response ignored = response) {
-                    if (!response.isSuccessful()) throw new IOException("HTTP " + response.code());
-                    JSONObject result = new JSONObject(response.body().string()).optJSONObject("result");
-                    if (result == null || !result.optBoolean("ok", false)) throw new IOException("RPC not ok");
-                    JSONArray items = result.optJSONObject("value").optJSONArray("items");
+            if (!response.isSuccessful()) throw new IOException("HTTP " + response.code());
+            JSONObject result = new JSONObject(response.body().string()).optJSONObject("result");
+            if (result == null || !result.optBoolean("ok", false)) throw new IOException("RPC not ok");
+            JSONArray items = result.optJSONObject("value").optJSONArray("items");
+            synchronized (titleCache) {
+                titleCache.clear();
+            }
+            busyBySession.clear();
+            subagentSessions.clear();
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject item = items.getJSONObject(i);
+                String id = item.getString("sessionId");
+                boolean subagent = "subagent".equals(item.optString("origin", ""));
+                if (subagent) subagentSessions.add(id);
+                busyBySession.put(id, item.optBoolean("running", false));
+                String title = titleOf(item);
+                if (!title.isEmpty()) {
                     synchronized (titleCache) {
-                        titleCache.clear();
-                        busyBySession.clear();
-                        for (int i = 0; i < items.length(); i++) {
-                            JSONObject item = items.getJSONObject(i);
-                            String id = item.getString("sessionId");
-                            boolean running = item.optBoolean("running", false);
-                            busyBySession.put(id, running);
-                            JSONObject projections = item.optJSONObject("projections");
-                            JSONObject values = projections != null ? projections.optJSONObject("values") : null;
-                            String title = values != null ? values.optString("title", "") : "";
-                            if (title.isEmpty() || "null".equals(title)) title = "";
-                            if (!title.isEmpty()) titleCache.put(id, title);
-                        }
-                        activeCount = busyCount();
+                        titleCache.put(id, title);
                     }
-                    notifySummary();
-                    then.run();
-                } catch (Exception e) {
-                    Log.w(TAG, server.name + " RPC parse failed", e);
-                    scheduleReconnect();
                 }
+                if (!subagent) followable.add(id);
             }
-        });
+            activeCount = busyCount();
+            notifySummary();
+        } catch (Exception e) {
+            Log.w(TAG, server.name + " session/list 失败", e);
+            scheduleReconnect();
+        }
+        return followable;
+    }
+
+    /** 会话标题：projections.values.title 非空才算，服务端会给字面量 "null"。 */
+    private static String titleOf(JSONObject item) {
+        JSONObject projections = item.optJSONObject("projections");
+        JSONObject values = projections != null ? projections.optJSONObject("values") : null;
+        String title = values != null ? values.optString("title", "") : "";
+        return title.isEmpty() || "null".equals(title) ? "" : title;
     }
 
     // ------------------------------------------------------------------
-    // WebSocket（/api/events.mux，纯下行）
+    // WebSocket（/api/remote.mux）
     // ------------------------------------------------------------------
 
-    private void connectWebSocket() {
+    private String muxUrl() {
+        return server.baseUrl().replace("http://", "ws://").replace("https://", "wss://")
+                + "/api/remote.mux";
+    }
+
+    /** 全局事件流：会话集合与 running 变化、审批 / 提问。 */
+    private void connectEvents() {
         if (stopped) return;
         final long generation = socketGeneration.incrementAndGet();
         if (webSocket != null) webSocket.cancel();
-        String wsUrl = server.baseUrl().replace("http://", "ws://").replace("https://", "wss://")
-                + "/api/events.mux";
+        closeFollows();
 
-        webSocket = client.newWebSocket(new Request.Builder().url(wsUrl).build(), new WebSocketListener() {
+        String cookie = DshAuth.cookie(server);
+        if (cookie == null) {
+            scheduleReconnect();
+            return;
+        }
+        Request.Builder builder = new Request.Builder().url(muxUrl()).header("Cookie", cookie);
+        webSocket = client.newWebSocket(builder.build(), new WebSocketListener() {
             @Override public void onOpen(WebSocket ws, Response response) {
                 if (!isCurrentSocket(ws, generation)) return;
-                Log.i(TAG, server.name + " mux open");
-                connected = true;
-                reconnectDelay = RECONNECT_BASE_MS;
-                setHealth(true);
-                notifySummary();
+                Log.i(TAG, server.name + " $events open");
+                ws.send(openFrame("events", "$events", new JSONObject()));
             }
 
             @Override public void onMessage(WebSocket ws, String text) {
-                if (isCurrentSocket(ws, generation)) handleFrame(text);
+                if (isCurrentSocket(ws, generation)) handleEventsFrame(ws, text);
             }
 
             @Override public void onClosed(WebSocket ws, int code, String reason) {
                 if (!isCurrentSocket(ws, generation)) return;
-                Log.i(TAG, server.name + " mux closed: " + code + " " + reason);
-                connected = false;
-                setHealth(false);
-                notifySummary();
-                scheduleReconnect();
+                Log.i(TAG, server.name + " $events closed: " + code + " " + reason);
+                onEventsDown();
             }
 
             @Override public void onFailure(WebSocket ws, Throwable t, Response response) {
                 if (!isCurrentSocket(ws, generation)) return;
-                Log.w(TAG, server.name + " mux failure: " + t.getMessage());
-                connected = false;
-                setHealth(false);
-                notifySummary();
-                scheduleReconnect();
+                Log.w(TAG, server.name + " $events failure: " + t.getMessage());
+                onEventsDown();
             }
         });
+    }
+
+    private void onEventsDown() {
+        connected = false;
+        setHealth(false);
+        notifySummary();
+        closeFollows();
+        scheduleReconnect();
+    }
+
+    private void closeFollows() {
+        synchronized (follows) {
+            for (WebSocket socket : follows.values()) socket.cancel();
+            follows.clear();
+        }
+    }
+
+    /** 单会话事件订阅：turn/start、turn/end。 */
+    private void followSession(final String sessionId) {
+        if (stopped || subagentSessions.contains(sessionId)) return;
+        synchronized (follows) {
+            if (follows.containsKey(sessionId) || follows.size() >= MAX_FOLLOWS) return;
+        }
+        String cookie = DshAuth.cookie(server);
+        if (cookie == null) return;
+
+        Request request = new Request.Builder().url(muxUrl()).header("Cookie", cookie).build();
+        WebSocket socket = client.newWebSocket(request, new WebSocketListener() {
+            @Override public void onOpen(WebSocket ws, Response response) {
+                JSONObject address = new JSONObject();
+                try {
+                    address.put("kind", "session").put("sessionId", sessionId);
+                } catch (JSONException ignored) {}
+                JSONObject request = new JSONObject();
+                try {
+                    request.put("address", address);
+                } catch (JSONException ignored) {}
+                ws.send(openFrame("follow-" + sessionId, "session/follow", request));
+            }
+
+            @Override public void onMessage(WebSocket ws, String text) {
+                handleFollowFrame(sessionId, text);
+            }
+
+            @Override public void onClosed(WebSocket ws, int code, String reason) {
+                follows.remove(sessionId);
+            }
+
+            @Override public void onFailure(WebSocket ws, Throwable t, Response response) {
+                follows.remove(sessionId);
+            }
+        });
+        synchronized (follows) {
+            follows.put(sessionId, socket);
+        }
     }
 
     private boolean isCurrentSocket(WebSocket ws, long generation) {
         return !stopped && generation == socketGeneration.get() && webSocket == ws;
     }
 
-    private void handleFrame(String text) {
+    // ------------------------------------------------------------------
+    // 帧解析
+    // ------------------------------------------------------------------
+
+    private void handleEventsFrame(WebSocket ws, String text) {
         try {
-            JSONObject msg = new JSONObject(text);
-            // 只处理 server-request 下行帧
-            if (!"server-request".equals(msg.optString("type", ""))) return;
-            String method = msg.optString("method", "");
-            JSONObject payload = msg.optJSONObject("payload");
-            if (payload == null) return;
-            String sessionId = payload.optString("sessionId", "");
-            Log.d(TAG, server.name + " << " + method + " session=" + sessionId);
+            JSONObject frame = new JSONObject(text);
+            if (!"item".equals(frame.optString("type", ""))) return;
+            JSONObject value = frame.optJSONObject("value");
+            if (value == null) return;
+            String type = value.optString("type", "");
 
-            switch (method) {
-                case "session/subscribed":
-                    // baseline，无业务含义
+            if ("ready".equals(type)) {
+                eventsClientId = value.optString("clientId", "");
+                connected = true;
+                reconnectDelay = RECONNECT_BASE_MS;
+                setHealth(true);
+                notifySummary();
+                return;
+            }
+            if ("waterfall".equals(type)) {
+                handleWaterfall(ws, value);
+                return;
+            }
+            if (!"emit".equals(type)) return;
+
+            String event = value.optString("event", "");
+            JSONArray args = value.optJSONArray("args");
+            if (args == null) return;
+            switch (event) {
+                case "api-session/status": {
+                    // args = [sessionId, running]
+                    String sessionId = args.optString(0, "");
+                    if (sessionId.isEmpty()) return;
+                    setBusy(sessionId, args.optBoolean(1, false));
                     break;
-
-                case "session/event":
-                    handleSessionEvent(sessionId, payload.optJSONObject("event"));
-                    break;
-
-                case "session/projection":
-                    if ("title".equals(payload.optString("key", ""))) {
-                        String title = payload.opt("value") instanceof String
-                                ? payload.optString("value", "") : "";
-                        if (!title.isEmpty() && !"null".equals(title)) {
-                            synchronized (titleCache) { titleCache.put(sessionId, title); }
+                }
+                case "api-session/added": {
+                    // 新会话会出现两次（session/created 与 agent/created 各一次），按 id upsert。
+                    JSONObject summary = args.optJSONObject(0);
+                    if (summary == null) return;
+                    String id = summary.optString("sessionId", "");
+                    if (id.isEmpty()) return;
+                    boolean subagent = "subagent".equals(summary.optString("origin", ""));
+                    if (subagent) subagentSessions.add(id);
+                    String title = titleOf(summary);
+                    if (!title.isEmpty()) {
+                        synchronized (titleCache) {
+                            titleCache.put(id, title);
                         }
                     }
+                    if (summary.optBoolean("running", false)) setBusy(id, true);
+                    // 会话集合变了才有必要跟随，这里补一条（列表刷新是另一条路）。
+                    if (!subagent && !follows.containsKey(id)) followSession(id);
                     break;
-
-                case "approval/requested": {
-                    String toolName = payload.optString("toolName", "");
-                    publishEvent("approval");
-                    if (!MainActivity.isVisible && isFreshEvent(msg)) {
-                        String body = toolName.isEmpty() ? getTitle(sessionId)
-                                : "请求调用 " + toolName + " · " + getTitle(sessionId);
-                        maybeNotify(sessionId, "approval:" + payload.optString("approvalId", UUID.randomUUID().toString()),
-                                "DeepSeek Harness · 等待审批", body);
+                }
+                case "api-session/removed": {
+                    String sessionId = args.optString(0, "");
+                    if (sessionId.isEmpty()) return;
+                    setBusy(sessionId, false);
+                    synchronized (titleCache) {
+                        titleCache.remove(sessionId);
+                    }
+                    subagentSessions.remove(sessionId);
+                    WebSocket socket = follows.remove(sessionId);
+                    if (socket != null) socket.cancel();
+                    break;
+                }
+                case "api-session/error": {
+                    // 回合之外的 agent 失败：没有 turn/end 可依，只有这条。
+                    String sessionId = args.optString(0, "");
+                    if (sessionId.isEmpty()) return;
+                    setBusy(sessionId, false);
+                    publishEvent("aborted");
+                    if (!MainActivity.isVisible) {
+                        maybeNotify(sessionId, "agent-error:" + sessionId,
+                                "DeepSeek Harness · 任务失败", args.optString(1, getTitle(sessionId)));
                     }
                     break;
                 }
-
-                case "question/requested": {
-                    publishEvent("question");
-                    if (!MainActivity.isVisible && isFreshEvent(msg)) {
-                        String body = getTitle(sessionId);
-                        JSONArray questions = payload.optJSONArray("questions");
-                        if (questions != null && questions.length() > 0) {
-                            String q = questions.optJSONObject(0).optString("question", "");
-                            if (!q.isEmpty()) body = q;
-                        }
-                        maybeNotify(sessionId, "question:" + msg.optString("rpcId", UUID.randomUUID().toString()),
-                                "DeepSeek Harness · 待回答", body);
-                    }
-                    break;
-                }
-
-                case "session/queue":
-                case "approval/resolved":
-                case "question/resolved":
-                    // 队列快照与结果帧：通知已由 requested 帧发出
-                    break;
-
                 default:
                     break;
             }
         } catch (JSONException e) {
-            Log.w(TAG, server.name + " bad frame: " + text.substring(0, Math.min(200, text.length())));
+            Log.w(TAG, server.name + " $events 坏帧: " + text.substring(0, Math.min(200, text.length())));
         }
     }
 
-    /** 解析 SessionEvent（session/event 帧的 event 字段），只关心回合开始/结束与标题。 */
+    /**
+     * 审批 / 提问请求。
+     *
+     * 帧里那个字段叫 agentId，但 dsh 的 agent 就是以 session id 为键创建的，所以它就是会话 id。
+     * 必须应答：只回 next 不认领，交回 Web UI 处理。
+     */
+    private void handleWaterfall(WebSocket ws, JSONObject value) {
+        String event = value.optString("event", "");
+        String eventId = value.optString("eventId", "");
+        String sessionId = value.optString("agentId", "");
+        boolean approval = "approval/request".equals(event);
+
+        if (approval) {
+            publishEvent("approval");
+            if (!MainActivity.isVisible) {
+                JSONObject request = value.optJSONObject("request");
+                String toolName = request != null ? request.optString("toolName", "") : "";
+                String body = toolName.isEmpty() ? getTitle(sessionId)
+                        : "请求调用 " + toolName + " · " + getTitle(sessionId);
+                maybeNotify(sessionId, "approval:" + eventId,
+                        "DeepSeek Harness · 等待审批", body);
+            }
+        } else {
+            publishEvent("question");
+            if (!MainActivity.isVisible) {
+                maybeNotify(sessionId, "question:" + eventId,
+                        "DeepSeek Harness · 待回答", getTitle(sessionId));
+            }
+        }
+
+        String clientId = eventsClientId;
+        if (clientId != null && !clientId.isEmpty()) {
+            ws.send(resultFrame(clientId, eventId, "next"));
+        }
+    }
+
+    /** 单会话 follow 帧。 */
+    private void handleFollowFrame(String sessionId, String text) {
+        try {
+            JSONObject frame = new JSONObject(text);
+            if (!"item".equals(frame.optString("type", ""))) return;
+            JSONObject value = frame.optJSONObject("value");
+            if (value == null) return;
+            String type = value.optString("type", "");
+            if ("snapshot".equals(type)) {
+                // 打开时回放一段窗口，里面的 turn/end 是历史，不该通知。
+                return;
+            }
+            if (!"event".equals(type)) return;
+            JSONObject event = value.optJSONObject("event");
+            if (event != null) handleSessionEvent(sessionId, event);
+        } catch (JSONException e) {
+            Log.w(TAG, server.name + " follow 坏帧: " + text.substring(0, Math.min(200, text.length())));
+        }
+    }
+
+    /** 解析 SessionEvent（follow 帧的 event 字段），只关心回合开始/结束与标题。 */
     private void handleSessionEvent(String sessionId, JSONObject event) {
-        if (event == null) return;
         String type = event.optString("type", "");
         JSONObject data = event.optJSONObject("data");
         switch (type) {
@@ -235,8 +402,8 @@ public class DshServerMonitor extends ServerMonitor {
 
             case "turn/end": {
                 setBusy(sessionId, false);
-                String kind = data != null && data.optJSONObject("reason") != null
-                        ? data.optJSONObject("reason").optString("kind", "") : "";
+                JSONObject reason = data != null ? data.optJSONObject("reason") : null;
+                String kind = reason != null ? reason.optString("kind", "") : "";
                 long seq = event.optLong("seq", -1);
                 String key = "turn-end:" + seq;
                 if ("completed".equals(kind)) {
@@ -246,10 +413,15 @@ public class DshServerMonitor extends ServerMonitor {
                     }
                 } else if ("error".equals(kind) || "aborted".equals(kind)
                         || "blocked".equals(kind) || "max-tokens".equals(kind)
-                        || "interrupted".equals(kind)) {
+                        || "interrupted".equals(kind) || "forked".equals(kind)) {
                     publishEvent("aborted");
                     if (!MainActivity.isVisible) {
-                        maybeNotify(sessionId, key, "DeepSeek Harness · 回合失败", getTitle(sessionId));
+                        // 失败时把模型的报错带出来——"任务失败"四个字对排查没有帮助。
+                        String body = "error".equals(kind) && reason != null
+                                && reason.optJSONObject("error") != null
+                                ? reason.optJSONObject("error").optString("message", getTitle(sessionId))
+                                : getTitle(sessionId);
+                        maybeNotify(sessionId, key, "DeepSeek Harness · 回合失败", body);
                     }
                 }
                 break;
@@ -258,7 +430,9 @@ public class DshServerMonitor extends ServerMonitor {
             case "session/title": {
                 String title = data != null ? data.optString("title", "") : "";
                 if (!title.isEmpty() && !"null".equals(title)) {
-                    synchronized (titleCache) { titleCache.put(sessionId, title); }
+                    synchronized (titleCache) {
+                        titleCache.put(sessionId, title);
+                    }
                 }
                 break;
             }
@@ -309,8 +483,49 @@ public class DshServerMonitor extends ServerMonitor {
         return count;
     }
 
-    private static String rpc(String method, String payloadJson) {
+    @Override public void shutdown() {
+        closeFollows();
+        super.shutdown();
+    }
+
+    // ------------------------------------------------------------------
+    // 帧构造
+    // ------------------------------------------------------------------
+
+    /** mux 上的第 0 帧必须是 open，之后服务端才会推 item。 */
+    private static String openFrame(String streamId, String endpoint, JSONObject args) {
+        try {
+            return new JSONObject()
+                    .put("type", "open")
+                    .put("streamId", streamId)
+                    .put("endpoint", endpoint)
+                    .put("payload", new JSONObject().put("args", args))
+                    .toString();
+        } catch (JSONException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** waterfall 的应答：kind=next 表示不认领。 */
+    private static String resultFrame(String clientId, String eventId, String outcome) {
+        try {
+            JSONObject args = new JSONObject()
+                    .put("clientId", clientId)
+                    .put("eventId", eventId)
+                    .put("outcome", new JSONObject().put("kind", outcome));
+            return new JSONObject()
+                    .put("type", "client-request")
+                    .put("rpcId", UUID.randomUUID().toString())
+                    .put("method", "$events/result")
+                    .put("payload", new JSONObject().put("args", args))
+                    .toString();
+        } catch (JSONException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static String rpc(String method, String argsJson) {
         return "{\"type\":\"client-request\",\"rpcId\":\"" + UUID.randomUUID()
-                + "\",\"method\":\"" + method + "\",\"payload\":" + payloadJson + "}";
+                + "\",\"method\":\"" + method + "\",\"payload\":{\"args\":" + argsJson + "}}";
     }
 }

@@ -100,8 +100,9 @@ describe("手动 peer", () => {
 
 describe("探测不可达节点", () => {
   it("连不上返回 null 而不是抛错", async () => {
-    // 127.0.0.1:1 上不会有服务在听；离线节点是常态不是错误。
-    await expect(probePeer("127.0.0.1", "dead", 500)).resolves.toBeNull();
+    // 用 TEST-NET-1（RFC 5737，永不路由）而不是 127.0.0.1：本机常驻着一个
+    // daemon 就在 mesh 端口上，拿回环当"离线节点"会被它接住，测的就不是离线了。
+    await expect(probePeer("192.0.2.1", "dead", 500)).resolves.toBeNull();
   });
 });
 

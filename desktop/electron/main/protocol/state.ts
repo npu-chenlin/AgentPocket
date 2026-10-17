@@ -47,6 +47,13 @@ export class ProtocolState {
   readonly activities = new Map<string, SessionActivity>();
   /** 已纳入订阅的会话 id。 */
   readonly subscribed = new Set<string>();
+  /**
+   * dsh：`origin === "subagent"` 的会话。
+   *
+   * 子代理的回合事件不通知用户——它们由父会话的结果体现，逐个报会刷屏。
+   * 判断放在这里而不是解析层，是因为"要不要订阅"是监控循环的决策。
+   */
+  readonly subagentSessions = new Set<string>();
 
   activityFor(sessionId: string): SessionActivity {
     let activity = this.activities.get(sessionId);

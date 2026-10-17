@@ -13,6 +13,7 @@
 
 import { session as electronSession, type Session } from "electron";
 
+import { dshCookie, dshAuthority } from "./dsh-auth";
 import { opencodeBasicHeader, serverBaseUrl, type ServerConfig } from "./model";
 
 /**
@@ -69,4 +70,48 @@ export function installAuth(session: Session, server: ServerConfig): void {
           : { ...details.requestHeaders, Authorization: value },
     });
   });
+}
+
+/**
+ * dsh 的浏览器会话 cookie 装进这个 session。
+ *
+ * 不能像 OpenCode 那样用 webRequest 改头：dsh 认的是 cookie，且服务端会校验签名，
+ * 拼头只是把同一件事换个地方做。这里直接把它种进 Chromium 的 cookie 罐，
+ * 之后导航与 /api 请求都会自动带上。
+ *
+ * cookie 由配置里的密钥本地签发（见 dsh-auth.ts），不依赖 dsh 那台机器上有没有 daemon。
+ */
+export async function installDshCookie(session: Session, server: ServerConfig): Promise<void> {
+  if (server.backend !== "dsh") return;
+  const cookie = dshCookie(server);
+  if (cookie === null) return;
+
+  const separator = cookie.header.indexOf("=");
+  if (separator <= 0) return;
+  const name = cookie.header.slice(0, separator);
+  const value = cookie.header.slice(separator + 1);
+
+  const base = serverBaseUrl(server);
+  await session.cookies.set({
+    url: `${base.origin}/`,
+    name,
+    value,
+    domain: base.hostname,
+    path: "/",
+    // 与 dsh 自己下发的一致：HttpOnly + SameSite=Strict，30 天。
+    httpOnly: true,
+    sameSite: "strict",
+    secure: false,
+    expirationDate: Math.floor(cookie.expiresAt / 1000),
+  });
+}
+
+/**
+ * 打开视图前的凭据准备：dsh 种 cookie、opencode 装 webRequest 注入。
+ *
+ * dsh 的 cookie 现在就种，不等导航——否则第一帧是 401 页面，而 dsh 不会自己跳回来。
+ */
+export async function prepareAuth(session: Session, server: ServerConfig): Promise<void> {
+  installAuth(session, server);
+  await installDshCookie(session, server);
 }

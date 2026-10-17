@@ -68,7 +68,8 @@ impl ServerConfig {
     /// opencode v2 的登录凭据：token 字段承载 `user:pass`（HTTP Basic）。
     /// opencode 的用户名固定为 `opencode`（服务端忽略 `OPENCODE_SERVER_USERNAME`），
     /// 密码对应服务端的 `OPENCODE_SERVER_PASSWORD`。只写密码时默认补上 `opencode:`。
-    /// token 字段对 kimi 是访问令牌、对 dsh 无效。
+    /// token 字段按后端各管一摊：kimi 是访问令牌，dsh 是它的浏览器会话签名密钥
+    /// （`~/.dsh/.credentials.yaml` 的 `client-connection/browser-session`）。
     pub fn opencode_credentials(&self) -> Option<(&str, &str)> {
         if self.backend != Backend::Opencode {
             return None;

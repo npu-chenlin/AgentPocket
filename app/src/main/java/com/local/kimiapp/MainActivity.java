@@ -27,12 +27,14 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.text.TextUtils;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewConfiguration;
 import android.view.animation.OvershootInterpolator;
+import android.webkit.CookieManager;
 import android.webkit.HttpAuthHandler;
 import android.webkit.PermissionRequest;
 import android.webkit.JavascriptInterface;
@@ -1504,30 +1506,20 @@ public class MainActivity extends ComponentActivity {
         EditText port = modernField("端口", false);
         port.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
         port.setText(String.valueOf(editing == null ? 58627 : editing.port));
-        EditText token = modernField("Token（Kimi 令牌；OpenCode 填登录密码）", false);
+        EditText token = modernField("Token（Kimi 令牌；dsh 密钥；OpenCode 登录密码）", false);
         token.setInputType(android.text.InputType.TYPE_CLASS_TEXT |
                 android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
         token.setText(editing == null ? "" : editing.token);
         android.widget.CompoundButton.OnCheckedChangeListener tokenHint =
                 (button, checked) -> {
                     if (!checked) return;
-                    final String selected = selectedBackend(backendRadios);
-                    token.setHint(ServerStore.Server.BACKEND_OPENCODE.equals(selected)
-                            ? "OpenCode 登录密码或 用户名:密码（如 opencode:opencode）"
-                            : ServerStore.Server.BACKEND_DSH.equals(selected)
-                                    ? "Token（dsh 留空）"
-                                    : "Token（Kimi 专用）");
+                    token.setHint(tokenHintFor(selectedBackend(backendRadios)));
                 };
         kimiRadio.setOnCheckedChangeListener(tokenHint);
         dshRadio.setOnCheckedChangeListener(tokenHint);
         ocRadio.setOnCheckedChangeListener(tokenHint);
         // 编辑态：setChecked 发生在监听器绑定前，需手动让 hint 贴合当前选中后端。
-        String initialBackend = selectedBackend(backendRadios);
-        token.setHint(ServerStore.Server.BACKEND_OPENCODE.equals(initialBackend)
-                ? "OpenCode 登录密码或 用户名:密码（如 opencode:opencode）"
-                : ServerStore.Server.BACKEND_DSH.equals(initialBackend)
-                        ? "Token（dsh 留空）"
-                        : "Token（Kimi 专用）");
+        token.setHint(tokenHintFor(selectedBackend(backendRadios)));
         recognize.setOnClickListener(v -> {
             ParsedConnection parsed = parseConnection(pasted.getText().toString());
             if (parsed == null) {
@@ -1746,7 +1738,10 @@ public class MainActivity extends ComponentActivity {
 
     /**
      * 自动探测服务器后端类型。
-     * dsh 特征：POST /api/agentPreset.list 返回 RPC 信封（type=server-response）；
+     * dsh 特征：GET /manifest.webmanifest 返回 dsh 自己的 JSON 清单
+     * （name=DeepSeek Harness / short_name=DSH）；kimi 上是 404，opencode 上是 HTML。
+     * dsh 0.2 起 /api 要求浏览器会话 cookie，而探测发生在服务还没保存、也就还取不到
+     * cookie 的时候，所以这里必须用免鉴权的路径。
      * opencode 特征：GET /api/config 返回 JSON（v2 为配置文件数组），需要 HTTP Basic 认证；
      * Kimi 特征：GET /api/v2/sessions 存在（无 token 时 401/403 也算存在）。
      *
@@ -1755,15 +1750,14 @@ public class MainActivity extends ComponentActivity {
     private void probeBackend(String host, int port, String opencodeToken, BackendProbe callback) {
         String base = "http://" + host + ":" + port;
         Request dshProbe = new Request.Builder()
-                .url(base + "/api/agentPreset.list")
-                .post(RequestBody.create("{}", MediaType.parse("application/json; charset=utf-8")))
+                .url(base + "/manifest.webmanifest")
                 .build();
         probeClient.newCall(dshProbe).enqueue(new Callback() {
             @Override public void onFailure(Call call, IOException e) { probeOpencode(); }
             @Override public void onResponse(Call call, Response response) {
                 try (Response r = response) {
                     String body = r.body() != null ? r.body().string() : "";
-                    if (r.isSuccessful() && body.contains("\"type\":\"server-response\"")) {
+                    if (r.isSuccessful() && isDshManifest(body)) {
                         callback.onResult(ServerStore.Server.BACKEND_DSH);
                         return;
                     }
@@ -1813,6 +1807,28 @@ public class MainActivity extends ComponentActivity {
         });
     }
 
+    /** Token 字段的提示文案：dsh 要填的是它数据目录里那把签名密钥，不是服务进程日志里的启动令牌。 */
+    private static String tokenHintFor(String backend) {
+        if (ServerStore.Server.BACKEND_OPENCODE.equals(backend)) {
+            return "OpenCode 登录密码或 用户名:密码（如 opencode:opencode）";
+        }
+        if (ServerStore.Server.BACKEND_DSH.equals(backend)) {
+            return "dsh 的 ~/.dsh/.credentials.yaml 里 browser-session 的 secret";
+        }
+        return "Token（Kimi 专用）";
+    }
+
+    /** `/manifest.webmanifest` 是否是 dsh 的清单。kimi 上是 404、opencode 上是 HTML。 */
+    private static boolean isDshManifest(String body) {
+        try {
+            JSONObject value = new JSONObject(body);
+            return "DeepSeek Harness".equals(value.optString("name", ""))
+                    || "DSH".equals(value.optString("short_name", ""));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     private void loadConfiguredUrl() {
         loadConfiguredUrl(null);
     }
@@ -1833,8 +1849,11 @@ public class MainActivity extends ComponentActivity {
         ServerStore.Server server = ServerStore.active(this);
         if (server == null) return;
         if (ServerStore.Server.BACKEND_DSH.equals(server.backend)) {
-            // dsh：无 token 鉴权，前端也没有 URL 会话深链，只打开首页
-            webView.loadUrl(server.baseUrl() + "/");
+            // dsh 0.2 起页面与 /api 都要求浏览器会话 cookie。cookie 得先种进
+            // WebView 的 CookieManager 再导航——它绑定 host:port，且由服务端验签，
+            // 手工塞请求头没用（loadUrl 的 header 也只作用于这一次文档请求，
+            // 页面内的 /api 请求一样拿不到）。dsh 前端也没有 URL 会话深链。
+            loadDshWithCookie(server);
             return;
         }
         if (ServerStore.Server.BACKEND_OPENCODE.equals(server.backend)) {
@@ -1859,6 +1878,28 @@ public class MainActivity extends ComponentActivity {
             url += "#token=" + Uri.encode(token);
         }
         webView.loadUrl(url);
+    }
+
+    /**
+     * 给 WebView 种上 dsh 的会话 cookie 再打开首页。
+     *
+     * cookie 用配置里的密钥本地签发，是同步的。取不到密钥就照常打开——页面会显示
+     * dsh 自己的 401 提示，比卡在空白页好排查（也就是说：填的密钥不对时，症状是
+     * 打开后看到那行提示，而不是加不上这个服务）。
+     */
+    private void loadDshWithCookie(ServerStore.Server server) {
+        String home = server.baseUrl() + "/";
+        String cookie = DshAuth.cookie(server);
+        if (cookie == null) {
+            Log.w("MainActivity", "配置里没有可用的 dsh 密钥，直接打开首页");
+            webView.loadUrl(home);
+            return;
+        }
+        CookieManager manager = CookieManager.getInstance();
+        manager.setAcceptCookie(true);
+        manager.setCookie(home, DshAuth.cookieNameOf(cookie) + "=" + DshAuth.cookieValueOf(cookie) + "; path=/");
+        manager.flush();
+        webView.loadUrl(home);
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
