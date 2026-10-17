@@ -1510,10 +1510,14 @@ public class MainActivity extends ComponentActivity {
         token.setInputType(android.text.InputType.TYPE_CLASS_TEXT |
                 android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
         token.setText(editing == null ? "" : editing.token);
+        // 用**回调传进来的那个按钮**，不要在这里回头扫 RadioGroup。
+        // RadioGroup 的互斥是异步的：CompoundButton.setChecked 先通知应用层的监听器、
+        // 再由 RadioGroup 的 tracker 取消旧选中，所以此刻新旧两个按钮都还是选中的；
+        // 按数组顺序扫会命中前面那个旧按钮——症状就是 hint 慢一拍（选了 dsh 还显示 Kimi）。
         android.widget.CompoundButton.OnCheckedChangeListener tokenHint =
                 (button, checked) -> {
                     if (!checked) return;
-                    token.setHint(tokenHintFor(selectedBackend(backendRadios)));
+                    token.setHint(tokenHintFor(String.valueOf(button.getTag())));
                 };
         kimiRadio.setOnCheckedChangeListener(tokenHint);
         dshRadio.setOnCheckedChangeListener(tokenHint);
