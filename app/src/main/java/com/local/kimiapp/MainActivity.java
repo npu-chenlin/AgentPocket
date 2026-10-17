@@ -1883,9 +1883,12 @@ public class MainActivity extends ComponentActivity {
     /**
      * 给 WebView 种上 dsh 的会话 cookie 再打开首页。
      *
-     * cookie 用配置里的密钥本地签发，是同步的。取不到密钥就照常打开——页面会显示
-     * dsh 自己的 401 提示，比卡在空白页好排查（也就是说：填的密钥不对时，症状是
-     * 打开后看到那行提示，而不是加不上这个服务）。
+     * cookie 用配置里的密钥本地签发，所以同步就能算出来。但 **`setCookie` 本身是
+     * 异步的**——同步接着 loadUrl 会赶在 cookie 落进 CookieManager 之前发出请求，
+     * 首帧就是 401；dsh 不会自己跳回来，页面就停在那行提示上。所以要等回调。
+     *
+     * 取不到密钥就照常打开：页面会显示 dsh 自己的 401 提示，比卡在空白页好排查
+     * （也就是说填错密钥的症状是看到那行提示，而不是加不上这个服务）。
      */
     private void loadDshWithCookie(ServerStore.Server server) {
         String home = server.baseUrl() + "/";
@@ -1897,9 +1900,14 @@ public class MainActivity extends ComponentActivity {
         }
         CookieManager manager = CookieManager.getInstance();
         manager.setAcceptCookie(true);
-        manager.setCookie(home, DshAuth.cookieNameOf(cookie) + "=" + DshAuth.cookieValueOf(cookie) + "; path=/");
-        manager.flush();
-        webView.loadUrl(home);
+        manager.setCookie(home,
+                DshAuth.cookieNameOf(cookie) + "=" + DshAuth.cookieValueOf(cookie) + "; path=/",
+                accepted -> {
+                    if (accepted == null || !accepted) {
+                        Log.w("MainActivity", "WebView 拒绝了 dsh cookie，直接打开首页");
+                    }
+                    mainHandler.post(() -> webView.loadUrl(home));
+                });
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
