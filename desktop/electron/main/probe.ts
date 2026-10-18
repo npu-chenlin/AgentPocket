@@ -1,6 +1,5 @@
 /**
  * 后端探测：给一个还没保存的服务连接判断它跑的是哪种 Agent。
- * 从 desktop/src-tauri/src/monitor/mod.rs 的 probe_backend 迁移。
  *
  * dsh 0.2 起 `/api` 要求浏览器会话 cookie，而探测发生在服务还没保存、也就还没
  * 法取 cookie 的时候。所以 dsh 改用**免鉴权**指纹：`/manifest.webmanifest` 返回

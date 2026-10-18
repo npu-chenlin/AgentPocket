@@ -1,5 +1,4 @@
 /**
- * OpenCode 监控。从 desktop/src-tauri/src/monitor/opencode.rs 迁移。
  *
  * v2 没有可轮询的忙闲端点，状态完全由 SSE 事件驱动：
  * `session.execution.started` / `succeeded` / `failed`。同时兼容 v1 的事件形状。

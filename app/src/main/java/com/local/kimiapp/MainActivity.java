@@ -130,6 +130,17 @@ public class MainActivity extends ComponentActivity {
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(5, TimeUnit.SECONDS)
             .build();
+    /**
+     * dsh 的 launch token 交换用短超时 client。
+     *
+     * 必须关掉跟随跳转：交换就是一次 303 + Set-Cookie，跟着跳到「./」对我们没有意义，
+     * 而且会把那一次响应头丢掉。
+     */
+    private final OkHttpClient exchangeClient = new OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
+            .followRedirects(false)
+            .build();
     /** 扫码同步：扫描桌面端二维码的结果回调。 */
     private final ActivityResultLauncher<ScanOptions> syncScanner =
             registerForActivityResult(new ScanContract(), result -> {
@@ -1530,12 +1541,7 @@ public class MainActivity extends ComponentActivity {
                 Toast.makeText(this, "没有识别到有效的连接地址", Toast.LENGTH_SHORT).show();
                 return;
             }
-            ip.setText(parsed.host);
-            port.setText(String.valueOf(parsed.port));
-            // 只在校验出的内容非空时才覆盖 token：dsh 的启动日志里没有那把签名密钥
-            // （只有每次启动都变的 launch token），识别结果必然是空的，无条件覆盖会把
-            // 用户刚填好的密钥清掉——症状正是"填了密钥还是 401"。
-            if (!parsed.token.isEmpty()) token.setText(parsed.token);
+            applyParsed(parsed, ip, port, token);
             if (name.getText().toString().trim().isEmpty()) name.setText(parsed.host + ":" + parsed.port);
             // 回环地址在手机上指手机自身，连不上；dsh 绑回环时启动行里只有它，
             // 用户很容易就这么存进去，然后在"打开页面 401 / 显示不在线"之间打转。
@@ -1591,9 +1597,7 @@ public class MainActivity extends ComponentActivity {
                 if (parsed == null) {
                     Toast.makeText(this, "没有识别到有效的连接地址", Toast.LENGTH_SHORT).show(); return;
                 }
-                ip.setText(parsed.host);
-                port.setText(String.valueOf(parsed.port));
-                if (!parsed.token.isEmpty()) token.setText(parsed.token);
+                applyParsed(parsed, ip, port, token);
             }
             String host = ip.getText().toString().trim();
             String displayName = name.getText().toString().trim();
@@ -1614,17 +1618,23 @@ public class MainActivity extends ComponentActivity {
             List<ServerStore.Server> servers = new ArrayList<>(ServerStore.load(this));
             String id = editing == null ? ServerStore.newId() : editing.id;
             String backend = selectedBackend(backendRadios);
-            // token 字段对三种后端都要留着：kimi 是访问令牌，dsh 是签名密钥，
-            // opencode 是登录凭据。dsh 早先确实不需要，但 0.2 起页面与 /api 都
-            // 要它签 cookie；在这里清掉的话，添加时看着没问题，一打开就 401。
-            String tokenValue = token.getText().toString().trim();
-            ServerStore.Server saved = new ServerStore.Server(id, displayName, host, p, tokenValue, backend);
-            if (editing == null) servers.add(saved);
-            else for (int i = 0; i < servers.size(); i++) if (servers.get(i).id.equals(id)) servers.set(i, saved);
-            ServerStore.save(this, servers, id);
-            dialog.dismiss();
-            restartListener();
-            loadConfiguredUrl();
+            // token 栏对三种后端都保留：kimi 是访问令牌，dsh 是会话 cookie（粘启动行
+            // 会自动换好），opencode 是登录凭据。dsh 早先不需要 token，0.2 起页面与
+            // /api 都要它；在这里清掉的话，添加时看着没问题，一打开就 401。
+            String rawToken = token.getText().toString().trim();
+            // 快照进 lambda：下面要跨一次异步交换再保存，期间这些值都不该变。
+            final String finalDisplayName = displayName;
+            final String finalHost = host;
+            final int finalPort = p;
+            resolveTokenThen(backend, finalHost, finalPort, rawToken, resolved -> {
+                ServerStore.Server saved = new ServerStore.Server(id, finalDisplayName, finalHost, finalPort, resolved, backend);
+                if (editing == null) servers.add(saved);
+                else for (int i = 0; i < servers.size(); i++) if (servers.get(i).id.equals(id)) servers.set(i, saved);
+                ServerStore.save(this, servers, id);
+                dialog.dismiss();
+                restartListener();
+                loadConfiguredUrl();
+            });
         });
         Runnable bindActions = () -> {
             bindSave.run();
@@ -1753,6 +1763,62 @@ public class MainActivity extends ComponentActivity {
         } catch (Exception ignored) { return null; }
     }
 
+    /**
+     * 保存前把 dsh 那一栏的输入换成可长期使用的 cookie，其余后端原样返回。
+     *
+     * 用户在 dsh 栏可能填了：启动行（含 `?token=`）、已经拿到的 `name=value` cookie、
+     * 或空着。前两种都归一到 cookie 再落盘；换不到就原样保存（不静默清空），让监控
+     * 与页面如实报 401，而不是把用户刚填的内容悄悄丢掉。
+     */
+    private void resolveTokenThen(String backend, String host, int port, String raw,
+                                  java.util.function.Consumer<String> then) {
+        if (!ServerStore.Server.BACKEND_DSH.equals(backend) || raw.isEmpty()) {
+            then.accept(raw);
+            return;
+        }
+        // 已经是 cookie：直接用，不发请求。
+        String existing = DshAuth.parseCookie(raw);
+        if (existing != null) {
+            then.accept(existing);
+            return;
+        }
+        String launch = DshAuth.launchToken(raw);
+        if (launch == null) {
+            then.accept(raw);
+            return;
+        }
+        String base = "http://" + host + ":" + port;
+        Request request = new Request.Builder()
+                .url(DshAuth.exchangeUrl(base, launch))
+                .build();
+        exchangeClient.newCall(request).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException e) {
+                runOnUiThread(() -> then.accept(raw));
+            }
+            @Override public void onResponse(Call call, Response response) {
+                String cookie = null;
+                try (Response r = response) {
+                    cookie = DshAuth.cookieFromSetCookie(r.headers("Set-Cookie"));
+                } catch (Exception ignored) {}
+                String resolved = cookie != null ? cookie : raw;
+                runOnUiThread(() -> then.accept(resolved));
+            }
+        });
+    }
+
+    /**
+     * 把识别结果填进表单——「识别并填充」与「保存并连接」两条路径共用这一处。
+     *
+     * token 只在解析结果非空时覆盖：三种后端的启动输出里都不含各自的凭据
+     * （dsh 只有每次启动都变的 launch token，密钥在数据目录里），解析结果必然是
+     * 空串。无条件覆盖会把用户刚填好的凭据清掉，症状就是"填了密钥还是 401"。
+     */
+    private void applyParsed(ParsedConnection parsed, EditText ip, EditText port, EditText token) {
+        ip.setText(parsed.host);
+        port.setText(String.valueOf(parsed.port));
+        if (!parsed.token.isEmpty()) token.setText(parsed.token);
+    }
+
     /** 回环地址：在手机上指手机自身，永远连不到服务器。 */
     private static boolean isLoopbackHost(String host) {
         if (host == null) return false;
@@ -1835,13 +1901,13 @@ public class MainActivity extends ComponentActivity {
         });
     }
 
-    /** Token 字段的提示文案：dsh 要填的是它数据目录里那把签名密钥，不是服务进程日志里的启动令牌。 */
+    /** Token 字段的提示文案：dsh 粘启动行即可（会自动换成会话 cookie）。 */
     private static String tokenHintFor(String backend) {
         if (ServerStore.Server.BACKEND_OPENCODE.equals(backend)) {
             return "OpenCode 登录密码或 用户名:密码（如 opencode:opencode）";
         }
         if (ServerStore.Server.BACKEND_DSH.equals(backend)) {
-            return "dsh 的 ~/.dsh/.credentials.yaml 里 browser-session 的 secret";
+            return "dsh 的启动行（dsh web: http://…?token=…），会自动换成会话 cookie";
         }
         return "Token（Kimi 专用）";
     }
@@ -1911,18 +1977,19 @@ public class MainActivity extends ComponentActivity {
     /**
      * 给 WebView 种上 dsh 的会话 cookie 再打开首页。
      *
-     * cookie 用配置里的密钥本地签发，所以同步就能算出来。但 **`setCookie` 本身是
-     * 异步的**——同步接着 loadUrl 会赶在 cookie 落进 CookieManager 之前发出请求，
-     * 首帧就是 401；dsh 不会自己跳回来，页面就停在那行提示上。所以要等回调。
+     * cookie 是保存连接时用 launch token 换好、存在配置里的（见 resolveTokenThen），
+     * 这里直接种下去。但 **`setCookie` 本身是异步的**——同步接着 loadUrl 会赶在
+     * cookie 落进 CookieManager 之前发出请求，首帧就是 401；dsh 不会自己跳回来，
+     * 页面就停在那行提示上。所以要等回调。
      *
-     * 取不到密钥就照常打开：页面会显示 dsh 自己的 401 提示，比卡在空白页好排查
-     * （也就是说填错密钥的症状是看到那行提示，而不是加不上这个服务）。
+     * 取不到 cookie 就照常打开：页面会显示 dsh 自己的 401 提示，比卡在空白页好排查
+     * （也就是说 cookie 过期/没换到的症状是看到那行提示，而不是加不上这个服务）。
      */
     private void loadDshWithCookie(ServerStore.Server server) {
         String home = server.baseUrl() + "/";
         String cookie = DshAuth.cookie(server);
         if (cookie == null) {
-            Log.w("MainActivity", "配置里没有可用的 dsh 密钥，直接打开首页");
+            Log.w("MainActivity", "配置里没有可用的 dsh cookie，直接打开首页");
             webView.loadUrl(home);
             return;
         }

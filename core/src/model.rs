@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
@@ -68,8 +65,8 @@ impl ServerConfig {
     /// opencode v2 的登录凭据：token 字段承载 `user:pass`（HTTP Basic）。
     /// opencode 的用户名固定为 `opencode`（服务端忽略 `OPENCODE_SERVER_USERNAME`），
     /// 密码对应服务端的 `OPENCODE_SERVER_PASSWORD`。只写密码时默认补上 `opencode:`。
-    /// token 字段按后端各管一摊：kimi 是访问令牌，dsh 是它的浏览器会话签名密钥
-    /// （`~/.dsh/.credentials.yaml` 的 `client-connection/browser-session`）。
+    /// token 字段按后端各管一摊：kimi 是访问令牌，dsh 是它下发的浏览器会话 cookie
+    /// （由启动行里的 launch token 换得）。
     pub fn opencode_credentials(&self) -> Option<(&str, &str)> {
         if self.backend != Backend::Opencode {
             return None;
@@ -196,102 +193,12 @@ impl From<&ServerConfig> for ServerSummary {
     }
 }
 
-/// 正在运行的会话摘要（忙碌会话 + 已置顶的完成会话；标题缺失时用占位文案）。
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionSummary {
-    pub id: String,
-    pub title: String,
-    /// 当前正在执行的活动，如 "Bash · git push"；未知时为 None。
-    pub activity: Option<String>,
-    /// 用户置顶的会话：完成后仍留在列表中提醒介入。
-    pub pinned: bool,
-    /// 置顶会话已全部完成（主回合与后台任务都结束），等待用户介入。
-    pub done: bool,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServerStatus {
-    pub connected: bool,
-    pub active_count: u32,
-    /// 正在运行的会话列表，按标题排序以保证稳定。
-    pub sessions: Vec<SessionSummary>,
-    /// 服务端版本号（kimi 从 meta 接口获取；dsh 暂无此信息）。
-    pub server_version: Option<String>,
-    pub last_checked_at: Option<DateTime<Utc>>,
-    pub error: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum AgentEventKind {
-    Completed,
-    Failed,
-    ApprovalRequired,
-    QuestionRequired,
-    /// 置顶会话真正跑完（主回合与后台任务都结束），提醒用户介入收尾。
-    PinnedFinished,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct AgentEvent {
-    pub server_id: String,
-    pub session_id: Option<String>,
-    pub session_title: Option<String>,
-    pub kind: AgentEventKind,
-    pub event_key: String,
-    pub body: Option<String>,
-    pub occurred_at: DateTime<Utc>,
-}
-
 #[derive(Debug, Error)]
 pub enum ValidationError {
     #[error("host must not contain a scheme, path, whitespace, or port")]
     InvalidHost,
     #[error("port must be greater than zero")]
     InvalidPort,
-}
-
-/// Redacted view of the application state sent to the frontend.
-///
-/// Tokens are intentionally excluded; use [`ServerForEdit`] or
-/// [`crate::opener::open_saved_server`] when token access is required.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppView {
-    pub revision: u64,
-    pub settings: DesktopSettings,
-    pub servers: Vec<ServerSummary>,
-    pub active_id: Option<String>,
-    pub statuses: HashMap<String, ServerStatus>,
-}
-
-/// Server configuration for the edit form, including the saved token.
-///
-/// This DTO is only returned for the exact server the user asked to edit;
-/// listing APIs must use [`ServerSummary`] instead.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServerForEdit {
-    pub id: String,
-    pub name: String,
-    pub host: String,
-    pub port: u16,
-    pub backend: Backend,
-    pub token: String,
-}
-
-impl From<&ServerConfig> for ServerForEdit {
-    fn from(server: &ServerConfig) -> Self {
-        Self {
-            id: server.id.clone(),
-            name: server.name.clone(),
-            host: server.host.clone(),
-            port: server.port,
-            backend: server.backend,
-            token: server.token.clone(),
-        }
-    }
 }
 
 #[cfg(test)]

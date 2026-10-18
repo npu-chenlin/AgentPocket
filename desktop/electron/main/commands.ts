@@ -1,5 +1,4 @@
 /**
- * IPC 命令表。对应 Rust 侧 src-tauri/src/commands.rs。
  *
  * 渲染进程只能通过 preload 暴露的 invoke 调到这里；所有错误都原样抛回，
  * 不做静默兜底。
@@ -40,6 +39,7 @@ import { startServer, stopServer, type SyncInfo } from "./sync";
 import { buildServerUrl } from "./server-url";
 import type { AgentEvent } from "./protocol/state";
 import { TrayController } from "./tray";
+import { resolveDshCredential } from "./dsh-auth";
 import { ProbeError, probeBackend } from "./probe";
 
 /** 状态每次变化都自增，前端据此判断是否需要重绘。 */
@@ -124,19 +124,19 @@ export class AppState {
   }
 }
 
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function emptyStatus(error: string | null): ServerStatusView {
-  return {
-    connected: false,
-    activeCount: 0,
-    sessions: [],
-    serverVersion: null,
-    lastCheckedAt: nowIso(),
-    error,
-  };
+/**
+ * 保存前把 dsh 那一栏的输入换成可长期使用的 cookie。
+ *
+ * 用户在 dsh 那栏可能填了：启动行（含 `?token=`）、已经拿到的 `name=value` cookie、
+ * 或者干脆空着。前两种都归一到 cookie 再落盘——这样配置里存的东西与服务地址解耦，
+ * 过期或换地址时用户重粘一次即可。换不到就原样保存（不静默清空），让监控如实报 401。
+ */
+async function resolveTokenForSave(draft: ServerConfig): Promise<string> {
+  if (draft.backend !== "dsh") return draft.token.trim();
+  const raw = draft.token.trim();
+  if (raw === "") return "";
+  const cookie = await resolveDshCredential(draft, raw);
+  return cookie === null ? raw : cookie.header;
 }
 
 /** 注册全部 IPC 命令。 */
@@ -181,7 +181,8 @@ export function registerCommands(
     validateServer(draft);
     const name = draft.name.trim();
     if (!name) throw new Error("名称不能为空");
-    const server = { ...draft, name, id: draft.id || randomUUID() };
+    const token = await resolveTokenForSave(draft);
+    const server = { ...draft, name, token, id: draft.id || randomUUID() };
     const saved = await state.store.update(config => {
       const index = config.servers.findIndex(item => item.id === server.id);
       if (index >= 0) config.servers[index] = server; else config.servers.push(server);

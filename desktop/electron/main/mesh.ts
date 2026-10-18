@@ -1,6 +1,5 @@
 /**
  * mesh：管理同一 Tailnet 内其它 AgentPocket 节点。
- * 从 desktop/src-tauri/src/mesh.rs 迁移。
  *
  * 节点之间靠 daemon 在 MESH_PORT 上暴露的 HTTP 接口通信，这里只做客户端。
  */

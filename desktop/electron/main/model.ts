@@ -92,9 +92,8 @@ export function serverBaseUrl(server: ServerConfig): URL {
  * opencode 的用户名固定为 `opencode`（服务端忽略 OPENCODE_SERVER_USERNAME），
  * 只写密码时补默认用户名。
  *
- * token 字段按后端各管一摊：kimi 是访问令牌，dsh 是它数据目录里那把浏览器会话
- * 签名密钥（`~/.dsh/.credentials.yaml` 的 `client-connection/browser-session`，
- * 客户端据此本地签发 cookie），opencode 是上面的登录凭据。
+ * token 字段按后端各管一摊：kimi 是访问令牌，dsh 是它下发的浏览器会话 cookie
+ * （由启动行里的 launch token 换得，见 dsh-auth.ts），opencode 是上面的登录凭据。
  */
 export function opencodeCredentials(
   server: ServerConfig,

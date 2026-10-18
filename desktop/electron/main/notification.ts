@@ -1,5 +1,4 @@
 /**
- * 系统通知。从 desktop/src-tauri/src/notification.rs 迁移。
  *
  * 通知最容易出的问题是"同一个事件弹很多次"——重连、状态抖动、服务端重复推送
  * 都会让同一事件多次到达。所以这里有一层按事件的去重策略。
@@ -14,17 +13,6 @@ import type { AgentEvent, AgentEventKind } from "./protocol/state";
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 /** 缓存上限，防止长时间运行后无限增长。 */
 const DEFAULT_CAPACITY = 256;
-
-/** 只有这几类值得打断用户，其余只进列表。 */
-export function isNotifiableKind(kind: AgentEventKind): boolean {
-  return (
-    kind === "completed" ||
-    kind === "failed" ||
-    kind === "approvalRequired" ||
-    kind === "questionRequired" ||
-    kind === "pinnedFinished"
-  );
-}
 
 /** 去重键要带上 session，否则不同会话撞到同一 eventKey 会被误吞。 */
 export function dedupKey(event: AgentEvent): string {
@@ -83,7 +71,6 @@ export class NotificationPolicy {
     monitorStartedAt: Date,
     now: Date = new Date(),
   ): boolean {
-    if (!isNotifiableKind(event.kind)) return false;
     if (event.occurredAt.getTime() <= monitorStartedAt.getTime()) return false;
 
     const key = dedupKey(event);

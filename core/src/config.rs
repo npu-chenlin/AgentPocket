@@ -144,24 +144,6 @@ impl ConfigStore {
         Ok(config)
     }
 
-    /// Apply an import against the latest on-disk config and persist it while
-    /// holding one cross-process lock for the entire transaction.
-    pub fn apply_import_and_save(
-        &self,
-        data: ImportPreviewData,
-        mode: ImportMode,
-    ) -> Result<AppConfig, ConfigError> {
-        if data.config.servers.is_empty() {
-            return Err(ConfigError::NoValidServers);
-        }
-        let _lock = ConfigLock::acquire(&self.app_dir)?;
-        let current = self.load()?.config;
-        self.backup_primary()?;
-        let config = merge_import(&current, data, mode);
-        self.save_unlocked(&config)?;
-        Ok(config)
-    }
-
     pub fn export(&self, config: &AppConfig, path: &Path) -> Result<(), ConfigError> {
         let text = self.export_text(config)?;
         atomic_write(path, text.as_bytes())

@@ -1,6 +1,5 @@
 /**
  * 手机配对：在本机起一个小 HTTP 服务，让手机扫码取配置。
- * 从 desktop/src-tauri/src/sync.rs 迁移。
  */
 
 import { randomUUID } from "node:crypto";

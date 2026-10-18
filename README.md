@@ -102,7 +102,7 @@ v2 起 Web 与 API 都要求登录：未设 `OPENCODE_SERVER_PASSWORD` 时服务
 | 后端 | 地址示例 | token 字段 |
 | --- | --- | --- |
 | Kimi | `http://<Tailscale IP>:58627` | 可选访问令牌 |
-| dsh | `http://<Tailscale IP>:3080` | 留空 |
+| dsh | `http://<Tailscale IP>:3080` | 启动行（`dsh web: http://…?token=…`），自动换成会话 cookie |
 | OpenCode | `http://<Tailscale IP>:4096` | 登录密码，或 `用户名:密码`（默认用户 `opencode`） |
 
 > **OpenCode 认证**：服务端的密码是 `OPENCODE_SERVER_PASSWORD`，在 AgentPocket 的 token

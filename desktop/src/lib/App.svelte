@@ -567,7 +567,7 @@
       </label>
       <label class="field">访问令牌
         <input name="token" type="password" autocomplete="new-password" placeholder="可留空" bind:value={draft.token} />
-        <small>Kimi 填访问令牌；dsh 填 <code>~/.dsh/.credentials.yaml</code> 里的 browser-session 密钥；OpenCode 填登录密码（或 用户名:密码，默认用户 opencode）。仅在编辑时读取，不会出现在服务连接列表中。</small>
+        <small>Kimi 填访问令牌；dsh 粘贴启动行（<code>dsh web: http://…?token=…</code>），会自动换成会话 cookie；OpenCode 填登录密码（或 用户名:密码，默认用户 opencode）。仅在编辑时读取，不会出现在服务连接列表中。</small>
       </label>
     </div>
     {#if formMessage}

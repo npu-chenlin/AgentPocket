@@ -6,11 +6,9 @@
  * 会直接抛 "Invalid Sec-WebSocket-Protocol value"。
  */
 
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
-import { dshCookie, dshCookieHeaders } from "./dsh-auth";
+import { dshCookie, dshCookieHeaders, exchangeLaunchToken, extractLaunchToken } from "./dsh-auth";
 import { probeBackend, probeDshAuthenticated } from "./probe";
 import type { ServerConfig } from "./model";
 import { parseFollowFrame, parseSessionList } from "./protocol/dsh";
@@ -22,28 +20,31 @@ import { ProtocolState } from "./protocol/state";
  * 只在环境里给了地址时才跑：`DSH_E2E=host:port npx vitest run dsh-e2e`。
  * 默认跳过，免得 CI 上没起 dsh 就红。
  *
- * 密钥按 dsh 自己的规则从 `~/.dsh/.credentials.yaml` 读（可用 DSH_HOME 覆盖数据目录）——
- * 这正是客户端配置里该填的那个值。
+ * 凭据走 dsh 自己的正规入口：把启动行（或其中的 launch token，用 DSH_LAUNCH 传）换成一个
+ * 会话 cookie。客户端不碰 `~/.dsh/.credentials.yaml`，也不复刻它的 HMAC 签名。
  */
 const target = process.env.DSH_E2E ?? "";
 const [host, port] = target.split(":");
-
-function readSecret(): string {
-  const home = process.env.DSH_HOME ?? `${process.env.HOME}/.dsh`;
-  const text = readFileSync(`${home}/.credentials.yaml`, "utf8");
-  const record = /client-connection\/browser-session:[\s\S]*?secret:\s*([A-Za-z0-9_-]+)/.exec(text);
-  if (!record) throw new Error("凭据文件里没有 browser-session 密钥");
-  return record[1];
-}
+const launchToken = process.env.DSH_LAUNCH ?? "";
 
 const server: ServerConfig = {
   id: "e2e",
   name: "dsh",
   host,
   port: Number(port ?? 0),
-  token: target === "" ? "" : readSecret(),
+  token: "",
   backend: "dsh",
 };
+
+/** 连上之前先把 launch token 换成 cookie 存进 server.token，后续用例共用。 */
+async function ensureCookie(): Promise<void> {
+  if (server.token !== "") return;
+  if (launchToken === "") throw new Error("需要 DSH_LAUNCH=<启动行或 launch token>");
+  const token = extractLaunchToken(launchToken) ?? launchToken;
+  const cookie = await exchangeLaunchToken(server, token);
+  if (cookie === null) throw new Error("launch token 换不到 cookie（可能已过期）");
+  server.token = cookie.header;
+}
 
 /** 与 monitor/dsh.ts 的 openMux 同一套：Cookie 走 headers。 */
 async function openMux(config: ServerConfig): Promise<WebSocket> {
@@ -87,9 +88,10 @@ function firstFrame(socket: WebSocket): Promise<string> {
 }
 
 describe.skipIf(!target)("dsh 0.2.0 端到端", () => {
-  it("用配置里的密钥签出可用 cookie", async () => {
+  it("launch token 能换出可用 cookie", async () => {
+    await ensureCookie();
     const cookie = dshCookie(server);
-    expect(cookie, "配置里的密钥签不出 cookie").not.toBeNull();
+    expect(cookie, "换到的 cookie 解析不出来").not.toBeNull();
     expect(cookie!.header).toMatch(/^dsh-auth-[A-Za-z0-9_-]+=v1\./);
   });
 
@@ -98,10 +100,12 @@ describe.skipIf(!target)("dsh 0.2.0 端到端", () => {
   });
 
   it("带 cookie 能拉到会话列表", async () => {
+    await ensureCookie();
     await expect(probeDshAuthenticated(server)).resolves.toBe(true);
   });
 
   it("session/list 解析出会话，$events 能订阅", async () => {
+    await ensureCookie();
     const state = await fetchSessions();
     expect(state.baselineComplete).toBe(true);
 
@@ -117,8 +121,11 @@ describe.skipIf(!target)("dsh 0.2.0 端到端", () => {
   });
 
   it("跟随一个会话能收到快照，且快照不产出事件", async () => {
+    await ensureCookie();
     const state = await fetchSessions();
-    const session = [...state.titles.keys()][0];
+    // 只跟随非子代理会话：监控本身就不跟随子代理（跟随一个子代理不会得到 snapshot），
+    // 所以测试也必须按同一规则挑，否则挑中子代理时会对着真实服务误报失败。
+    const session = [...state.titles.keys()].find((id) => !state.subagentSessions.has(id));
     if (session === undefined) return;
 
     const socket = await openMux(server);

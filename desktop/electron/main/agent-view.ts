@@ -42,7 +42,7 @@ function closeTab(window: BrowserWindow, id: string): void {
 }
 
 /**
- * 加载一个窗格。先备好凭据再导航——dsh 要等 daemon 代签的 cookie 种进罐里，
+ * 加载一个窗格。先备好凭据再导航——dsh 的 cookie 必须先种进罐里，
  * 否则第一帧是 401 页面，而 dsh 不会自己跳回来。
  */
 async function load(window: BrowserWindow, entry: Entry, server: ServerConfig): Promise<void> {
@@ -125,9 +125,6 @@ export function retryTab(window: BrowserWindow, id: string, servers: ServerConfi
   if (entry && server) void load(window, entry, server);
 }
 
-export function closeServer(window: BrowserWindow, serverId: string): void {
-  for (const [id, entry] of views) if (entry.tab.serverId === serverId) closeTab(window, id);
-}
 export function closeAll(window: BrowserWindow): void {
   ++generation;
   latest = null;

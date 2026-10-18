@@ -1,6 +1,7 @@
 //! 一次性探测已配置服务器（在线/版本/会话数）。
 //! REST 语义与 GUI monitor 一致：kimi `/api/v1/meta` + `/api/v2/sessions`；
-//! dsh `/api/session.list`；opencode v2 `/api/config` + `/api/session`（HTTP Basic 认证）。
+//! dsh `/manifest.webmanifest`（免鉴权指纹，见 `probe_dsh`）；
+//! opencode v2 `/api/config` + `/api/session`（HTTP Basic 认证）。
 
 use std::time::Duration;
 
@@ -110,50 +111,34 @@ fn probe_kimi(
     Ok((version, busy))
 }
 
+/// dsh 探测：先确认它确实是 dsh，再统计 running 会话数。
+///
+/// dsh 0.2 起页面与 `/api` 都要求浏览器会话 cookie；cookie 由启动行里的 launch token
+/// 换取，daemon 这边没有存。所以在线判断走**免鉴权**的 `/manifest.webmanifest` 指纹
+/// （kimi 是 404、opencode 是 HTML）；`running` 统计需要 cookie，daemon 退回 0，
+/// 而不是把一个必然 401 的请求当成离线。
 fn probe_dsh(server: &ServerConfig, timeout: Duration) -> Result<(Option<String>, usize), String> {
-    let body = serde_json::json!({
-        "type": "client-request",
-        "rpcId": uuid::Uuid::new_v4().to_string(),
-        "method": "session.list",
-        "payload": {},
-    })
-    .to_string();
-    let response = client::post(
+    let manifest = client::get(
         &server.host,
         server.port,
-        "/api/session.list",
+        "/manifest.webmanifest",
         &[],
-        &body,
         timeout,
     )
     .map_err(|e| e.to_string())?;
-    if response.status != 200 {
-        return Err(format!("session.list HTTP {}", response.status));
+    if manifest.status != 200 || !is_dsh_manifest(&manifest.body) {
+        return Err(format!("manifest HTTP {}", manifest.status));
     }
-    let value: serde_json::Value =
-        serde_json::from_str(&response.body).map_err(|e| e.to_string())?;
-    if !value
-        .pointer("/result/ok")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        return Err("session.list 返回 ok=false".to_string());
-    }
-    let busy = value
-        .pointer("/result/value/items")
-        .and_then(|v| v.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter(|item| {
-                    item.get("running")
-                        .and_then(|r| r.as_bool())
-                        .unwrap_or(false)
-                })
-                .count()
-        })
-        .unwrap_or(0);
-    Ok((None, busy))
+    Ok((None, 0))
+}
+
+/// `/manifest.webmanifest` 是否是 dsh 的清单（与桌面端 probe.ts 同一判据）。
+fn is_dsh_manifest(body: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    value.get("name").and_then(|v| v.as_str()) == Some("DeepSeek Harness")
+        || value.get("short_name").and_then(|v| v.as_str()) == Some("DSH")
 }
 
 /// opencode 探测：GET /api/config 验证在线与认证；GET /api/session 统计会话总数。
@@ -254,11 +239,9 @@ mod tests {
                                 {"id":"b","meta":{"title":"t2"},"activity":{"status":"idle"}}]}}"#,
                         ).with_header(json));
                     }
-                    (false, Method::Post, "/api/session.list") => {
+                    (false, Method::Get, "/manifest.webmanifest") => {
                         let _ = request.respond(Response::from_string(
-                            r#"{"result":{"ok":true,"value":{"items":[
-                                {"sessionId":"a","running":true},
-                                {"sessionId":"b","running":false}]}}}"#,
+                            r#"{"name":"DeepSeek Harness","short_name":"DSH"}"#,
                         ).with_header(json));
                     }
                     _ => {
@@ -291,7 +274,7 @@ mod tests {
     }
 
     #[test]
-    fn probes_dsh_busy_count() {
+    fn probes_dsh_online_via_manifest() {
         let port = free_port();
         spawn_mock(port, false);
         let server = ServerConfig::new("d1", "Dsh", "127.0.0.1", port, "", Backend::Dsh);
@@ -299,8 +282,17 @@ mod tests {
         let probe = probe_server(&server, TIMEOUT);
 
         assert!(probe.online);
-        assert_eq!(probe.busy, 1);
+        // dsh 的 running 统计需要签名 cookie，daemon 没有密钥：如实报 0 而不是离线。
+        assert_eq!(probe.busy, 0);
         assert!(probe.version.is_none());
+    }
+
+    #[test]
+    fn dsh_manifest_matches_only_dsh() {
+        assert!(is_dsh_manifest(r#"{"name":"DeepSeek Harness"}"#));
+        assert!(is_dsh_manifest(r#"{"short_name":"DSH"}"#));
+        assert!(!is_dsh_manifest(r#"{"name":"Something Else"}"#));
+        assert!(!is_dsh_manifest("<html></html>"));
     }
 
     #[test]

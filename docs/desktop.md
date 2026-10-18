@@ -90,7 +90,10 @@ Desktop 是一个 Electron 托盘应用，适合在电脑上常驻监控多个 A
 ### 凭据处理
 
 - **Kimi**：访问令牌通过 URL fragment 传递，由前端消费，不走网络。
-- **dsh**：无令牌。
+- **dsh**：把 `dsh web` 打印的启动行粘进 token 栏即可。客户端用其中的 launch token 向
+  dsh 换取浏览器会话 cookie（`GET /?token=…` → `Set-Cookie`），保存的是这个 cookie。
+  cookie 由 dsh 的持久密钥签发、30 天有效且跨 dsh 重启有效；过期或换了访问地址后，
+  重新粘一次启动行。客户端不读取也不复刻 `~/.dsh/.credentials.yaml` 里的签名密钥。
 - **OpenCode v2**：页面与 API 都要求 HTTP Basic。Electron 在 `session.webRequest.onBeforeSendHeaders`
   里为该服务的 origin 注入 `Authorization` 头。
 

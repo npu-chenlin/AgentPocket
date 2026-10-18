@@ -1,20 +1,25 @@
 /**
- * dsh cookie 的签发规则。
+ * dsh 凭据：cookie 的解析、launch token 的提取与交换。
  *
- * 这是这次改动里最容易悄悄改坏的地方：签名覆盖的是 JSON.stringify 出来的那个
- * 字节串，键序一改签名就对不上，而症状只是 401——看起来像"密钥填错了"。
- * 所以这里钉住三个已知地址的 cookie 名，以及一个固定时间点的完整签名。
+ * 关键约束（旧实现最容易出错的正是这里）：dsh 的 launch token 每次启动都变，而换来的
+ * cookie 由持久密钥签发、跨重启有效。所以客户端存的是 **cookie**，不是密钥，也不自己
+ * 签发——这些用例把这条边界钉住。
  */
 
-import { createHmac } from "node:crypto";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { describe, expect, it } from "vitest";
-
-import { dshAuthority, dshCookie, dshCookieHeaders, dshCookieName, mintDshCookie } from "./dsh-auth";
+import {
+  dshCookie,
+  dshCookieHeaders,
+  exchangeLaunchToken,
+  extractLaunchToken,
+  parseDshCookie,
+  resolveDshCredential,
+} from "./dsh-auth";
 import type { ServerConfig } from "./model";
 
-/** dsh 实际写出的那种 32 字节 base64url 密钥。 */
-const SECRET = "Vma9wVA3-rjRiCS6JJY0ynuhEC80pRyv9fJLDzLNEZI";
+/** dsh 实际下发的那种 cookie（名字绑定 authority，值是三段式）。 */
+const COOKIE = "dsh-auth-UoviXftkqFTciBFSBAmCAxlDngpyRq75w2EgUFHInR8=v1.eyJ2ZXJzaW9uIjoxfQ.sig";
 
 function server(overrides: Partial<ServerConfig> = {}): ServerConfig {
   return {
@@ -22,97 +27,120 @@ function server(overrides: Partial<ServerConfig> = {}): ServerConfig {
     name: "dsh",
     host: "100.115.54.102",
     port: 3080,
-    token: SECRET,
+    token: COOKIE,
     backend: "dsh",
     ...overrides,
   };
 }
 
-/** 从 `name=value` 里拆开。 */
-function parts(header: string): { name: string; value: string } {
-  const at = header.indexOf("=");
-  return { name: header.slice(0, at), value: header.slice(at + 1) };
-}
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
-describe("dsh cookie 名", () => {
-  it("与 dsh 自己的推导一致", () => {
-    // dsh: dsh-auth- + base64url(sha256("host:port"))；这三个值与实测一致。
-    expect(dshCookieName("100.115.54.102:3080")).toBe(
-      "dsh-auth-UoviXftkqFTciBFSBAmCAxlDngpyRq75w2EgUFHInR8",
-    );
-    expect(dshCookieName("127.0.0.1:3080")).toBe(
-      "dsh-auth-VPhEEcLKeqRDBoBalzN2Nm7CnfxKhLE00pKIDWxt1sw",
-    );
-    expect(dshCookieName("cvlife-system-product-name.tail4a0ecb.ts.net:3080")).toBe(
-      "dsh-auth-o4_PIcdT9XDWtpi4ZI2CsszAA_n2naU3MXccfl2px4s",
-    );
+describe("cookie 解析", () => {
+  it("拆出名字与值", () => {
+    const cookie = parseDshCookie(COOKIE)!;
+    expect(cookie.name).toBe("dsh-auth-UoviXftkqFTciBFSBAmCAxlDngpyRq75w2EgUFHInR8");
+    expect(cookie.value).toBe("v1.eyJ2ZXJzaW9uIjoxfQ.sig");
+    expect(cookie.header).toBe(COOKIE);
+  });
+
+  it("容忍两侧空白与 Set-Cookie 的尾部属性", () => {
+    expect(parseDshCookie(`  ${COOKIE}  `)!.header).toBe(COOKIE);
+    expect(parseDshCookie(`${COOKIE}; Path=/; HttpOnly`)!.header).toBe(COOKIE);
+  });
+
+  it("挡住不像 cookie 的输入", () => {
+    // 裸 launch token、路径、空值都不是 cookie——早于发请求就拒掉。
+    expect(parseDshCookie("")).toBeNull();
+    expect(parseDshCookie(null)).toBeNull();
+    expect(parseDshCookie("Vma9wVA3-rjRiCS6JJY0ynuhEC80pRyv9fJLDzLNEZI")).toBeNull();
+    expect(parseDshCookie("v1.abc.def")).toBeNull();
+    // 名字不是 dsh 的（例如别的服务的 cookie）也不收。
+    expect(parseDshCookie("session=v1.abc.def")).toBeNull();
+    // 值不是三段式。
+    expect(parseDshCookie("dsh-auth-x=whatever")).toBeNull();
   });
 });
 
-describe("dsh cookie 签发", () => {
-  it("值是三段式，且载荷键序与 dsh 一致", () => {
-    const cookie = mintDshCookie(SECRET, "100.115.54.102:3080", 1_792_233_000_000)!;
-    const { name, value } = parts(cookie.header);
-    expect(name).toBe(dshCookieName("100.115.54.102:3080"));
-
-    const segments = value.split(".");
-    expect(segments).toHaveLength(3);
-    expect(segments[0]).toBe("v1");
-
-    const body = Buffer.from(segments[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
-    // 键序固定，签到过期时间也是 issuedAt + 30 天。
-    expect(body).toBe(
-      '{"version":1,"authority":"100.115.54.102:3080","issuedAt":1792233000000,"expiresAt":1794825000000}',
-    );
+describe("launch token 提取", () => {
+  it("从完整启动行里取", () => {
+    const line = "dsh web: http://127.0.0.1:3080/?token=xG0KCw2OUHu5BHtkYTvswyRkTFyq8k1p8LgpUKUneag (LAN: http://100.1.2.3:3080/?token=xG0KCw2OUHu5BHtkYTvswyRkTFyq8k1p8LgpUKUneag)";
+    expect(extractLaunchToken(line)).toBe("xG0KCw2OUHu5BHtkYTvswyRkTFyq8k1p8LgpUKUneag");
   });
 
-  it("签名与独立算出的 HMAC 一致", () => {
-    const cookie = mintDshCookie(SECRET, "127.0.0.1:3080", 1_792_233_000_000)!;
-    const { value } = parts(cookie.header);
-    const [, body, signature] = value.split(".");
-    const key = Buffer.from(SECRET.replace(/-/g, "+").replace(/_/g, "/"), "base64");
-    const expected = createHmac("sha256", key).update(body).digest()
-      .toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-    expect(signature).toBe(expected);
+  it("没有 token 时返回 null", () => {
+    expect(extractLaunchToken("dsh web: http://127.0.0.1:3080/")).toBeNull();
+    expect(extractLaunchToken("")).toBeNull();
+    expect(extractLaunchToken(null)).toBeNull();
+  });
+});
+
+describe("launch token 交换", () => {
+  it("拿到 Set-Cookie 就返回 cookie", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, {
+      status: 303,
+      headers: { "set-cookie": `${COOKIE}; Max-Age=2592000; Path=/; HttpOnly; SameSite=Strict` },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const cookie = await exchangeLaunchToken(server(), "launch-token-abc");
+    expect(cookie!.header).toBe(COOKIE);
+
+    // 必须带上 ?token=，且不跟随那一次 303 跳转。
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(String(url)).toContain("token=launch-token-abc");
+    expect(init.redirect).toBe("manual");
   });
 
-  it("同一输入的签名可复现", () => {
-    expect(mintDshCookie(SECRET, "127.0.0.1:3080", 1_792_233_000_000))
-      .toEqual(mintDshCookie(SECRET, "127.0.0.1:3080", 1_792_233_000_000));
+  it("没有 Set-Cookie / 请求失败时返回 null", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 303 })));
+    expect(await exchangeLaunchToken(server(), "t")).toBeNull();
+
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("网络不可达"); }));
+    expect(await exchangeLaunchToken(server(), "t")).toBeNull();
+  });
+});
+
+describe("凭据解析入口", () => {
+  it("已经是 cookie 就直接用，不发请求", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const cookie = await resolveDshCredential(server(), COOKIE);
+    expect(cookie!.header).toBe(COOKIE);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("不同 authority 不共用 cookie", () => {
-    const a = mintDshCookie(SECRET, "a.example:3080", 1)!;
-    const b = mintDshCookie(SECRET, "b.example:3080", 1)!;
-    expect(parts(a.header).name).not.toBe(parts(b.header).name);
+  it("粘的是启动行就去交换", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, {
+      status: 303,
+      headers: { "set-cookie": `${COOKIE}; Path=/` },
+    })));
+
+    const cookie = await resolveDshCredential(server(), "dsh web: http://h:3080/?token=abc123");
+    expect(cookie!.header).toBe(COOKIE);
   });
 
-  it("密钥不合法时返回 null 而不是签出坏 cookie", () => {
-    // 长度 %4==1 在 base64 里不可能；含非 base64url 字符也直接拒。
-    expect(mintDshCookie("abcde", "h:1")).toBeNull();
-    expect(mintDshCookie("not base64!", "h:1")).toBeNull();
-    expect(mintDshCookie("", "h:1")).toBeNull();
-    expect(mintDshCookie("  ", "h:1")).toBeNull();
+  it("既不是 cookie 也没有 token 时返回 null", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    expect(await resolveDshCredential(server(), "随便什么东西")).toBeNull();
   });
 });
 
 describe("dsh 服务取值", () => {
-  it("authority 是 host:port", () => {
-    expect(dshAuthority(server())).toBe("100.115.54.102:3080");
-  });
-
   it("非 dsh 后端不给 cookie", () => {
     expect(dshCookie(server({ backend: "kimi" }))).toBeNull();
     expect(dshCookieHeaders(server({ backend: "opencode" }))).toEqual({});
   });
 
-  it("密钥缺失时不给 Cookie 头，请求照常发出", () => {
+  it("凭据缺失时不给 Cookie 头，请求照常发出", () => {
     expect(dshCookieHeaders(server({ token: "" }))).toEqual({});
   });
 
-  it("密钥可用时给出 Cookie 头", () => {
+  it("凭据可用时给出 Cookie 头", () => {
     const headers = dshCookieHeaders(server());
     expect(Object.keys(headers)).toEqual(["Cookie"]);
-    expect(headers.Cookie).toMatch(/^dsh-auth-[A-Za-z0-9_-]+=v1\./);
+    expect(headers.Cookie).toBe(COOKIE);
   });
 });

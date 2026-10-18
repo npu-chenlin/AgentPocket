@@ -1,5 +1,4 @@
 /**
- * 监控管理器。从 desktop/src-tauri/src/monitor/mod.rs 迁移。
  *
  * 每个服务一个长驻任务，配置变了就重启任务；断线按指数退避重连。
  * 状态与事件统一走回调推给上层，不在这里吞错误。
@@ -48,15 +47,11 @@ export class PinnedSessions {
     return [...this.keys];
   }
 
-  /** 返回是否发生变化，供调用方决定要不要推状态。 */
-  toggle(serverId: string, sessionId: string): boolean {
+  /** 切换置顶状态。 */
+  toggle(serverId: string, sessionId: string): void {
     const key = PinnedSessions.key(serverId, sessionId);
-    if (this.keys.has(key)) {
-      this.keys.delete(key);
-      return true;
-    }
-    this.keys.add(key);
-    return true;
+    if (this.keys.has(key)) this.keys.delete(key);
+    else this.keys.add(key);
   }
 
   removeServer(serverId: string): void {
@@ -281,7 +276,6 @@ export async function runSingleServer(
   };
 
   const context: MonitorContext = { server, state, pinned, token, emitStatus: report, emitEvent: sink.emitEvent };
-  const pins = new PinTracker(pinned);
 
   try {
     while (!token.isCancelled) {

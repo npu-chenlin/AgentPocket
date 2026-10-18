@@ -40,7 +40,7 @@ import okhttp3.WebSocketListener;
  * 2. WebSocket /api/remote.mux：连接后先发 open 帧订阅，之后收 item 帧。
  *    - <code>$events</code>：会话增删、running 变化、agent 失败、审批/提问请求
  *    - <code>session/follow</code>：单会话的 turn/start、turn/end
- * 3. 认证：/api 与页面都要求浏览器会话 cookie；由 DshAuth 向节点 daemon 代签。
+ * 3. 认证：/api 与页面都要求浏览器会话 cookie；由 DshAuth 解析配置里存的那条 cookie。
  *
  * 审批与提问是 waterfall 帧，**必须回一条**：所有客户端都不回，服务端会一直
  * 挂着等，真人那边的审批就被卡住了。这里只回 next，把决定权留给 Web UI。
@@ -86,7 +86,7 @@ public class DshServerMonitor extends ServerMonitor {
         List<String> followable = new ArrayList<>();
         String cookie = DshAuth.cookie(server);
         if (cookie == null) {
-            Log.w(TAG, server.name + " 配置里没有可用的 dsh 密钥");
+            Log.w(TAG, server.name + " 配置里没有可用的 dsh cookie");
             scheduleReconnect();
             return followable;
         }
@@ -98,8 +98,8 @@ public class DshServerMonitor extends ServerMonitor {
                 .build();
         try (Response response = client.newCall(request).execute()) {
             if (response.code() == 401) {
-                // 配置里的密钥不对（dsh 重装换了密钥等），症状就是 401。
-                throw new IOException("dsh 认证失败：检查该服务连接里填的密钥");
+                // cookie 过期或换了访问地址（cookie 名绑定 authority），症状就是 401。
+                throw new IOException("dsh 认证失败：重新粘贴一次启动行以取得新 cookie");
             }
             if (!response.isSuccessful()) throw new IOException("HTTP " + response.code());
             JSONObject result = new JSONObject(response.body().string()).optJSONObject("result");

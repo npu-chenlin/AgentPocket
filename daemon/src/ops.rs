@@ -230,28 +230,6 @@ pub fn kimi_web_status(home: &Path) -> Result<String, String> {
     })
 }
 
-pub fn kimi_remote_web_restart(host: &str, force: bool) -> Result<String, String> {
-    kimi_remote_web_restart_via(host, MESH_PORT, force)
-}
-
-fn kimi_remote_web_restart_via(host: &str, port: u16, force: bool) -> Result<String, String> {
-    let body = serde_json::json!({ "force": force }).to_string();
-    let response = client::post(
-        host,
-        port,
-        "/kimi-web-restart",
-        &[],
-        &body,
-        Duration::from_secs(120),
-    )
-    .map_err(|e: ClientError| e.to_string())?;
-    if response.status != 200 {
-        // 端点拒绝时 body 携带原因（如活跃会话保护），原样透传
-        return Err(response.body);
-    }
-    Ok("对方 kimi web 服务已重启".to_string())
-}
-
 /// 状态视图：官方版版本 + npm 安装清单（两者可能并存）。
 fn format_kimi_state(
     official: Option<&str>,

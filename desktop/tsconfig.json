@@ -14,5 +14,5 @@
     "strict": true
   },
   "include": ["src", "electron", "shared", "vite.config.ts", "electron.vite.config.ts"],
-  "exclude": ["node_modules", "out", "release", "src-tauri"]
+  "exclude": ["node_modules", "out", "release"]
 }

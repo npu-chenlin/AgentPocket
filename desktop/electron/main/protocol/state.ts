@@ -1,5 +1,4 @@
 /**
- * 协议层共享状态。从 desktop/src-tauri/src/protocol/mod.rs 迁移。
  *
  * 只关注主 agent：子代理的事件一律忽略，避免它们触发通知、污染忙碌状态。
  */

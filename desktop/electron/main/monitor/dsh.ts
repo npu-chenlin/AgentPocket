@@ -66,8 +66,8 @@ async function rpc(
     signal: AbortSignal.timeout(10_000),
   });
   if (response.status === 401) {
-    // 配置里的密钥不对（dsh 重装换了密钥等），症状就是 401。
-    throw new Error("dsh 认证失败：检查该服务连接里填的密钥");
+    // cookie 过期或换了访问地址（cookie 名绑定 authority），症状就是 401。
+    throw new Error("dsh 认证失败：重新粘贴一次启动行以取得新 cookie");
   }
   if (!response.ok) {
     throw new Error(`${method} 请求失败：HTTP ${response.status}`);

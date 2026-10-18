@@ -1,5 +1,4 @@
 /**
- * Kimi WebSocket 帧解析。从 desktop/src-tauri/src/protocol/kimi.rs 迁移。
  *
  * 行为要求逐条对齐：哪些事件产生通知、忙碌怎么算、活动行显示什么，
  * 都直接影响用户看到的"正在做什么"和提醒时机。
